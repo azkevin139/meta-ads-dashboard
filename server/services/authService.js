@@ -2,21 +2,21 @@ const crypto = require('crypto');
 const { query, queryOne, queryAll } = require('../db');
 const config = require('../config');
 
-// ─── PASSWORD HASHING (no bcrypt dep, using crypto) ───────
+// ─── PASSWORD HASHING (PBKDF2 with 100k iterations) ──────
 
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  const salt = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
   return `${salt}:${hash}`;
 }
 
 function verifyPassword(password, stored) {
   const [salt, hash] = stored.split(':');
-  const test = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return hash === test;
+  const test = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
 }
 
-// ─── JWT (simple, no jsonwebtoken dep) ────────────────────
+// ─── JWT ──────────────────────────────────────────────────
 
 function createToken(payload, expiresInHours = 24) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -36,13 +36,19 @@ function verifyToken(token) {
     const [header, body, signature] = token.split('.');
     const expected = crypto.createHmac('sha256', config.authSecret)
       .update(`${header}.${body}`).digest('base64url');
-    if (signature !== expected) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
   } catch (e) {
     return null;
   }
+}
+
+// ─── SESSION TOKEN HASHING ────────────────────────────────
+
+function hashSessionToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 // ─── USER OPERATIONS ──────────────────────────────────────
@@ -68,11 +74,12 @@ async function login(email, password, ip, userAgent) {
   // Create JWT
   const token = createToken({ userId: user.id, email: user.email, role: user.role });
 
-  // Save session
+  // Store hashed session token
+  const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + 24 * 3600 * 1000);
   await query(
     'INSERT INTO user_sessions (user_id, token, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, $4, $5)',
-    [user.id, token, ip, userAgent, expiresAt]
+    [user.id, tokenHash, ip, (userAgent || '').substring(0, 500), expiresAt]
   );
 
   // Update login stats
@@ -85,14 +92,30 @@ async function login(email, password, ip, userAgent) {
 }
 
 async function logout(token) {
-  await query('DELETE FROM user_sessions WHERE token = $1', [token]);
+  const tokenHash = hashSessionToken(token);
+  await query('DELETE FROM user_sessions WHERE token = $1', [tokenHash]);
 }
 
 async function getUserFromToken(token) {
+  // 1. Verify JWT signature + expiry
   const payload = verifyToken(token);
   if (!payload) return null;
-  const user = await queryOne('SELECT id, email, name, role, is_active, meta_token FROM users WHERE id = $1', [payload.userId]);
+
+  // 2. Verify session still exists in DB (real logout)
+  const tokenHash = hashSessionToken(token);
+  const session = await queryOne(
+    'SELECT id, user_id, expires_at FROM user_sessions WHERE token = $1 AND expires_at > NOW()',
+    [tokenHash]
+  );
+  if (!session) return null;
+
+  // 3. Verify user is still active
+  const user = await queryOne(
+    'SELECT id, email, name, role, is_active FROM users WHERE id = $1',
+    [payload.userId]
+  );
   if (!user || !user.is_active) return null;
+
   return user;
 }
 
@@ -100,14 +123,15 @@ async function getUserFromToken(token) {
 
 async function getAllUsers() {
   return queryAll(`
-    SELECT id, email, name, role, is_active, last_login, login_count, meta_token IS NOT NULL AS has_meta_token, created_at
+    SELECT id, email, name, role, is_active, last_login, login_count, created_at
     FROM users ORDER BY created_at DESC
   `);
 }
 
 async function getActiveSessions() {
   return queryAll(`
-    SELECT s.id, s.user_id, u.email, u.name, s.ip_address, s.user_agent, s.created_at, s.expires_at
+    SELECT s.id, s.user_id, u.email, u.name, s.ip_address,
+      LEFT(s.user_agent, 80) AS user_agent, s.created_at, s.expires_at
     FROM user_sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.expires_at > NOW()
@@ -123,8 +147,9 @@ async function updateUser(userId, updates) {
   if (updates.role !== undefined) { fields.push(`role = $${idx++}`); values.push(updates.role); }
   if (updates.is_active !== undefined) { fields.push(`is_active = $${idx++}`); values.push(updates.is_active); }
   if (updates.name !== undefined) { fields.push(`name = $${idx++}`); values.push(updates.name); }
-  if (updates.meta_token !== undefined) { fields.push(`meta_token = $${idx++}`); values.push(updates.meta_token); }
   if (updates.password) { fields.push(`password_hash = $${idx++}`); values.push(hashPassword(updates.password)); }
+
+  if (fields.length === 0) return;
 
   fields.push(`updated_at = NOW()`);
   values.push(userId);

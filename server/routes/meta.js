@@ -3,6 +3,14 @@ const router = express.Router();
 const metaApi = require('../services/metaApi');
 const config = require('../config');
 
+// Role guard for write operations
+function adminOrOperator(req, res, next) {
+  if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Operator or admin access required' });
+  }
+  next();
+}
+
 // GET /api/meta/accounts
 router.get('/accounts', async (req, res) => {
   try {
@@ -149,7 +157,7 @@ router.get('/ad-detail', async (req, res) => {
 });
 
 // POST /api/meta/update-ad — edit ad creative text fields
-router.post('/update-ad', async (req, res) => {
+router.post('/update-ad', adminOrOperator, async (req, res) => {
   try {
     const { adId, creativeId, headline, primaryText, description, cta, linkUrl } = req.body;
     if (!adId) return res.status(400).json({ error: 'adId required' });
@@ -240,7 +248,7 @@ router.get('/adset-detail', async (req, res) => {
 });
 
 // POST /api/meta/update-adset — edit ad set targeting, budget, status
-router.post('/update-adset', async (req, res) => {
+router.post('/update-adset', adminOrOperator, async (req, res) => {
   try {
     const { adsetId, ageMin, ageMax, genders, dailyBudget, bidStrategy, status } = req.body;
     if (!adsetId) return res.status(400).json({ error: 'adsetId required' });

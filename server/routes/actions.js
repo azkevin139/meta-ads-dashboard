@@ -2,9 +2,17 @@ const express = require('express');
 const router = express.Router();
 const actionService = require('../services/actionService');
 
+// Role guard — only operators and admins can make changes
+function adminOrOperator(req, res, next) {
+  if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Operator or admin access required' });
+  }
+  next();
+}
+
 // POST /api/actions/pause
 // Body: { accountId, entityType, metaEntityId }
-router.post('/pause', async (req, res) => {
+router.post('/pause', adminOrOperator, async (req, res) => {
   try {
     const { accountId, entityType, metaEntityId } = req.body;
     if (!entityType || !metaEntityId) {
@@ -18,7 +26,7 @@ router.post('/pause', async (req, res) => {
 });
 
 // POST /api/actions/resume
-router.post('/resume', async (req, res) => {
+router.post('/resume', adminOrOperator, async (req, res) => {
   try {
     const { accountId, entityType, metaEntityId } = req.body;
     if (!entityType || !metaEntityId) {
@@ -33,7 +41,7 @@ router.post('/resume', async (req, res) => {
 
 // POST /api/actions/budget
 // Body: { accountId, metaAdSetId, newBudget (in dollars, not cents) }
-router.post('/budget', async (req, res) => {
+router.post('/budget', adminOrOperator, async (req, res) => {
   try {
     const { accountId, metaAdSetId, newBudget } = req.body;
     if (!metaAdSetId || newBudget === undefined) {
@@ -48,7 +56,7 @@ router.post('/budget', async (req, res) => {
 
 // POST /api/actions/duplicate
 // Body: { accountId, entityType, metaEntityId }
-router.post('/duplicate', async (req, res) => {
+router.post('/duplicate', adminOrOperator, async (req, res) => {
   try {
     const { accountId, entityType, metaEntityId } = req.body;
     if (!entityType || !metaEntityId) {
