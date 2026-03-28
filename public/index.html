@@ -2,15 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Meta Ads Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Ad Command — Meta Ads Dashboard</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 </head>
 <body>
-  <div class="app-layout">
+  <!-- ═══ LOGIN SCREEN ═══ -->
+  <div id="login-screen" class="login-screen"></div>
 
-    <!-- ═══ SIDEBAR ═══ -->
+  <!-- ═══ DASHBOARD ═══ -->
+  <div id="app-layout" class="app-layout" style="display:none;">
+
+    <!-- ═══ SIDEBAR (desktop) ═══ -->
     <aside class="sidebar">
       <div class="sidebar-logo">
         <span class="dot"></span>
@@ -33,7 +37,7 @@
             Campaigns
           </a>
           <a href="#adsets" class="nav-item" data-page="adsets">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4m0 14v4m-7.07-15.07l2.83 2.83m8.48 8.48l2.83 2.83M1 12h4m14 0h4m-15.07 7.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4m0 14v4"/></svg>
             Ad Sets
           </a>
           <a href="#ads" class="nav-item" data-page="ads">
@@ -45,7 +49,7 @@
         <div class="nav-section">
           <div class="nav-section-label">Intelligence</div>
           <a href="#ai" class="nav-item" data-page="ai">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4c0 1.1-.9 2-2 2h-4a2 2 0 0 1-2-2 4 4 0 0 1 4-4z"/><path d="M12 8v8"/><path d="M8 12h8"/><circle cx="12" cy="20" r="2"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
             AI Analyst
             <span class="nav-badge" id="ai-badge" style="display:none">0</span>
           </a>
@@ -57,12 +61,22 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
             Action Log
           </a>
+          <a href="#admin" class="nav-item" data-page="admin" id="nav-admin" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Admin
+          </a>
           <a href="#settings" class="nav-item" data-page="settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             Settings
           </a>
         </div>
       </nav>
+
+      <!-- User / Logout -->
+      <div style="padding: 14px 16px; border-top: 1px solid var(--border); margin-top: auto;">
+        <div style="font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 8px;" id="user-info"></div>
+        <button class="btn btn-sm" style="width: 100%;" onclick="handleLogout()">Sign Out</button>
+      </div>
     </aside>
 
     <!-- ═══ MAIN ═══ -->
@@ -78,9 +92,43 @@
         <div class="loading">Loading</div>
       </div>
     </main>
+
+    <!-- ═══ MOBILE BOTTOM NAV ═══ -->
+    <nav class="mobile-nav">
+      <a href="#overview" class="mobile-nav-item active" data-page="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Overview</span>
+      </a>
+      <a href="#campaigns" class="mobile-nav-item" data-page="campaigns">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <span>Campaigns</span>
+      </a>
+      <a href="#ai" class="mobile-nav-item" data-page="ai">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+        <span>AI</span>
+        <span class="nav-badge" id="ai-badge-mobile" style="display:none; position:absolute; top:2px; right:12px;">0</span>
+      </a>
+      <a href="#admin" class="mobile-nav-item" data-page="admin" id="nav-admin-mobile" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        <span>Admin</span>
+      </a>
+      <a href="#" class="mobile-nav-item" onclick="toggleMobileMenu(); return false;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        <span>More</span>
+      </a>
+    </nav>
+
+    <!-- Mobile "More" menu -->
+    <div id="mobile-more-menu" class="mobile-more-menu" style="display:none;">
+      <a href="#" onclick="navigateTo('adsets'); closeMobileMenu(); return false;">Ad Sets</a>
+      <a href="#" onclick="navigateTo('ads'); closeMobileMenu(); return false;">Ads</a>
+      <a href="#" onclick="navigateTo('logs'); closeMobileMenu(); return false;">Action Log</a>
+      <a href="#" onclick="navigateTo('settings'); closeMobileMenu(); return false;">Settings</a>
+      <a href="#" onclick="handleLogout(); return false;" style="color: var(--red);">Sign Out</a>
+    </div>
   </div>
 
-  <!-- Scripts (order matters) -->
+  <!-- Scripts -->
   <script src="/js/app.js"></script>
   <script src="/js/overview.js"></script>
   <script src="/js/campaigns.js"></script>
@@ -88,38 +136,24 @@
   <script src="/js/ads.js"></script>
   <script src="/js/ai.js"></script>
   <script src="/js/logs.js"></script>
+  <script src="/js/admin.js"></script>
   <script src="/js/settings.js"></script>
 
   <script>
-    // Update header clock
-    function updateClock() {
-      const el = document.getElementById('header-time');
-      if (el) {
-        el.textContent = new Date().toLocaleString('en-US', {
-          weekday: 'short', month: 'short', day: 'numeric',
-          hour: '2-digit', minute: '2-digit'
-        });
-      }
-    }
     updateClock();
-    setInterval(updateClock, 30000);
 
-    // Update AI badge count
-    async function updateAIBadge() {
-      try {
-        const res = await apiGet(`/ai/recommendations?accountId=${ACCOUNT_ID}&status=pending`);
-        const count = (res.data || []).length;
-        const badge = document.getElementById('ai-badge');
-        if (count > 0) {
-          badge.textContent = count;
-          badge.style.display = 'inline';
-        } else {
-          badge.style.display = 'none';
-        }
-      } catch (e) { /* silent */ }
+    function toggleMobileMenu() {
+      const menu = document.getElementById('mobile-more-menu');
+      menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
     }
-    updateAIBadge();
-    setInterval(updateAIBadge, 60000);
+    function closeMobileMenu() {
+      document.getElementById('mobile-more-menu').style.display = 'none';
+    }
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.mobile-more-menu') && !e.target.closest('.mobile-nav-item')) {
+        closeMobileMenu();
+      }
+    });
   </script>
 </body>
 </html>

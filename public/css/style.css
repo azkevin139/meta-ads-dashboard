@@ -573,11 +573,124 @@ tbody td.name-cell a:hover {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* ─── LOGIN SCREEN ─────────────────────────────────────── */
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-base);
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  padding: 40px 32px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin: 20px;
+}
+.login-logo {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.login-subtitle {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 24px;
+}
+
+/* ─── MOBILE BOTTOM NAV ───────────────────────────────── */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  z-index: 100;
+  padding: 6px 0;
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+.mobile-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 4px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  position: relative;
+  transition: color 0.15s;
+}
+.mobile-nav-item.active { color: var(--accent); }
+.mobile-nav-item svg { opacity: 0.6; }
+.mobile-nav-item.active svg { opacity: 1; }
+
+.mobile-more-menu {
+  position: fixed;
+  bottom: 64px;
+  right: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 0;
+  z-index: 150;
+  flex-direction: column;
+  min-width: 160px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+}
+.mobile-more-menu a {
+  display: block;
+  padding: 10px 18px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.mobile-more-menu a:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ─── ADMIN GRID ───────────────────────────────────────── */
+.admin-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
 /* ─── RESPONSIVE ───────────────────────────────────────── */
 @media (max-width: 1024px) {
   .sidebar { display: none; }
-  .main-content { margin-left: 0; }
-  .kpi-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .main-content { margin-left: 0; padding-bottom: 80px; }
+  .mobile-nav { display: flex; }
+  .kpi-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .page-body { padding: 16px; }
+  .page-header { padding: 0 16px; }
+  .admin-grid { grid-template-columns: 1fr !important; }
+
+  /* Drawer full-width on mobile */
+  .drawer { width: 100%; max-width: 100%; right: -100%; }
+  .drawer.open { right: 0; }
+}
+
+@media (max-width: 640px) {
+  html { font-size: 13px; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .kpi-card { padding: 12px 14px; }
+  .kpi-value { font-size: 1.2rem; }
+  .page-title { font-size: 0.95rem; }
+  .table-container { border-radius: var(--radius); }
+  .reco-card { padding: 14px 16px; }
+
+  /* Make tables horizontally scrollable */
+  table { font-size: 0.78rem; }
+  thead th { padding: 8px 10px; }
+  tbody td { padding: 9px 10px; }
+  .btn-sm { padding: 4px 8px; font-size: 0.68rem; }
+  .btn-group { gap: 4px; }
 }
 
 /* ─── SCROLLBAR ────────────────────────────────────────── */

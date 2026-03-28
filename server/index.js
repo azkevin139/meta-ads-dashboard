@@ -6,6 +6,8 @@ const { pool } = require('./db');
 const authMiddleware = require('./middleware/auth');
 
 // Routes
+const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 const metaRoutes = require('./routes/meta');
 const insightsRoutes = require('./routes/insights');
 const aiRoutes = require('./routes/ai');
@@ -21,10 +23,12 @@ app.use(express.json());
 // Serve static frontend files
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Auth on all API routes
+// Auth on all API routes (skips /api/auth/* and /api/health)
 app.use('/api', authMiddleware);
 
 // ─── API ROUTES ───────────────────────────────────────────
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai', aiRoutes);
@@ -57,7 +61,7 @@ app.get('*', (req, res) => {
 app.listen(config.port, '0.0.0.0', () => {
   console.log(`
   ╔══════════════════════════════════════════╗
-  ║   Meta Ads Dashboard — V1               ║
+  ║   Meta Ads Dashboard — V2               ║
   ║   Running on port ${config.port}                  ║
   ║   Env: ${config.nodeEnv.padEnd(33)}║
   ╚══════════════════════════════════════════╝
