@@ -1,0 +1,17 @@
+{
+  "name": "meta-ads-dashboard",
+  "version": "1.0.0",
+  "description": "Meta Ads Operator Dashboard — V1",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.13.1"
+  }
+}

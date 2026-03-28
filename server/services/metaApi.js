@@ -1,0 +1,185 @@
+const fetch = require('node-fetch');
+const config = require('../config');
+
+const BASE = config.meta.baseUrl();
+const TOKEN = config.meta.accessToken;
+
+// Generic Meta API GET
+async function metaGet(endpoint, params = {}) {
+  const url = new URL(`${BASE}${endpoint}`);
+  url.searchParams.set('access_token', TOKEN);
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, v);
+  }
+
+  const res = await fetch(url.toString());
+  const data = await res.json();
+
+  if (data.error) {
+    const err = new Error(data.error.message);
+    err.code = data.error.code;
+    err.type = data.error.type;
+    throw err;
+  }
+
+  return data;
+}
+
+// Generic Meta API POST
+async function metaPost(endpoint, body = {}) {
+  const url = `${BASE}${endpoint}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token: TOKEN, ...body }),
+  });
+
+  const data = await res.json();
+
+  if (data.error) {
+    const err = new Error(data.error.message);
+    err.code = data.error.code;
+    err.type = data.error.type;
+    throw err;
+  }
+
+  return data;
+}
+
+// ─── READ METHODS ─────────────────────────────────────────
+
+async function getAdAccounts() {
+  const data = await metaGet('/me/adaccounts', {
+    fields: 'id,name,account_id,currency,timezone_name,account_status',
+    limit: '50',
+  });
+  return data.data || [];
+}
+
+async function getCampaigns(adAccountId) {
+  const id = adAccountId || config.meta.adAccountId;
+  const data = await metaGet(`/${id}/campaigns`, {
+    fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,special_ad_categories,updated_time',
+    limit: '100',
+  });
+  return data.data || [];
+}
+
+async function getAdSets(campaignId) {
+  const data = await metaGet(`/${campaignId}/adsets`, {
+    fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,optimization_goal,billing_event,targeting,placements,attribution_spec,start_time,end_time,updated_time',
+    limit: '100',
+  });
+  return data.data || [];
+}
+
+async function getAds(adSetId) {
+  const data = await metaGet(`/${adSetId}/ads`, {
+    fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,image_url,video_id,thumbnail_url},preview_shareable_link,updated_time',
+    limit: '100',
+  });
+  return data.data || [];
+}
+
+async function getInsights(entityId, params = {}) {
+  const defaults = {
+    fields: 'spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
+    date_preset: 'yesterday',
+    level: 'campaign',
+  };
+  const merged = { ...defaults, ...params };
+  const data = await metaGet(`/${entityId}/insights`, merged);
+  return data.data || [];
+}
+
+// Get insights with date range
+async function getInsightsRange(entityId, since, until, level = 'campaign') {
+  return getInsights(entityId, {
+    time_range: JSON.stringify({ since, until }),
+    level,
+    time_increment: 1,  // daily breakdown
+  });
+}
+
+// ─── WRITE METHODS ─────────────────────────────────────────
+
+async function updateStatus(entityId, status) {
+  // status: 'ACTIVE' or 'PAUSED'
+  return metaPost(`/${entityId}`, { status });
+}
+
+async function updateBudget(adSetId, dailyBudget) {
+  // dailyBudget in cents (Meta standard)
+  return metaPost(`/${adSetId}`, { daily_budget: dailyBudget });
+}
+
+async function duplicateEntity(entityId, entityType) {
+  // entityType: 'campaign', 'adset', 'ad'
+  // Meta's copy API: POST /{entity-id}/copies
+  const statusField = entityType === 'campaign'
+    ? 'campaign_copy'
+    : entityType === 'adset'
+      ? 'adset_copy'
+      : 'ad_copy';
+
+  return metaPost(`/${entityId}/copies`, {
+    // Deep copy by default
+    deep_copy: true,
+    status_option: 'PAUSED',  // duplicate as paused
+  });
+}
+
+// ─── HELPERS ───────────────────────────────────────────────
+
+// Parse Meta's actions array into a flat object
+// e.g. [{action_type: "offsite_conversion.fb_pixel_lead", value: "5"}] → {lead: 5}
+function parseActions(actions) {
+  if (!actions || !Array.isArray(actions)) return {};
+
+  const result = {};
+  for (const a of actions) {
+    const type = a.action_type;
+    const val = parseInt(a.value, 10) || 0;
+
+    // Map common action types to friendly names
+    if (type.includes('lead')) result.leads = (result.leads || 0) + val;
+    else if (type.includes('purchase')) result.purchases = (result.purchases || 0) + val;
+    else if (type.includes('complete_registration')) result.registrations = (result.registrations || 0) + val;
+    else if (type === 'link_click') result.link_clicks = (result.link_clicks || 0) + val;
+    else if (type === 'landing_page_view') result.landing_page_views = (result.landing_page_views || 0) + val;
+
+    // Keep all under raw key too
+    result[type] = val;
+  }
+  return result;
+}
+
+// Parse action_values for ROAS
+function parseActionValues(actionValues) {
+  if (!actionValues || !Array.isArray(actionValues)) return 0;
+
+  let total = 0;
+  for (const a of actionValues) {
+    if (a.action_type.includes('purchase') || a.action_type.includes('lead')) {
+      total += parseFloat(a.value) || 0;
+    }
+  }
+  return total;
+}
+
+module.exports = {
+  metaGet,
+  metaPost,
+  getAdAccounts,
+  getCampaigns,
+  getAdSets,
+  getAds,
+  getInsights,
+  getInsightsRange,
+  updateStatus,
+  updateBudget,
+  duplicateEntity,
+  parseActions,
+  parseActionValues,
+};

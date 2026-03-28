@@ -1,0 +1,37 @@
+#!/bin/bash
+# ============================================================
+# Meta Ads Dashboard — DB Setup
+# Run this on emma42 where Postgres is installed
+# ============================================================
+
+set -e
+
+DB_NAME="meta_dashboard"
+DB_USER="${PGUSER:-postgres}"
+
+echo "=== Meta Ads Dashboard — Database Setup ==="
+echo ""
+
+# 1. Create database (skip if exists)
+echo "[1/3] Creating database '$DB_NAME'..."
+psql -U "$DB_USER" -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
+  psql -U "$DB_USER" -c "CREATE DATABASE $DB_NAME"
+echo "  ✓ Database ready"
+
+# 2. Run schema
+echo "[2/3] Running schema.sql..."
+psql -U "$DB_USER" -d "$DB_NAME" -f "$(dirname "$0")/schema.sql"
+echo "  ✓ Schema created"
+
+# 3. Run seed
+echo "[3/3] Running seed.sql..."
+psql -U "$DB_USER" -d "$DB_NAME" -f "$(dirname "$0")/seed.sql"
+echo "  ✓ Seed data loaded"
+
+echo ""
+echo "=== Done! ==="
+echo "Connect with: psql -U $DB_USER -d $DB_NAME"
+echo ""
+echo "Quick checks:"
+echo "  psql -U $DB_USER -d $DB_NAME -c 'SELECT * FROM v_pending_recommendations;'"
+echo "  psql -U $DB_USER -d $DB_NAME -c 'SELECT date, spend, conversions, cost_per_result FROM daily_insights WHERE level = '\\''account'\\'' ORDER BY date DESC LIMIT 7;'"
