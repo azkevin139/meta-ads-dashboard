@@ -108,7 +108,36 @@ router.get('/creative-thumbnail', async (req, res) => {
   }
 });
 
-// GET /api/meta/today?level=campaign — live today's data from Meta API
+// GET /api/meta/live?level=campaign&since=2026-03-29&until=2026-03-30
+// Fetches live data from Meta API for any date range
+router.get('/live', async (req, res) => {
+  try {
+    const level = req.query.level || 'campaign';
+    const since = req.query.since;
+    const until = req.query.until;
+    const datePreset = req.query.preset || null;
+
+    const params = {
+      level: level,
+      fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
+    };
+
+    if (since && until) {
+      params.time_range = JSON.stringify({ since, until });
+    } else if (datePreset) {
+      params.date_preset = datePreset;
+    } else {
+      params.date_preset = 'today';
+    }
+
+    const data = await metaApi.getInsights(config.meta.adAccountId, params);
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Keep /today as alias
 router.get('/today', async (req, res) => {
   try {
     const level = req.query.level || 'campaign';

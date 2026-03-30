@@ -88,6 +88,68 @@ function fmtBudget(cents) {
   return '$' + (cents / 100).toFixed(2);
 }
 
+// ─── CONVERSION PARSER ───────────────────────────────────
+// Extract specific conversion types from Meta's actions array
+// Priority: initiate_checkout > purchase > lead > complete_registration
+
+function parseResults(actions) {
+  if (!actions || !Array.isArray(actions)) return { count: 0, type: '—' };
+  
+  // Look for initiate_checkout first (your primary conversion)
+  for (const a of actions) {
+    if (a.action_type === 'offsite_conversion.fb_pixel_initiate_checkout' ||
+        a.action_type === 'initiate_checkout') {
+      return { count: parseInt(a.value) || 0, type: 'Initiate Checkout' };
+    }
+  }
+  // Fallback to other conversion types
+  for (const a of actions) {
+    if (a.action_type === 'offsite_conversion.fb_pixel_purchase' || a.action_type === 'purchase') {
+      return { count: parseInt(a.value) || 0, type: 'Purchase' };
+    }
+  }
+  for (const a of actions) {
+    if (a.action_type === 'offsite_conversion.fb_pixel_lead' || a.action_type === 'lead') {
+      return { count: parseInt(a.value) || 0, type: 'Lead' };
+    }
+  }
+  for (const a of actions) {
+    if (a.action_type === 'offsite_conversion.fb_pixel_complete_registration' || a.action_type === 'complete_registration') {
+      return { count: parseInt(a.value) || 0, type: 'Registration' };
+    }
+  }
+  return { count: 0, type: '—' };
+}
+
+function parseCostPerResult(costPerActions, resultType) {
+  if (!costPerActions || !Array.isArray(costPerActions)) return 0;
+  // Match the same action type
+  const typeMap = {
+    'Initiate Checkout': ['offsite_conversion.fb_pixel_initiate_checkout', 'initiate_checkout'],
+    'Purchase': ['offsite_conversion.fb_pixel_purchase', 'purchase'],
+    'Lead': ['offsite_conversion.fb_pixel_lead', 'lead'],
+    'Registration': ['offsite_conversion.fb_pixel_complete_registration', 'complete_registration'],
+  };
+  const types = typeMap[resultType] || [];
+  for (const a of costPerActions) {
+    if (types.includes(a.action_type)) {
+      return parseFloat(a.value) || 0;
+    }
+  }
+  return 0;
+}
+
+// Date helpers for date picker
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function daysAgoStr(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
 // ─── STATUS HELPERS ───────────────────────────────────────
 
 function statusBadge(status) {

@@ -796,6 +796,7 @@ tbody td.name-cell a:hover {
   font-family: var(--font-body);
   font-size: 0.85rem;
   transition: border-color 0.15s;
+  color-scheme: dark;
 }
 .form-input:focus, .form-textarea:focus, .form-select:focus {
   outline: none;
