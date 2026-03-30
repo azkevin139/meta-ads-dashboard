@@ -310,7 +310,7 @@ function showLogin() {
       <div id="login-error"></div>
       <div id="login-form">
         <input id="login-email" class="form-input" type="email" placeholder="Email" autocomplete="email" style="margin-bottom: 12px;" />
-        <input id="login-password" class="form-input" type="password" placeholder="Password" autocomplete="current-password" style="margin-bottom: 16px;" />
+        <input id="login-password" class="form-input" type="password" placeholder="Password" autocomplete="current-password" style="margin-bottom: 16px;" onkeydown="if(event.key==='Enter') handleLogin()" />
         <button class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 0.9rem;" onclick="handleLogin()">Sign In</button>
         <div style="text-align: center; margin-top: 14px;">
           <span class="text-muted" style="font-size: 0.8rem;">No account?</span>
