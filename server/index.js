@@ -59,6 +59,7 @@ const readOnly = process.env.READ_ONLY === 'true';
 if (readOnly) {
   app.use('/api/meta/update-ad', (req, res) => res.status(403).json({ error: 'Dashboard is in read-only mode' }));
   app.use('/api/meta/update-adset', (req, res) => res.status(403).json({ error: 'Dashboard is in read-only mode' }));
+  app.use('/api/create', (req, res) => res.status(403).json({ error: 'Dashboard is in read-only mode' }));
   app.use('/api/actions', (req, res) => {
     if (req.method === 'POST') return res.status(403).json({ error: 'Dashboard is in read-only mode' });
     req.next();
@@ -66,6 +67,7 @@ if (readOnly) {
 }
 
 // ─── API ROUTES ───────────────────────────────────────────
+const createRoutes = require('./routes/create');
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/meta', metaRoutes);
@@ -73,6 +75,7 @@ app.use('/api/insights', insightsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/actions', actionsRoutes);
 app.use('/api/logs', logsRoutes);
+app.use('/api/create', createRoutes);
 
 // ─── HEALTH CHECK (minimal — no config exposure) ─────────
 app.get('/api/health', async (req, res) => {
