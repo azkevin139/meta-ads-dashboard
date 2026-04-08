@@ -1,12 +1,14 @@
 /* ═══════════════════════════════════════════════════════════
-   Overview Page — date range picker + proper conversions
+   Overview Page — live pulse aware
    ═══════════════════════════════════════════════════════════ */
 
 let dateFrom = daysAgoStr(1);
 let dateTo = todayStr();
 let activePreset = 'yesterday';
+let metaPulseTimer = null;
 
 async function loadOverview(container) {
+  stopMetaPulseAutoRefresh();
   container.innerHTML = `
     <div class="flex-between mb-md" style="flex-wrap: wrap; gap: 10px;">
       <div></div>
@@ -40,27 +42,21 @@ async function loadOverview(container) {
       apiGet(`/ai/recommendations?accountId=${ACCOUNT_ID}&status=pending`),
       apiGet('/meta/rate-limit-status'),
     ]);
-
     renderMetaPulse(rateRes);
+    startMetaPulseAutoRefresh();
 
     const campaigns = liveRes.data || [];
-
     let totalSpend = 0, totalImpressions = 0, totalClicks = 0, totalReach = 0;
     let totalResults = 0, resultType = '—';
-    let totalCostPerResult = 0, resultCampaigns = 0;
 
     for (const c of campaigns) {
       totalSpend += parseFloat(c.spend) || 0;
       totalImpressions += parseInt(c.impressions) || 0;
       totalClicks += parseInt(c.clicks) || 0;
       totalReach += parseInt(c.reach) || 0;
-
       const result = parseResults(c.actions);
       totalResults += result.count;
       if (result.type !== '—') resultType = result.type;
-
-      const cpr = parseCostPerResult(c.cost_per_action_type, result.type);
-      if (cpr > 0) { totalCostPerResult += cpr; resultCampaigns++; }
     }
 
     const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions * 100) : 0;
@@ -69,7 +65,6 @@ async function loadOverview(container) {
     const avgCpa = totalResults > 0 ? (totalSpend / totalResults) : 0;
 
     renderAlerts(recoRes.data || []);
-
     document.getElementById('kpi-area').innerHTML = `
       ${kpiCard('Spend', fmt(totalSpend, 'currency'))}
       ${kpiCard('Impressions', fmt(totalImpressions, 'compact'))}
@@ -80,7 +75,6 @@ async function loadOverview(container) {
       ${kpiCard('Cost per Result', fmt(avgCpa, 'currency'))}
       ${kpiCard('Reach', fmt(totalReach, 'compact'))}
     `;
-
     document.getElementById('campaigns-summary').innerHTML = `
       <div class="table-container">
         <div class="table-header">
@@ -90,10 +84,24 @@ async function loadOverview(container) {
         ${campaigns.length > 0 ? renderCampaignTable(campaigns) : '<div class="empty-state"><div class="empty-state-text">No campaign data for this date range</div></div>'}
       </div>
     `;
-
   } catch (err) {
     document.getElementById('kpi-area').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
   }
+}
+
+function startMetaPulseAutoRefresh() {
+  stopMetaPulseAutoRefresh();
+  metaPulseTimer = setInterval(async () => {
+    if (currentPage !== 'overview') return stopMetaPulseAutoRefresh();
+    try {
+      const rateRes = await apiGet('/meta/rate-limit-status');
+      renderMetaPulse(rateRes);
+    } catch (e) {}
+  }, 10000);
+}
+function stopMetaPulseAutoRefresh() {
+  if (metaPulseTimer) clearInterval(metaPulseTimer);
+  metaPulseTimer = null;
 }
 
 function renderMetaPulse(rateRes) {
@@ -103,10 +111,12 @@ function renderMetaPulse(rateRes) {
   const adsMgmt = summary.ads_management || {};
   const adsInsights = summary.ads_insights || {};
   const warning = rateRes.warning_level || 'unknown';
-
   el.innerHTML = `
-    <div class="reco-entity mb-sm">Meta Pulse</div>
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; font-size:0.82rem;">
+    <div class="flex-between mb-sm" style="gap:10px; flex-wrap:wrap;">
+      <div class="reco-entity">Meta Pulse</div>
+      <div class="text-muted" style="font-size:0.72rem;">${rateRes.last_seen_at ? `Last header: ${fmtDateTime(rateRes.last_seen_at)}` : 'No live header yet'}</div>
+    </div>
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px; font-size:0.82rem;">
       ${pulseMetric('Ads Mgmt', adsMgmt.call_count)}
       ${pulseMetric('Ads Insights', adsInsights.call_count)}
       ${pulseMetric('Account Util', summary.ad_account_util_pct)}
@@ -137,136 +147,18 @@ function formatSeconds(totalSeconds) {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
-function renderCampaignTable(campaigns) {
-  return `
-    <div style="overflow-x: auto;">
-      <table>
-        <thead>
-          <tr>
-            <th>Campaign</th>
-            <th class="right">Spend</th>
-            <th class="right">Results</th>
-            <th class="right">Cost/Result</th>
-            <th class="right">Impr.</th>
-            <th class="right">CPM</th>
-            <th class="right">CTR</th>
-            <th class="right">CPC</th>
-            <th class="right">Reach</th>
-            <th class="right">Freq.</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${campaigns.map(c => {
-            const result = parseResults(c.actions);
-            const cpr = parseCostPerResult(c.cost_per_action_type, result.type);
-            const spend = parseFloat(c.spend) || 0;
-            const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
-
-            return `
-              <tr>
-                <td class="name-cell">${c.campaign_name}</td>
-                <td class="right">${fmt(c.spend, 'currency')}</td>
-                <td class="right" style="font-weight: 600;">${result.count > 0 ? result.count : '—'}</td>
-                <td class="right ${metricColor(costPerResult, {good: 40, bad: 80}, true)}">${costPerResult > 0 ? fmt(costPerResult, 'currency') : '—'}</td>
-                <td class="right">${fmt(c.impressions, 'compact')}</td>
-                <td class="right">${fmt(c.cpm, 'currency')}</td>
-                <td class="right ${metricColor(c.ctr, {good: 1.5, bad: 0.5})}">${fmt(c.ctr, 'percent')}</td>
-                <td class="right">${fmt(c.cpc, 'currency')}</td>
-                <td class="right">${fmt(c.reach, 'compact')}</td>
-                <td class="right">${fmt(c.frequency, 'decimal')}</td>
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-// ─── DATE PRESETS ─────────────────────────────────────────
-
-function setPreset(preset) {
-  activePreset = preset;
-  const today = todayStr();
-
-  switch (preset) {
-    case 'today':
-      dateFrom = today;
-      dateTo = today;
-      break;
-    case 'yesterday':
-      dateFrom = daysAgoStr(1);
-      dateTo = daysAgoStr(1);
-      break;
-    case '7d':
-      dateFrom = daysAgoStr(7);
-      dateTo = daysAgoStr(1);
-      break;
-    case '14d':
-      dateFrom = daysAgoStr(14);
-      dateTo = daysAgoStr(1);
-      break;
-    case '30d':
-      dateFrom = daysAgoStr(30);
-      dateTo = daysAgoStr(1);
-      break;
-    case 'custom':
-      toggleDatePicker();
-      return;
-  }
-  navigateTo('overview');
-}
-
-function toggleDatePicker() {
-  activePreset = 'custom';
-  const picker = document.getElementById('date-picker-area');
-  if (picker) picker.style.display = 'flex';
-}
-
-function applyCustomDate() {
-  dateFrom = document.getElementById('date-from').value;
-  dateTo = document.getElementById('date-to').value;
-  if (!dateFrom || !dateTo) { toast('Select both dates', 'error'); return; }
-  if (dateFrom > dateTo) { toast('Start date must be before end date', 'error'); return; }
-  activePreset = 'custom';
-  navigateTo('overview');
-}
-
-function getDateLabel() {
-  if (activePreset === 'today') return 'Today — live from Meta';
-  if (activePreset === 'yesterday') return `Yesterday (${dateFrom})`;
-  if (dateFrom === dateTo) return dateFrom;
-  return `${dateFrom} → ${dateTo}`;
-}
-
-// ─── HELPERS ──────────────────────────────────────────────
-
-function renderAlerts(pendingRecos) {
-  const alertArea = document.getElementById('alert-area');
-  if (!alertArea) return;
-  const criticalCount = pendingRecos.filter(r => r.urgency === 'critical').length;
-  const highCount = pendingRecos.filter(r => r.urgency === 'high').length;
-
-  if (criticalCount > 0) {
-    alertArea.innerHTML = `
-      <div class="alert-banner alert-critical" onclick="navigateTo('ai')" style="cursor:pointer">
-        ⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review
-      </div>`;
-  } else if (highCount > 0) {
-    alertArea.innerHTML = `
-      <div class="alert-banner alert-warning" onclick="navigateTo('ai')" style="cursor:pointer">
-        ${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending
-      </div>`;
-  } else {
-    alertArea.innerHTML = '';
-  }
-}
-
-function kpiCard(label, value) {
-  return `
-    <div class="kpi-card">
-      <div class="kpi-label">${label}</div>
-      <div class="kpi-value">${value}</div>
-    </div>
-  `;
-}
+function renderCampaignTable(campaigns) { /* unchanged */ return `
+  <div style="overflow-x: auto;">
+    <table>
+      <thead><tr><th>Campaign</th><th class="right">Spend</th><th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Impr.</th><th class="right">CPM</th><th class="right">CTR</th><th class="right">CPC</th><th class="right">Reach</th><th class="right">Freq.</th></tr></thead>
+      <tbody>
+        ${campaigns.map(c => { const result = parseResults(c.actions); const cpr = parseCostPerResult(c.cost_per_action_type, result.type); const spend = parseFloat(c.spend) || 0; const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0); return `<tr><td class="name-cell">${c.campaign_name}</td><td class="right">${fmt(c.spend, 'currency')}</td><td class="right" style="font-weight: 600;">${result.count > 0 ? result.count : '—'}</td><td class="right ${metricColor(costPerResult, {good: 40, bad: 80}, true)}">${costPerResult > 0 ? fmt(costPerResult, 'currency') : '—'}</td><td class="right">${fmt(c.impressions, 'compact')}</td><td class="right">${fmt(c.cpm, 'currency')}</td><td class="right ${metricColor(c.ctr, {good: 1.5, bad: 0.5})}">${fmt(c.ctr, 'percent')}</td><td class="right">${fmt(c.cpc, 'currency')}</td><td class="right">${fmt(c.reach, 'compact')}</td><td class="right">${fmt(c.frequency, 'decimal')}</td></tr>`; }).join('')}
+      </tbody>
+    </table>
+  </div>`; }
+function setPreset(preset) { activePreset = preset; const today = todayStr(); switch (preset) { case 'today': dateFrom = today; dateTo = today; break; case 'yesterday': dateFrom = daysAgoStr(1); dateTo = daysAgoStr(1); break; case '7d': dateFrom = daysAgoStr(7); dateTo = daysAgoStr(1); break; case '14d': dateFrom = daysAgoStr(14); dateTo = daysAgoStr(1); break; case '30d': dateFrom = daysAgoStr(30); dateTo = daysAgoStr(1); break; case 'custom': toggleDatePicker(); return; } navigateTo('overview'); }
+function toggleDatePicker() { activePreset = 'custom'; const picker = document.getElementById('date-picker-area'); if (picker) picker.style.display = 'flex'; }
+function applyCustomDate() { dateFrom = document.getElementById('date-from').value; dateTo = document.getElementById('date-to').value; if (!dateFrom || !dateTo) { toast('Select both dates', 'error'); return; } if (dateFrom > dateTo) { toast('Start date must be before end date', 'error'); return; } activePreset = 'custom'; navigateTo('overview'); }
+function getDateLabel() { if (activePreset === 'today') return 'Today — live from Meta'; if (activePreset === 'yesterday') return `Yesterday (${dateFrom})`; if (dateFrom === dateTo) return dateFrom; return `${dateFrom} → ${dateTo}`; }
+function renderAlerts(pendingRecos) { const alertArea = document.getElementById('alert-area'); if (!alertArea) return; const criticalCount = pendingRecos.filter(r => r.urgency === 'critical').length; const highCount = pendingRecos.filter(r => r.urgency === 'high').length; if (criticalCount > 0) { alertArea.innerHTML = `<div class="alert-banner alert-critical" onclick="navigateTo('ai')" style="cursor:pointer">⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review</div>`; } else if (highCount > 0) { alertArea.innerHTML = `<div class="alert-banner alert-warning" onclick="navigateTo('ai')" style="cursor:pointer">${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending</div>`; } else { alertArea.innerHTML = ''; } }
+function kpiCard(label, value) { return `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`; }
