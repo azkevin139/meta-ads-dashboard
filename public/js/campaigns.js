@@ -1,11 +1,12 @@
 /* ═══════════════════════════════════════════════════════════
-   Campaigns Page — bulk actions + creation wizard
+   Campaigns Page — editor driven
    ═══════════════════════════════════════════════════════════ */
 
 let campDateFrom = daysAgoStr(1);
 let campDateTo = daysAgoStr(1);
 let campPreset = 'yesterday';
 let selectedCampaigns = new Set();
+let campaignDrawerSection = 'identity';
 
 async function loadCampaigns(container) {
   selectedCampaigns.clear();
@@ -30,7 +31,6 @@ async function loadCampaigns(container) {
       </div>
     </div>
 
-    <!-- Bulk action bar -->
     <div id="bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px;">
       <span id="bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
       <button class="btn btn-sm btn-danger" onclick="bulkAction('pause')">Pause Selected</button>
@@ -49,61 +49,67 @@ async function loadCampaigns(container) {
   `;
 
   try {
-    const res = await apiGet(`/meta/live?level=campaign&since=${campDateFrom}&until=${campDateTo}`);
-    const campaigns = res.data || [];
+    const [liveRes, listRes] = await Promise.all([
+      apiGet(`/meta/live?level=campaign&since=${campDateFrom}&until=${campDateTo}`),
+      apiGet('/meta/campaigns'),
+    ]);
+    const insights = liveRes.data || [];
+    const entities = listRes.data || [];
+    const entityMap = Object.fromEntries(entities.map(c => [c.id, c]));
 
-    if (campaigns.length === 0) {
-      document.getElementById('campaigns-table').innerHTML = '<div class="empty-state"><div class="empty-state-text">No campaign data for this date range</div></div>';
+    if (insights.length === 0 && entities.length === 0) {
+      document.getElementById('campaigns-table').innerHTML = '<div class="empty-state"><div class="empty-state-text">No campaigns found</div></div>';
       return;
     }
+
+    const rows = (insights.length ? insights : entities.map(c => ({ campaign_id: c.id, campaign_name: c.name }))).map(c => ({
+      ...c,
+      meta: entityMap[c.campaign_id] || null,
+    }));
 
     document.getElementById('campaigns-table').innerHTML = `
       <div style="overflow-x: auto;">
         <table>
           <thead>
             <tr>
-              <th style="width: 36px;"><input type="checkbox" onchange="toggleAllCampaigns(this, ${JSON.stringify(campaigns.map(c => c.campaign_id)).replace(/"/g, '&quot;')})" /></th>
+              <th style="width: 36px;"><input type="checkbox" onchange="toggleAllCampaigns(this, ${JSON.stringify(rows.map(c => c.campaign_id)).replace(/"/g, '&quot;')})" /></th>
               <th>Campaign</th>
+              <th>Status</th>
               <th class="right">Spend</th>
               <th class="right">Results</th>
               <th class="right">Cost/Result</th>
-              <th class="right">Impr.</th>
-              <th class="right">CPM</th>
+              <th class="right">Budget</th>
+              <th class="right">Objective</th>
               <th class="right">CTR</th>
               <th class="right">CPC</th>
-              <th class="right">Reach</th>
-              <th class="right">Freq.</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            ${campaigns.map(c => {
+            ${rows.map(c => {
               const result = parseResults(c.actions);
               const cpr = parseCostPerResult(c.cost_per_action_type, result.type);
               const spend = parseFloat(c.spend) || 0;
               const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
-
+              const status = c.meta?.effective_status || c.meta?.status || '—';
+              const budget = c.meta?.daily_budget ? fmtBudget(c.meta.daily_budget) : c.meta?.lifetime_budget ? fmtBudget(c.meta.lifetime_budget) + ' LT' : '—';
               return `
                 <tr>
                   <td><input type="checkbox" class="camp-check" value="${c.campaign_id}" onchange="updateCampSelection()" /></td>
-                  <td class="name-cell">
-                    <a href="#" onclick="navigateTo('adsets', {metaCampaignId: '${c.campaign_id}', campaignName: '${(c.campaign_name || '').replace(/'/g, "\\'")}'}); return false;">
-                      ${c.campaign_name}
-                    </a>
-                  </td>
-                  <td class="right">${fmt(c.spend, 'currency')}</td>
-                  <td class="right" style="font-weight: 600;">${result.count > 0 ? result.count : '—'}</td>
-                  <td class="right ${metricColor(costPerResult, {good: 40, bad: 80}, true)}">${costPerResult > 0 ? fmt(costPerResult, 'currency') : '—'}</td>
-                  <td class="right">${fmt(c.impressions, 'compact')}</td>
-                  <td class="right">${fmt(c.cpm, 'currency')}</td>
-                  <td class="right ${metricColor(c.ctr, {good: 1.5, bad: 0.5})}">${fmt(c.ctr, 'percent')}</td>
-                  <td class="right">${fmt(c.cpc, 'currency')}</td>
-                  <td class="right">${fmt(c.reach, 'compact')}</td>
-                  <td class="right">${fmt(c.frequency, 'decimal')}</td>
+                  <td class="name-cell"><a href="#" onclick="navigateTo('adsets', {metaCampaignId: '${c.campaign_id}', campaignName: '${(c.campaign_name || '').replace(/'/g, "\\'")}'}); return false;">${c.campaign_name}</a></td>
+                  <td>${statusBadge(status)}</td>
+                  <td class="right">${spend > 0 ? fmt(spend,'currency') : '—'}</td>
+                  <td class="right" style="font-weight:600;">${result.count > 0 ? result.count : '—'}</td>
+                  <td class="right">${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</td>
+                  <td class="right">${budget}</td>
+                  <td class="right">${c.meta?.objective ? c.meta.objective.replace(/_/g,' ') : '—'}</td>
+                  <td class="right">${c.ctr ? fmt(c.ctr,'percent') : '—'}</td>
+                  <td class="right">${c.cpc ? fmt(c.cpc,'currency') : '—'}</td>
                   <td>
                     <div class="btn-group">
-                      <button class="btn btn-sm btn-danger" onclick="pauseCampaign('${c.campaign_id}', '${(c.campaign_name || '').replace(/'/g, "\\'")}')">Pause</button>
-                      <button class="btn btn-sm" onclick="dupCampaign('${c.campaign_id}', '${(c.campaign_name || '').replace(/'/g, "\\'")}')">Dup</button>
+                      <button class="btn btn-sm btn-primary" onclick="openCampaignEditor('${c.campaign_id}')">Edit</button>
+                      <button class="btn btn-sm" onclick="campaignStatusAction('${c.campaign_id}','${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}')">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
+                      <button class="btn btn-sm" onclick="campaignDuplicate('${c.campaign_id}')">Dup</button>
                     </div>
                   </td>
                 </tr>
@@ -118,197 +124,144 @@ async function loadCampaigns(container) {
   }
 }
 
-// ─── BULK SELECTION ───────────────────────────────────────
-
 function toggleAllCampaigns(checkbox, ids) {
-  const checks = document.querySelectorAll('.camp-check');
-  checks.forEach(c => { c.checked = checkbox.checked; });
+  document.querySelectorAll('.camp-check').forEach(c => { c.checked = checkbox.checked; });
   selectedCampaigns = checkbox.checked ? new Set(ids) : new Set();
   updateBulkBar();
 }
-
 function updateCampSelection() {
   selectedCampaigns.clear();
   document.querySelectorAll('.camp-check:checked').forEach(c => selectedCampaigns.add(c.value));
   updateBulkBar();
 }
-
 function updateBulkBar() {
   const bar = document.getElementById('bulk-bar');
   const count = document.getElementById('bulk-count');
-  if (selectedCampaigns.size > 0) {
-    bar.style.display = 'flex';
-    count.textContent = `${selectedCampaigns.size} selected`;
-  } else {
-    bar.style.display = 'none';
-  }
+  if (selectedCampaigns.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedCampaigns.size} selected`; }
+  else { bar.style.display = 'none'; }
 }
-
 function clearSelection() {
   selectedCampaigns.clear();
   document.querySelectorAll('.camp-check').forEach(c => { c.checked = false; });
   updateBulkBar();
 }
-
 async function bulkAction(action) {
-  if (selectedCampaigns.size === 0) return;
+  if (!selectedCampaigns.size) return;
+  const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE';
   if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${selectedCampaigns.size} campaign(s)?`)) return;
-
   try {
-    toast(`${action === 'pause' ? 'Pausing' : 'Resuming'} ${selectedCampaigns.size} campaigns...`, 'info');
-    const res = await apiPost('/create/bulk-action', {
-      entityIds: Array.from(selectedCampaigns),
-      entityType: 'campaign',
-      action,
-    });
-    toast(res.message, 'success');
+    for (const id of selectedCampaigns) await apiPost(`/meta/entity/campaign/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus });
+    toast(`Updated ${selectedCampaigns.size} campaign(s)`, 'success');
     navigateTo('campaigns');
+  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+
+async function openCampaignEditor(campaignId) {
+  campaignDrawerSection = 'identity';
+  openDrawer('Edit Campaign', '<div class="loading">Loading campaign…</div>');
+  try {
+    const res = await apiGet(`/meta/entity/campaign/${campaignId}`);
+    renderCampaignEditor(res.data);
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
   }
 }
 
-// ─── CREATE CAMPAIGN DRAWER ───────────────────────────────
+function renderCampaignEditor(entity) {
+  const s = entity.special_ad_categories || [];
+  setDrawerBody(`
+    ${entitySectionNav('campaign', campaignDrawerSection, ['identity','budget','schedule'])}
 
-function openCreateCampaign() {
-  openDrawer('Create Campaign', `
-    <div class="form-group">
-      <label class="form-label">Campaign Name</label>
-      <input id="cc-name" class="form-input" type="text" placeholder="e.g. CA — Casino — Slots — Prospecting" />
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Objective</label>
-      <select id="cc-objective" class="form-select">
-        <option value="OUTCOME_SALES">Sales (Conversions)</option>
-        <option value="OUTCOME_LEADS">Leads</option>
-        <option value="OUTCOME_TRAFFIC">Traffic</option>
-        <option value="OUTCOME_ENGAGEMENT">Engagement</option>
-        <option value="OUTCOME_AWARENESS">Awareness</option>
-        <option value="OUTCOME_APP_PROMOTION">App Promotion</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Special Ad Categories</label>
-      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-        <label style="display: flex; align-items: center; gap: 5px; font-size: 0.82rem; cursor: pointer;">
-          <input type="checkbox" class="cc-category" value="CREDIT" /> Credit
-        </label>
-        <label style="display: flex; align-items: center; gap: 5px; font-size: 0.82rem; cursor: pointer;">
-          <input type="checkbox" class="cc-category" value="EMPLOYMENT" /> Employment
-        </label>
-        <label style="display: flex; align-items: center; gap: 5px; font-size: 0.82rem; cursor: pointer;">
-          <input type="checkbox" class="cc-category" value="HOUSING" /> Housing
-        </label>
-        <label style="display: flex; align-items: center; gap: 5px; font-size: 0.82rem; cursor: pointer;">
-          <input type="checkbox" class="cc-category" value="SOCIAL_ISSUES_ELECTIONS_POLITICS" /> Social/Political
-        </label>
+    <div data-entity-section="identity" style="display:${campaignDrawerSection === 'identity' ? 'block' : 'none'};">
+      <div class="form-group"><label class="form-label">Name</label><input id="ce-name" class="form-input" value="${escapeHtml(entity.name || '')}" /></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Status</label><select id="ce-status" class="form-select">${['ACTIVE','PAUSED','ARCHIVED'].map(v => `<option value="${v}" ${entity.status === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Buying Type</label><select id="ce-buying-type" class="form-select">${['AUCTION','RESERVED'].map(v => `<option value="${v}" ${entity.buying_type === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
       </div>
+      <div class="form-group"><label class="form-label">Objective</label><select id="ce-objective" class="form-select">${['OUTCOME_SALES','OUTCOME_LEADS','OUTCOME_TRAFFIC','OUTCOME_ENGAGEMENT','OUTCOME_AWARENESS','OUTCOME_APP_PROMOTION'].map(v => `<option value="${v}" ${entity.objective === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+      <div class="form-group"><label class="form-label">Special Ad Categories</label><div style="display:flex; flex-wrap:wrap; gap:8px;">${['CREDIT','EMPLOYMENT','HOUSING','SOCIAL_ISSUES_ELECTIONS_POLITICS'].map(v => `<label style="display:flex; align-items:center; gap:6px; font-size:0.82rem;"><input type="checkbox" class="ce-cat" value="${v}" ${s.includes(v) ? 'checked' : ''}/> ${v.replace(/_/g,' ')}</label>`).join('')}</div></div>
+      <div class="form-group"><label class="form-label">Internal Tags</label><input id="ce-tags" class="form-input" placeholder="launch, cbo, test" /></div>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">Campaign Budget Optimization (CBO)</label>
-      <select id="cc-budget-type" class="form-select" onchange="toggleCCBudget()">
-        <option value="none">No CBO — set budget at ad set level</option>
-        <option value="daily">Daily Budget</option>
-        <option value="lifetime">Lifetime Budget</option>
-      </select>
+    <div data-entity-section="budget" style="display:${campaignDrawerSection === 'budget' ? 'block' : 'none'};">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Daily Budget</label><input id="ce-daily-budget" class="form-input" type="number" step="0.01" value="${entity.daily_budget ? (entity.daily_budget / 100).toFixed(2) : ''}" /></div>
+        <div class="form-group"><label class="form-label">Lifetime Budget</label><input id="ce-lifetime-budget" class="form-input" type="number" step="0.01" value="${entity.lifetime_budget ? (entity.lifetime_budget / 100).toFixed(2) : ''}" /></div>
+      </div>
+      <div class="text-muted" style="font-size:0.78rem;">Use daily or lifetime budget based on campaign setup. Leave the other empty.</div>
     </div>
 
-    <div id="cc-budget-field" class="form-group" style="display: none;">
-      <label class="form-label">Budget Amount (CAD)</label>
-      <input id="cc-budget" class="form-input" type="number" step="0.01" placeholder="e.g. 100.00" />
+    <div data-entity-section="schedule" style="display:${campaignDrawerSection === 'schedule' ? 'block' : 'none'};">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Start Time</label><input id="ce-start-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.start_time)}" /></div>
+        <div class="form-group"><label class="form-label">Stop Time</label><input id="ce-stop-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.stop_time)}" /></div>
+      </div>
+      <div class="text-muted" style="font-size:0.78rem;">Objective and smart promotion constraints are displayed here for reference through the loaded entity data.</div>
+      <pre style="background:var(--bg-elevated); padding:10px; border-radius:8px; font-size:0.72rem; white-space:pre-wrap;">${escapeHtml(JSON.stringify({ objective: entity.objective, smart_promotion_type: entity.smart_promotion_type }, null, 2))}</pre>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">Initial Status</label>
-      <select id="cc-status" class="form-select">
-        <option value="PAUSED">Paused (review before launch)</option>
-        <option value="ACTIVE">Active (launch immediately)</option>
-      </select>
-    </div>
-
-    <div style="display: flex; gap: 8px; margin-top: 20px;">
-      <button class="btn btn-primary" onclick="submitCreateCampaign()">Create Campaign</button>
-      <button class="btn" onclick="closeDrawer()">Cancel</button>
+    <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px;">
+      <button class="btn btn-primary" onclick="saveCampaignEditor('${entity.id}')">Publish</button>
+      <button class="btn" onclick="campaignDuplicate('${entity.id}')">Duplicate</button>
+      <button class="btn" onclick="renderCampaignEditor(${safeJson(entity)})">Revert</button>
+      <button class="btn" onclick="closeDrawer()">Close</button>
     </div>
   `);
 }
 
-function toggleCCBudget() {
-  const type = document.getElementById('cc-budget-type').value;
-  document.getElementById('cc-budget-field').style.display = type === 'none' ? 'none' : 'block';
+function switchCampaignDrawerSection(section) {
+  campaignDrawerSection = section;
+  document.querySelectorAll('[data-entity-section]').forEach(el => { el.style.display = el.getAttribute('data-entity-section') === section ? 'block' : 'none'; });
+  document.querySelectorAll('.entity-section-tab').forEach(el => el.classList.toggle('active', el.dataset.section === section));
 }
 
-async function submitCreateCampaign() {
-  const name = document.getElementById('cc-name').value;
-  const objective = document.getElementById('cc-objective').value;
-  const budgetType = document.getElementById('cc-budget-type').value;
-  const budget = parseFloat(document.getElementById('cc-budget')?.value) || 0;
-  const status = document.getElementById('cc-status').value;
-  const categories = Array.from(document.querySelectorAll('.cc-category:checked')).map(c => c.value);
-
-  if (!name) { toast('Campaign name required', 'error'); return; }
-
-  const payload = { name, objective, status, specialAdCategories: categories };
-  if (budgetType === 'daily' && budget > 0) payload.dailyBudget = budget;
-  if (budgetType === 'lifetime' && budget > 0) payload.lifetimeBudget = budget;
-
+async function saveCampaignEditor(campaignId) {
+  const payload = {
+    accountId: ACCOUNT_ID,
+    name: document.getElementById('ce-name').value,
+    status: document.getElementById('ce-status').value,
+    buying_type: document.getElementById('ce-buying-type').value,
+    objective: document.getElementById('ce-objective').value,
+    special_ad_categories: Array.from(document.querySelectorAll('.ce-cat:checked')).map(c => c.value),
+    daily_budget: blankToUndefined(document.getElementById('ce-daily-budget').value),
+    lifetime_budget: blankToUndefined(document.getElementById('ce-lifetime-budget').value),
+    start_time: localDateTimeToIso(document.getElementById('ce-start-time').value),
+    stop_time: localDateTimeToIso(document.getElementById('ce-stop-time').value),
+    internal_tags: tagsToArray(document.getElementById('ce-tags').value),
+  };
   try {
-    toast('Creating campaign...', 'info');
-    const res = await apiPost('/create/campaign', payload);
-    toast(`Campaign created: ${name}`, 'success');
+    await apiPost(`/meta/entity/campaign/${campaignId}/update`, payload);
+    toast('Campaign updated', 'success');
     closeDrawer();
     navigateTo('campaigns');
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
-  }
+  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 
-// ─── DATE PRESETS ─────────────────────────────────────────
-
-function setCampPreset(preset) {
-  campPreset = preset;
-  switch (preset) {
-    case 'today': campDateFrom = todayStr(); campDateTo = todayStr(); break;
-    case 'yesterday': campDateFrom = daysAgoStr(1); campDateTo = daysAgoStr(1); break;
-    case '7d': campDateFrom = daysAgoStr(7); campDateTo = daysAgoStr(1); break;
-    case '30d': campDateFrom = daysAgoStr(30); campDateTo = daysAgoStr(1); break;
-    case 'custom': toggleCampDatePicker(); return;
-  }
-  navigateTo('campaigns');
-}
-
-function toggleCampDatePicker() {
-  campPreset = 'custom';
-  const picker = document.getElementById('camp-date-picker');
-  if (picker) picker.style.display = 'flex';
-}
-
-function applyCampDate() {
-  campDateFrom = document.getElementById('camp-date-from').value;
-  campDateTo = document.getElementById('camp-date-to').value;
-  if (!campDateFrom || !campDateTo) { toast('Select both dates', 'error'); return; }
-  campPreset = 'custom';
-  navigateTo('campaigns');
-}
-
-// ─── ACTIONS ──────────────────────────────────────────────
-
-async function pauseCampaign(metaId, name) {
-  if (!confirmAction(`Pause campaign "${name}"?`)) return;
+async function campaignStatusAction(campaignId, status) {
   try {
-    await apiPost('/actions/pause', { accountId: ACCOUNT_ID, entityType: 'campaign', metaEntityId: metaId });
-    toast(`Paused: ${name}`, 'success');
+    await apiPost(`/meta/entity/campaign/${campaignId}/status`, { accountId: ACCOUNT_ID, status });
+    toast(`Campaign ${status === 'ACTIVE' ? 'resumed' : status.toLowerCase()}`, 'success');
+    navigateTo('campaigns');
+  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+async function campaignDuplicate(campaignId) {
+  try {
+    await apiPost(`/meta/entity/campaign/${campaignId}/duplicate`, { accountId: ACCOUNT_ID });
+    toast('Campaign duplicated', 'success');
+    closeDrawer();
     navigateTo('campaigns');
   } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 
-async function dupCampaign(metaId, name) {
-  if (!confirmAction(`Duplicate campaign "${name}"?`)) return;
-  try {
-    await apiPost('/actions/duplicate', { accountId: ACCOUNT_ID, entityType: 'campaign', metaEntityId: metaId });
-    toast(`Duplicated: ${name}`, 'success');
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+function entitySectionNav(prefix, active, sections) {
+  return `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">${sections.map(s => `<button class="btn btn-sm entity-section-tab ${active === s ? 'btn-primary' : ''}" data-section="${s}" onclick="switch${prefix === 'campaign' ? 'Campaign' : 'Adset'}DrawerSection('${s}')">${capitalizeFirst(s)}</button>`).join('')}</div>`;
 }
+function capitalizeFirst(str) { return str.charAt(0).toUpperCase() + str.slice(1); }
+function safeJson(obj) { return JSON.stringify(obj).replace(/</g, '\\u003c'); }
+function blankToUndefined(v) { return v === '' ? undefined : parseFloat(v); }
+function tagsToArray(v) { return (v || '').split(',').map(s => s.trim()).filter(Boolean); }
+function toLocalDateTime(iso) { if (!iso) return ''; const d = new Date(iso); const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function localDateTimeToIso(v) { return v ? new Date(v).toISOString() : null; }
+function setCampPreset(preset) { campPreset = preset; switch (preset) { case 'today': campDateFrom = todayStr(); campDateTo = todayStr(); break; case 'yesterday': campDateFrom = daysAgoStr(1); campDateTo = daysAgoStr(1); break; case '7d': campDateFrom = daysAgoStr(7); campDateTo = daysAgoStr(1); break; case '30d': campDateFrom = daysAgoStr(30); campDateTo = daysAgoStr(1); break; case 'custom': toggleCampDatePicker(); return; } navigateTo('campaigns'); }
+function toggleCampDatePicker() { campPreset = 'custom'; const picker = document.getElementById('camp-date-picker'); if (picker) picker.style.display = 'flex'; }
+function applyCampDate() { campDateFrom = document.getElementById('camp-date-from').value; campDateTo = document.getElementById('camp-date-to').value; if (!campDateFrom || !campDateTo) { toast('Select both dates', 'error'); return; } campPreset = 'custom'; navigateTo('campaigns'); }

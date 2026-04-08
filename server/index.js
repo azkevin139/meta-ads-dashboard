@@ -10,11 +10,11 @@ let helmet, rateLimit;
 try { helmet = require('helmet'); } catch (e) { helmet = null; }
 try { rateLimit = require('express-rate-limit'); } catch (e) { rateLimit = null; }
 
-// Routes
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const metaRoutes = require('./routes/meta');
 const metaRateRoutes = require('./routes/metaRate');
+const metaEntityRoutes = require('./routes/metaEntity');
 const insightsRoutes = require('./routes/insights');
 const aiRoutes = require('./routes/ai');
 const actionsRoutes = require('./routes/actions');
@@ -23,9 +23,7 @@ const logsRoutes = require('./routes/logs');
 const app = express();
 
 if (helmet) {
-  app.use(helmet({
-    contentSecurityPolicy: false,
-  }));
+  app.use(helmet({ contentSecurityPolicy: false }));
 }
 
 if (rateLimit) {
@@ -34,11 +32,7 @@ if (rateLimit) {
 }
 
 app.use(cors({
-  origin: [
-    'http://72.62.94.97:4000',
-    'http://localhost:4000',
-    'https://ads.emma42.com',
-  ],
+  origin: ['http://72.62.94.97:4000', 'http://localhost:4000', 'https://ads.emma42.com'],
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -75,6 +69,7 @@ const createRoutes = require('./routes/create');
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/meta', metaRateRoutes);
+app.use('/api/meta', metaEntityRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai', aiRoutes);

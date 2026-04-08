@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════
-   Ad Sets Page — bulk + create + targeting + placements
+   Ad Sets Page — editor driven
    ═══════════════════════════════════════════════════════════ */
 
 let selectedAdSets = new Set();
+let adsetDrawerSection = 'identity';
 
 async function loadAdSets(container) {
   const metaCampaignId = pageState.metaCampaignId || pageState.campaignId;
@@ -37,15 +38,15 @@ async function loadAdSets(container) {
 
   try {
     const res = await apiGet(`/meta/adsets?campaignId=${metaCampaignId}`);
-    const adsets = (res.data || []).filter(a => ['ACTIVE', 'PAUSED', 'PENDING_REVIEW'].includes(a.effective_status));
+    const adsets = res.data || [];
 
     let insightsMap = {};
     try {
       const insRes = await apiGet(`/meta/live?level=adset&since=${campDateFrom || daysAgoStr(1)}&until=${campDateTo || daysAgoStr(1)}`);
-      for (const row of (insRes.data || [])) { if (row.adset_id) insightsMap[row.adset_id] = row; }
+      for (const row of (insRes.data || [])) if (row.adset_id) insightsMap[row.adset_id] = row;
     } catch (e) {}
 
-    if (adsets.length === 0) {
+    if (!adsets.length) {
       document.getElementById('adsets-table').innerHTML = '<div class="empty-state"><div class="empty-state-text">No ad sets found</div></div>';
       return;
     }
@@ -54,8 +55,8 @@ async function loadAdSets(container) {
       <div style="overflow-x: auto;"><table><thead><tr>
         <th style="width:36px;"><input type="checkbox" onchange="toggleAllAdSets(this, ${JSON.stringify(adsets.map(a => a.id)).replace(/"/g, '&quot;')})" /></th>
         <th>Ad Set</th><th>Status</th><th class="right">Budget</th><th class="right">Spend</th>
-        <th class="right">Results</th><th class="right">Cost/Result</th><th class="right">CPM</th>
-        <th class="right">CTR</th><th class="right">Freq.</th><th>Actions</th>
+        <th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Bid</th>
+        <th class="right">Optimization</th><th>Actions</th>
       </tr></thead><tbody>
         ${adsets.map(a => {
           const ins = insightsMap[a.id] || {};
@@ -66,19 +67,17 @@ async function loadAdSets(container) {
           return `<tr>
             <td><input type="checkbox" class="adset-check" value="${a.id}" onchange="updateAdSetSelection()" /></td>
             <td class="name-cell"><a href="#" onclick="navigateTo('ads', {metaAdsetId:'${a.id}', adsetName:'${(a.name||'').replace(/'/g,"\\'")}', metaCampaignId:'${metaCampaignId}', campaignName:'${campaignName.replace(/'/g,"\\'")}'}); return false;">${a.name}</a></td>
-            <td>${statusBadge(a.effective_status)}</td>
-            <td class="right">${a.daily_budget ? '$'+(a.daily_budget/100).toFixed(2) : '—'}</td>
+            <td>${statusBadge(a.effective_status || a.status)}</td>
+            <td class="right">${a.daily_budget ? fmtBudget(a.daily_budget) : a.lifetime_budget ? fmtBudget(a.lifetime_budget) + ' LT' : '—'}</td>
             <td class="right">${spend > 0 ? fmt(spend,'currency') : '—'}</td>
             <td class="right" style="font-weight:600;">${result.count > 0 ? result.count : '—'}</td>
             <td class="right">${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</td>
-            <td class="right">${ins.cpm ? fmt(ins.cpm,'currency') : '—'}</td>
-            <td class="right">${ins.ctr ? fmt(ins.ctr,'percent') : '—'}</td>
-            <td class="right">${ins.frequency ? fmt(ins.frequency,'decimal') : '—'}</td>
+            <td class="right">${a.bid_strategy ? a.bid_strategy.replace(/_/g,' ') : '—'}</td>
+            <td class="right">${a.optimization_goal ? a.optimization_goal.replace(/_/g,' ') : '—'}</td>
             <td><div class="btn-group">
-              <button class="btn btn-sm btn-primary" onclick="openAdSetDrawer('${a.id}','${(a.name||'').replace(/'/g,"\\'")}')">Details</button>
-              ${a.effective_status==='ACTIVE'
-                ? `<button class="btn btn-sm btn-danger" onclick="pauseAdSet('${a.id}','${(a.name||'').replace(/'/g,"\\'")}')">Pause</button>`
-                : `<button class="btn btn-sm" onclick="resumeAdSet('${a.id}','${(a.name||'').replace(/'/g,"\\'")}')">Resume</button>`}
+              <button class="btn btn-sm btn-primary" onclick="openAdSetEditor('${a.id}')">Edit</button>
+              <button class="btn btn-sm" onclick="adsetStatusAction('${a.id}','${(a.effective_status || a.status) === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}')">${(a.effective_status || a.status) === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
+              <button class="btn btn-sm" onclick="adsetDuplicate('${a.id}')">Dup</button>
             </div></td>
           </tr>`;
         }).join('')}
@@ -89,306 +88,169 @@ async function loadAdSets(container) {
   }
 }
 
-// ─── BULK SELECTION ───────────────────────────────────────
-
-function toggleAllAdSets(cb, ids) {
-  document.querySelectorAll('.adset-check').forEach(c => { c.checked = cb.checked; });
-  selectedAdSets = cb.checked ? new Set(ids) : new Set();
-  updateAdSetBulkBar();
-}
-function updateAdSetSelection() {
-  selectedAdSets.clear();
-  document.querySelectorAll('.adset-check:checked').forEach(c => selectedAdSets.add(c.value));
-  updateAdSetBulkBar();
-}
-function clearAdSetSelection() {
-  selectedAdSets.clear();
-  document.querySelectorAll('.adset-check').forEach(c => { c.checked = false; });
-  updateAdSetBulkBar();
-}
-function updateAdSetBulkBar() {
-  const bar = document.getElementById('adset-bulk-bar');
-  const count = document.getElementById('adset-bulk-count');
-  if (selectedAdSets.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedAdSets.size} selected`; }
-  else { bar.style.display = 'none'; }
-}
+function toggleAllAdSets(cb, ids) { document.querySelectorAll('.adset-check').forEach(c => { c.checked = cb.checked; }); selectedAdSets = cb.checked ? new Set(ids) : new Set(); updateAdSetBulkBar(); }
+function updateAdSetSelection() { selectedAdSets.clear(); document.querySelectorAll('.adset-check:checked').forEach(c => selectedAdSets.add(c.value)); updateAdSetBulkBar(); }
+function clearAdSetSelection() { selectedAdSets.clear(); document.querySelectorAll('.adset-check').forEach(c => { c.checked = false; }); updateAdSetBulkBar(); }
+function updateAdSetBulkBar() { const bar = document.getElementById('adset-bulk-bar'); const count = document.getElementById('adset-bulk-count'); if (selectedAdSets.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedAdSets.size} selected`; } else { bar.style.display = 'none'; } }
 async function bulkAdSetAction(action) {
-  if (selectedAdSets.size === 0) return;
-  if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${selectedAdSets.size} ad set(s)?`)) return;
+  if (!selectedAdSets.size) return;
+  const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE';
   try {
-    toast(`Processing...`, 'info');
-    const res = await apiPost('/create/bulk-action', { entityIds: Array.from(selectedAdSets), entityType: 'adset', action });
-    toast(res.message, 'success');
+    for (const id of selectedAdSets) await apiPost(`/meta/entity/adset/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus });
+    toast(`Updated ${selectedAdSets.size} ad set(s)`, 'success');
     navigateTo('adsets', pageState);
   } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 
-// ─── CREATE AD SET DRAWER ─────────────────────────────────
-
-async function openCreateAdSet(campaignId) {
-  openDrawer('Create Ad Set', '<div class="loading">Loading pixels...</div>');
-
-  // Fetch pixels
-  let pixels = [];
+async function openAdSetEditor(adsetId) {
+  adsetDrawerSection = 'identity';
+  openDrawer('Edit Ad Set', '<div class="loading">Loading ad set…</div>');
   try {
-    const pixRes = await apiGet('/create/pixels');
-    pixels = pixRes.data || [];
-  } catch (e) {}
-
-  setDrawerBody(`
-    <div class="form-group">
-      <label class="form-label">Ad Set Name</label>
-      <input id="cas-name" class="form-input" type="text" placeholder="e.g. Maritimes Sign up (ENG)" />
-    </div>
-
-    <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin: 16px 0 10px; text-transform:uppercase; letter-spacing:0.06em;">Conversion</div>
-
-    <div class="form-group">
-      <label class="form-label">Pixel / Dataset</label>
-      <select id="cas-pixel" class="form-select">
-        <option value="">Select pixel</option>
-        ${pixels.map(p => `<option value="${p.id}">${p.name} (${p.id})</option>`).join('')}
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Conversion Event</label>
-      <select id="cas-event" class="form-select">
-        <option value="INITIATE_CHECKOUT">Initiate Checkout</option>
-        <option value="PURCHASE">Purchase</option>
-        <option value="LEAD">Lead</option>
-        <option value="COMPLETE_REGISTRATION">Complete Registration</option>
-        <option value="ADD_TO_CART">Add to Cart</option>
-        <option value="SEARCH">Search</option>
-        <option value="VIEW_CONTENT">View Content</option>
-      </select>
-    </div>
-
-    <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin: 16px 0 10px; text-transform:uppercase; letter-spacing:0.06em;">Budget & Bidding</div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Daily Budget (CAD)</label>
-        <input id="cas-budget" class="form-input" type="number" step="0.01" placeholder="e.g. 50.00" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Bid Strategy</label>
-        <select id="cas-bid" class="form-select">
-          <option value="LOWEST_COST_WITHOUT_CAP">Lowest Cost</option>
-          <option value="COST_CAP">Cost Cap</option>
-          <option value="LOWEST_COST_WITH_BID_CAP">Bid Cap</option>
-        </select>
-      </div>
-    </div>
-
-    <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin: 16px 0 10px; text-transform:uppercase; letter-spacing:0.06em;">Targeting</div>
-
-    <div class="form-group">
-      <label class="form-label">Include Locations (country codes, comma-separated)</label>
-      <input id="cas-geo" class="form-input" type="text" placeholder="e.g. CA" value="CA" />
-      <div class="text-muted" style="font-size:0.7rem; margin-top:4px;">Use 2-letter country codes. For regions: CA:QC, CA:AB, CA:ON etc.</div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Exclude Locations (optional)</label>
-      <input id="cas-geo-exclude" class="form-input" type="text" placeholder="e.g. CA:ON" />
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Age Min</label>
-        <input id="cas-age-min" class="form-input" type="number" min="18" max="65" value="21" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Age Max</label>
-        <input id="cas-age-max" class="form-input" type="number" min="18" max="65" value="65" />
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Gender</label>
-        <select id="cas-gender" class="form-select">
-          <option value="all">All</option>
-          <option value="1">Male</option>
-          <option value="2">Female</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Languages</label>
-        <input id="cas-locales" class="form-input" type="text" placeholder="e.g. 6 (English), 1001 (French)" />
-        <div class="text-muted" style="font-size:0.7rem; margin-top:4px;">6=English, 1001=French. Comma-separated locale IDs.</div>
-      </div>
-    </div>
-
-    <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin: 16px 0 10px; text-transform:uppercase; letter-spacing:0.06em;">Placements</div>
-
-    <div class="form-group">
-      <label class="form-label">Platforms</label>
-      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-platform" value="facebook" checked /> Facebook</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-platform" value="instagram" checked /> Instagram</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-platform" value="messenger" /> Messenger</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-platform" value="audience_network" /> Audience Network</label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Facebook Positions</label>
-      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-fb-pos" value="feed" checked /> Feed</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-fb-pos" value="story" checked /> Stories</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-fb-pos" value="reels" /> Reels</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-fb-pos" value="marketplace" /> Marketplace</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-fb-pos" value="right_hand_column" /> Right Column</label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Instagram Positions</label>
-      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-ig-pos" value="stream" checked /> Feed</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-ig-pos" value="story" checked /> Stories</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-ig-pos" value="reels" /> Reels</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-ig-pos" value="explore" /> Explore</label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Devices</label>
-      <div style="display: flex; gap: 10px;">
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-device" value="mobile" checked /> Mobile</label>
-        <label style="display:flex; align-items:center; gap:5px; font-size:0.82rem; cursor:pointer;"><input type="checkbox" class="cas-device" value="desktop" checked /> Desktop</label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Initial Status</label>
-      <select id="cas-status" class="form-select">
-        <option value="PAUSED">Paused</option>
-        <option value="ACTIVE">Active</option>
-      </select>
-    </div>
-
-    <div style="display: flex; gap: 8px; margin-top: 20px;">
-      <button class="btn btn-primary" onclick="submitCreateAdSet('${campaignId}')">Create Ad Set</button>
-      <button class="btn" onclick="closeDrawer()">Cancel</button>
-    </div>
-  `);
-}
-
-function parseGeoInput(input) {
-  if (!input || !input.trim()) return null;
-  const parts = input.split(',').map(s => s.trim()).filter(Boolean);
-  const countries = [];
-  const regions = [];
-  for (const p of parts) {
-    if (p.includes(':')) {
-      const [country, region] = p.split(':');
-      regions.push({ key: `${country}-${region}` });
-    } else {
-      countries.push(p.toUpperCase());
-    }
-  }
-  const result = {};
-  if (countries.length) result.countries = countries;
-  if (regions.length) result.regions = regions;
-  return Object.keys(result).length > 0 ? result : null;
-}
-
-async function submitCreateAdSet(campaignId) {
-  const name = document.getElementById('cas-name').value;
-  if (!name) { toast('Name required', 'error'); return; }
-
-  const payload = {
-    name,
-    campaignId,
-    status: document.getElementById('cas-status').value,
-    dailyBudget: parseFloat(document.getElementById('cas-budget').value) || undefined,
-    bidStrategy: document.getElementById('cas-bid').value,
-    pixelId: document.getElementById('cas-pixel').value || undefined,
-    customEventType: document.getElementById('cas-event').value,
-    optimizationGoal: 'OFFSITE_CONVERSIONS',
-    billingEvent: 'IMPRESSIONS',
-    ageMin: parseInt(document.getElementById('cas-age-min').value) || 21,
-    ageMax: parseInt(document.getElementById('cas-age-max').value) || 65,
-    genders: document.getElementById('cas-gender').value === 'all' ? [] : [parseInt(document.getElementById('cas-gender').value)],
-    geoLocations: parseGeoInput(document.getElementById('cas-geo').value),
-    excludedGeoLocations: parseGeoInput(document.getElementById('cas-geo-exclude').value),
-    locales: document.getElementById('cas-locales').value ? document.getElementById('cas-locales').value.split(',').map(s => parseInt(s.trim())).filter(Boolean) : [],
-    publisherPlatforms: Array.from(document.querySelectorAll('.cas-platform:checked')).map(c => c.value),
-    facebookPositions: Array.from(document.querySelectorAll('.cas-fb-pos:checked')).map(c => c.value),
-    instagramPositions: Array.from(document.querySelectorAll('.cas-ig-pos:checked')).map(c => c.value),
-    devicePlatforms: Array.from(document.querySelectorAll('.cas-device:checked')).map(c => c.value),
-  };
-
-  try {
-    toast('Creating ad set...', 'info');
-    await apiPost('/create/adset', payload);
-    toast(`Ad set created: ${name}`, 'success');
-    closeDrawer();
-    navigateTo('adsets', pageState);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
-}
-
-// ─── DETAILS DRAWER ───────────────────────────────────────
-
-async function openAdSetDrawer(metaAdsetId, name) {
-  openDrawer('Ad Set Details', '<div class="loading">Loading...</div>');
-  try {
-    const res = await apiGet(`/meta/adset-detail?adsetId=${metaAdsetId}`);
-    const geo = res.geo_locations || {};
-    const countries = (geo.countries || []).join(', ');
-    const regions = (geo.regions || []).map(r => r.name || r.key).join(', ');
-    const cities = (geo.cities || []).map(c => c.name || c.key).join(', ');
-    const geoStr = [countries, regions, cities].filter(Boolean).join(' · ') || 'Not set';
-    const genderMap = { 1: 'Male', 2: 'Female' };
-    const genders = (res.genders || []).map(g => genderMap[g]).join(', ') || 'All';
-    const platforms = res.publisher_platforms || [];
-    const isAuto = platforms.length === 0;
-
-    setDrawerBody(`
-      <div style="margin-bottom:20px;">
-        <div style="font-weight:600; font-size:0.95rem;">${name}</div>
-        <div class="text-muted" style="font-size:0.75rem;">ID: ${metaAdsetId}</div>
-      </div>
-
-      <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin-bottom:12px; text-transform:uppercase; letter-spacing:0.06em;">Targeting</div>
-      <div class="form-group"><div class="form-label">Location</div><div style="font-size:0.85rem;">${geoStr}</div></div>
-      <div class="form-row">
-        <div class="form-group"><div class="form-label">Age</div><div style="font-size:0.85rem;">${res.age_min || '18'} — ${res.age_max || '65+'}</div></div>
-        <div class="form-group"><div class="form-label">Gender</div><div style="font-size:0.85rem;">${genders}</div></div>
-      </div>
-      ${(res.interests || []).length ? `<div class="form-group"><div class="form-label">Interests</div><div style="display:flex;flex-wrap:wrap;gap:4px;">${res.interests.map(i => `<span class="badge badge-low">${i}</span>`).join('')}</div></div>` : ''}
-      ${(res.custom_audiences || []).length ? `<div class="form-group"><div class="form-label">Custom Audiences</div><div style="display:flex;flex-wrap:wrap;gap:4px;">${res.custom_audiences.map(a => `<span class="badge badge-active">${a.name || a.id}</span>`).join('')}</div></div>` : ''}
-
-      <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin:20px 0 12px; text-transform:uppercase; letter-spacing:0.06em;">Placements</div>
-      <div class="form-group">
-        ${isAuto ? '<span class="badge badge-active">Advantage+ (Automatic)</span>'
-          : `<div style="display:flex;flex-wrap:wrap;gap:4px;">${platforms.map(p => `<span class="badge badge-low">${p}</span>`).join('')}</div>
-             ${(res.facebook_positions||[]).length ? `<div style="font-size:0.8rem; margin-top:6px;"><span class="text-muted">FB:</span> ${res.facebook_positions.join(', ')}</div>` : ''}
-             ${(res.instagram_positions||[]).length ? `<div style="font-size:0.8rem;"><span class="text-muted">IG:</span> ${res.instagram_positions.join(', ')}</div>` : ''}`}
-      </div>
-
-      <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin:20px 0 12px; text-transform:uppercase; letter-spacing:0.06em;">Settings</div>
-      <div class="form-row">
-        <div class="form-group"><div class="form-label">Bid Strategy</div><div style="font-size:0.85rem;">${fmtBidStrategy(res.bid_strategy)}</div></div>
-        <div class="form-group"><div class="form-label">Optimization</div><div style="font-size:0.85rem;">${(res.optimization_goal || '').replace(/_/g,' ').toLowerCase()}</div></div>
-      </div>
-      <div class="form-group"><div class="form-label">Daily Budget</div><div style="font-size:0.85rem;">${res.daily_budget ? '$'+(res.daily_budget/100).toFixed(2) : 'Not set'}</div></div>
-    `);
+    const [res, pixelsRes] = await Promise.all([
+      apiGet(`/meta/entity/adset/${adsetId}`),
+      apiGet('/create/pixels').catch(() => ({ data: [] })),
+    ]);
+    renderAdSetEditor(res.data, pixelsRes.data || []);
   } catch (err) {
     setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
   }
 }
 
-function fmtBidStrategy(s) { return s ? s.replace(/_/g,' ').toLowerCase().replace('without cap','') : '—'; }
+function renderAdSetEditor(entity, pixels) {
+  const t = entity.targeting || {};
+  const po = entity.promoted_object || {};
+  setDrawerBody(`
+    ${entitySectionNav('adset', adsetDrawerSection, ['identity','budget','schedule','targeting','placements','conversion'])}
 
-async function pauseAdSet(metaId, name) {
-  if (!confirmAction(`Pause "${name}"?`)) return;
-  try { await apiPost('/actions/pause', { accountId: ACCOUNT_ID, entityType: 'adset', metaEntityId: metaId }); toast(`Paused: ${name}`, 'success'); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+    <div data-entity-section="identity" style="display:${adsetDrawerSection === 'identity' ? 'block' : 'none'};">
+      <div class="form-group"><label class="form-label">Name</label><input id="ae-name" class="form-input" value="${escapeHtml(entity.name || '')}" /></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Status</label><select id="ae-status" class="form-select">${['ACTIVE','PAUSED','ARCHIVED'].map(v => `<option value="${v}" ${entity.status === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Billing Event</label><select id="ae-billing-event" class="form-select">${['IMPRESSIONS','LINK_CLICKS','THRUPLAY'].map(v => `<option value="${v}" ${entity.billing_event === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-group"><label class="form-label">Internal Tags</label><input id="ae-tags" class="form-input" placeholder="retargeting, french, mobile" /></div>
+    </div>
+
+    <div data-entity-section="budget" style="display:${adsetDrawerSection === 'budget' ? 'block' : 'none'};">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Daily Budget</label><input id="ae-daily-budget" class="form-input" type="number" step="0.01" value="${entity.daily_budget ? (entity.daily_budget / 100).toFixed(2) : ''}" /></div>
+        <div class="form-group"><label class="form-label">Lifetime Budget</label><input id="ae-lifetime-budget" class="form-input" type="number" step="0.01" value="${entity.lifetime_budget ? (entity.lifetime_budget / 100).toFixed(2) : ''}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Bid Strategy</label><select id="ae-bid-strategy" class="form-select">${['LOWEST_COST_WITHOUT_CAP','COST_CAP','LOWEST_COST_WITH_BID_CAP'].map(v => `<option value="${v}" ${entity.bid_strategy === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Bid / Cost Cap</label><input id="ae-bid-amount" class="form-input" type="number" step="0.01" value="${entity.bid_amount ? (entity.bid_amount / 100).toFixed(2) : ''}" /></div>
+      </div>
+      <div class="form-group"><label class="form-label">Optimization Goal</label><select id="ae-optimization-goal" class="form-select">${['OFFSITE_CONVERSIONS','LANDING_PAGE_VIEWS','LINK_CLICKS','REACH','IMPRESSIONS'].map(v => `<option value="${v}" ${entity.optimization_goal === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+    </div>
+
+    <div data-entity-section="schedule" style="display:${adsetDrawerSection === 'schedule' ? 'block' : 'none'};">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Start Time</label><input id="ae-start-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.start_time)}" /></div>
+        <div class="form-group"><label class="form-label">End Time</label><input id="ae-end-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.end_time)}" /></div>
+      </div>
+      <div class="form-group"><label class="form-label">Attribution (days)</label><select id="ae-attribution" class="form-select">${[1,7].map(v => `<option value="${v}" ${(entity.attribution_spec && entity.attribution_spec[0] && String(entity.attribution_spec[0].event_type || '').includes(`${v}d`)) ? 'selected' : ''}>${v} day click</option>`).join('')}</select></div>
+    </div>
+
+    <div data-entity-section="targeting" style="display:${adsetDrawerSection === 'targeting' ? 'block' : 'none'};">
+      <div class="form-group"><label class="form-label">Include Countries</label><input id="ae-geo-countries" class="form-input" value="${escapeHtml((t.geo_locations?.countries || []).join(', '))}" placeholder="CA, US" /></div>
+      <div class="form-group"><label class="form-label">Exclude Countries</label><input id="ae-geo-excluded" class="form-input" value="${escapeHtml((t.excluded_geo_locations?.countries || []).join(', '))}" placeholder="US" /></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Age Min</label><input id="ae-age-min" class="form-input" type="number" value="${t.age_min || 18}" /></div>
+        <div class="form-group"><label class="form-label">Age Max</label><input id="ae-age-max" class="form-input" type="number" value="${t.age_max || 65}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Gender</label><select id="ae-gender" class="form-select"><option value="all" ${(t.genders || []).length === 0 ? 'selected' : ''}>All</option><option value="1" ${String((t.genders || [])[0]) === '1' ? 'selected' : ''}>Male</option><option value="2" ${String((t.genders || [])[0]) === '2' ? 'selected' : ''}>Female</option></select></div>
+        <div class="form-group"><label class="form-label">Locales</label><input id="ae-locales" class="form-input" value="${escapeHtml((t.locales || []).join(', '))}" placeholder="6, 1001" /></div>
+      </div>
+      <div class="form-group"><label class="form-label">Interests</label><textarea id="ae-interests" class="form-textarea" rows="3" placeholder='[{"id":"6003139266461","name":"Sports betting"}]'>${escapeHtml(JSON.stringify(t.interests || []))}</textarea></div>
+      <div class="form-group"><label class="form-label">Custom Audiences IDs</label><input id="ae-custom-audiences" class="form-input" value="${escapeHtml((t.custom_audiences || []).map(a => a.id).join(', '))}" placeholder="123, 456" /></div>
+      <div class="form-group"><label class="form-label">Excluded Audience IDs</label><input id="ae-excluded-audiences" class="form-input" value="${escapeHtml((t.excluded_custom_audiences || []).map(a => a.id).join(', '))}" placeholder="789" /></div>
+    </div>
+
+    <div data-entity-section="placements" style="display:${adsetDrawerSection === 'placements' ? 'block' : 'none'};">
+      <div class="form-group"><label class="form-label">Platforms</label><input id="ae-platforms" class="form-input" value="${escapeHtml((t.publisher_platforms || []).join(', '))}" placeholder="facebook, instagram" /></div>
+      <div class="form-group"><label class="form-label">Facebook Positions</label><input id="ae-fb-pos" class="form-input" value="${escapeHtml((t.facebook_positions || []).join(', '))}" placeholder="feed, story" /></div>
+      <div class="form-group"><label class="form-label">Instagram Positions</label><input id="ae-ig-pos" class="form-input" value="${escapeHtml((t.instagram_positions || []).join(', '))}" placeholder="stream, story, reels" /></div>
+      <div class="form-group"><label class="form-label">Device Platforms</label><input id="ae-device-platforms" class="form-input" value="${escapeHtml((t.device_platforms || []).join(', '))}" placeholder="mobile, desktop" /></div>
+      <div class="text-muted" style="font-size:0.78rem;">Leave platforms empty to let Meta use automatic placements / Advantage+ where supported.</div>
+    </div>
+
+    <div data-entity-section="conversion" style="display:${adsetDrawerSection === 'conversion' ? 'block' : 'none'};">
+      <div class="form-group"><label class="form-label">Pixel / Dataset</label><select id="ae-pixel" class="form-select"><option value="">Select pixel</option>${pixels.map(p => `<option value="${p.id}" ${String(po.pixel_id || '') === String(p.id) ? 'selected' : ''}>${p.name} (${p.id})</option>`).join('')}</select></div>
+      <div class="form-group"><label class="form-label">Custom Event Type</label><select id="ae-event" class="form-select">${['INITIATE_CHECKOUT','PURCHASE','LEAD','COMPLETE_REGISTRATION','ADD_TO_CART','SEARCH','VIEW_CONTENT'].map(v => `<option value="${v}" ${po.custom_event_type === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+    </div>
+
+    <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px;">
+      <button class="btn btn-primary" onclick="saveAdSetEditor('${entity.id}')">Publish</button>
+      <button class="btn" onclick="adsetDuplicate('${entity.id}')">Duplicate</button>
+      <button class="btn" onclick="renderAdSetEditor(${safeJson(entity)}, ${safeJson(pixels)})">Revert</button>
+      <button class="btn" onclick="closeDrawer()">Close</button>
+    </div>
+  `);
 }
-async function resumeAdSet(metaId, name) {
-  if (!confirmAction(`Resume "${name}"?`)) return;
-  try { await apiPost('/actions/resume', { accountId: ACCOUNT_ID, entityType: 'adset', metaEntityId: metaId }); toast(`Resumed: ${name}`, 'success'); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+
+function switchAdsetDrawerSection(section) {
+  adsetDrawerSection = section;
+  document.querySelectorAll('[data-entity-section]').forEach(el => { el.style.display = el.getAttribute('data-entity-section') === section ? 'block' : 'none'; });
+  document.querySelectorAll('.entity-section-tab').forEach(el => el.classList.toggle('active', el.dataset.section === section));
 }
+
+async function saveAdSetEditor(adsetId) {
+  const genderValue = document.getElementById('ae-gender').value;
+  const payload = {
+    accountId: ACCOUNT_ID,
+    name: document.getElementById('ae-name').value,
+    status: document.getElementById('ae-status').value,
+    daily_budget: blankToUndefined(document.getElementById('ae-daily-budget').value),
+    lifetime_budget: blankToUndefined(document.getElementById('ae-lifetime-budget').value),
+    bid_strategy: document.getElementById('ae-bid-strategy').value,
+    bid_amount: blankToUndefined(document.getElementById('ae-bid-amount').value),
+    optimization_goal: document.getElementById('ae-optimization-goal').value,
+    billing_event: document.getElementById('ae-billing-event').value,
+    start_time: localDateTimeToIso(document.getElementById('ae-start-time').value),
+    end_time: localDateTimeToIso(document.getElementById('ae-end-time').value),
+    attribution_spec: [{ event_type: `${document.getElementById('ae-attribution').value}d_click` }],
+    promoted_object: {
+      pixel_id: document.getElementById('ae-pixel').value || undefined,
+      custom_event_type: document.getElementById('ae-event').value,
+    },
+    targeting: {
+      age_min: parseInt(document.getElementById('ae-age-min').value) || 18,
+      age_max: parseInt(document.getElementById('ae-age-max').value) || 65,
+      genders: genderValue === 'all' ? [] : [parseInt(genderValue)],
+      locales: csvNumbers(document.getElementById('ae-locales').value),
+      geo_locations: { countries: csvStrings(document.getElementById('ae-geo-countries').value) },
+      excluded_geo_locations: { countries: csvStrings(document.getElementById('ae-geo-excluded').value) },
+      interests: parseJsonArray(document.getElementById('ae-interests').value),
+      custom_audiences: csvStrings(document.getElementById('ae-custom-audiences').value),
+      excluded_custom_audiences: csvStrings(document.getElementById('ae-excluded-audiences').value),
+      publisher_platforms: csvStrings(document.getElementById('ae-platforms').value),
+      facebook_positions: csvStrings(document.getElementById('ae-fb-pos').value),
+      instagram_positions: csvStrings(document.getElementById('ae-ig-pos').value),
+      device_platforms: csvStrings(document.getElementById('ae-device-platforms').value),
+    },
+    internal_tags: tagsToArray(document.getElementById('ae-tags').value),
+  };
+  if (!payload.promoted_object.pixel_id) delete payload.promoted_object.pixel_id;
+  try {
+    await apiPost(`/meta/entity/adset/${adsetId}/update`, payload);
+    toast('Ad set updated', 'success');
+    closeDrawer();
+    navigateTo('adsets', pageState);
+  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+
+async function adsetStatusAction(adsetId, status) {
+  try { await apiPost(`/meta/entity/adset/${adsetId}/status`, { accountId: ACCOUNT_ID, status }); toast('Ad set status updated', 'success'); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+async function adsetDuplicate(adsetId) {
+  try { await apiPost(`/meta/entity/adset/${adsetId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Ad set duplicated', 'success'); closeDrawer(); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+
+function openCreateAdSet(campaignId) { navigateTo('adsets', { ...pageState, createAdSetCampaignId: campaignId }); toast('Use the existing create drawer if you still need it. Edit flow is now available for existing ad sets.', 'info'); }
+
+function csvStrings(value) { return (value || '').split(',').map(s => s.trim()).filter(Boolean); }
+function csvNumbers(value) { return csvStrings(value).map(v => parseInt(v, 10)).filter(Boolean); }
+function parseJsonArray(value) { try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch (e) { return []; } }
+function blankToUndefined(v) { return v === '' ? undefined : parseFloat(v); }
+function tagsToArray(v) { return (v || '').split(',').map(s => s.trim()).filter(Boolean); }
