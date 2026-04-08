@@ -75,13 +75,9 @@ function computeWarningLevel(snapshot) {
 
 function computeEstimatedRegainSeconds(snapshot) {
   let seconds = 0;
-  if (snapshot.ad_account_usage && typeof snapshot.ad_account_usage.reset_time_duration === 'number') {
-    seconds = Math.max(seconds, snapshot.ad_account_usage.reset_time_duration);
-  }
+  if (snapshot.ad_account_usage && typeof snapshot.ad_account_usage.reset_time_duration === 'number') seconds = Math.max(seconds, snapshot.ad_account_usage.reset_time_duration);
   for (const item of snapshot.business_use_case_usage || []) {
-    if (typeof item.estimated_time_to_regain_access === 'number') {
-      seconds = Math.max(seconds, item.estimated_time_to_regain_access * 60);
-    }
+    if (typeof item.estimated_time_to_regain_access === 'number') seconds = Math.max(seconds, item.estimated_time_to_regain_access * 60);
   }
   return seconds;
 }
@@ -91,7 +87,6 @@ function computeSafety(snapshot) {
   const adsInsights = getBucType(snapshot, 'ads_insights');
   const app = snapshot.app_usage || {};
   const adAcct = snapshot.ad_account_usage || {};
-
   const writePressure = Math.max(
     numberOrNull(adsManagement?.call_count) || 0,
     numberOrNull(adsManagement?.total_cputime) || 0,
@@ -100,7 +95,6 @@ function computeSafety(snapshot) {
     numberOrNull(app.total_cputime) || 0,
     numberOrNull(app.total_time) || 0
   );
-
   const readPressure = Math.max(
     numberOrNull(adsInsights?.call_count) || 0,
     numberOrNull(adsInsights?.total_cputime) || 0,
@@ -109,23 +103,15 @@ function computeSafety(snapshot) {
     numberOrNull(app.total_cputime) || 0,
     numberOrNull(app.total_time) || 0
   );
-
-  return {
-    safe_to_write: writePressure < 85,
-    safe_to_read: readPressure < 90,
-  };
+  return { safe_to_write: writePressure < 85, safe_to_read: readPressure < 90 };
 }
 
 function recordHeaders(headers, context = {}) {
   if (!headers) return getSummary();
-
   const appUsage = parseJsonHeader(headers.get ? headers.get('x-app-usage') : null);
   const adAccountUsage = parseJsonHeader(headers.get ? headers.get('x-ad-account-usage') : null);
   const bucUsage = normalizeBucUsage(parseJsonHeader(headers.get ? headers.get('x-business-use-case-usage') : null));
-
-  if (!appUsage && !adAccountUsage && bucUsage.length === 0) {
-    return getSummary();
-  }
+  if (!appUsage && !adAccountUsage && bucUsage.length === 0) return getSummary();
 
   const next = {
     ...state.latest,
@@ -135,13 +121,11 @@ function recordHeaders(headers, context = {}) {
     ad_account_usage: adAccountUsage || state.latest.ad_account_usage,
     business_use_case_usage: bucUsage.length > 0 ? bucUsage : state.latest.business_use_case_usage,
   };
-
   next.estimated_regain_seconds = computeEstimatedRegainSeconds(next);
   next.warning_level = computeWarningLevel(next);
   const safety = computeSafety(next);
   next.safe_to_write = safety.safe_to_write;
   next.safe_to_read = safety.safe_to_read;
-
   state.latest = next;
   return getSummary();
 }
@@ -160,30 +144,29 @@ function recordError(error) {
   return getSummary();
 }
 
-async function fetchLiveStatus() {
+function ageSeconds(snapshot) {
+  if (!snapshot.last_seen_at) return Infinity;
+  return Math.max(0, (Date.now() - new Date(snapshot.last_seen_at).getTime()) / 1000);
+}
+
+async function fetchLiveStatus(force = false) {
+  const current = getSummary();
+  if (!force && ageSeconds(current) < 15) return current;
+
   if (!config.meta.accessToken || !config.meta.adAccountId) {
-    state.latest = {
-      ...state.latest,
-      warning_level: 'unknown',
-      safe_to_write: false,
-      safe_to_read: false,
-    };
+    state.latest = { ...state.latest, warning_level: 'unknown', safe_to_write: false, safe_to_read: false };
     return getSummary();
   }
 
   const url = new URL(`${config.meta.baseUrl()}/${config.meta.adAccountId}`);
   url.searchParams.set('fields', 'id');
-  const tokenKey = 'access' + '_token';
-  url.searchParams.set(tokenKey, config.meta.accessToken);
+  url.searchParams.set('access_token', config.meta.accessToken);
 
   const res = await fetch(url.toString());
   recordHeaders(res.headers, { source: 'meta_live_probe' });
 
   let payload = {};
-  try {
-    payload = await res.json();
-  } catch (err) {}
-
+  try { payload = await res.json(); } catch (err) {}
   if (payload && payload.error) {
     const error = new Error(payload.error.message || 'Meta probe failed');
     error.code = payload.error.code;
@@ -192,7 +175,6 @@ async function fetchLiveStatus() {
     recordError(error);
     throw error;
   }
-
   return getSummary();
 }
 
@@ -212,6 +194,7 @@ function getSummary() {
       reset_time_duration: snapshot.ad_account_usage?.reset_time_duration ?? null,
       ads_api_access_tier: snapshot.ad_account_usage?.ads_api_access_tier || adsManagement?.ads_api_access_tier || adsInsights?.ads_api_access_tier || null,
     },
+    from_live_headers: Boolean(snapshot.last_seen_at),
   };
 }
 

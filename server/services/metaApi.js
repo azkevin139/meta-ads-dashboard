@@ -1,53 +1,46 @@
 const fetch = require('node-fetch');
 const config = require('../config');
+const metaUsage = require('./metaUsageService');
 
 const BASE = config.meta.baseUrl();
 const TOKEN = config.meta.accessToken;
 
-// Generic Meta API GET
-async function metaGet(endpoint, params = {}) {
-  const url = new URL(`${BASE}${endpoint}`);
-  url.searchParams.set('access_token', TOKEN);
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, v);
-  }
-
-  const res = await fetch(url.toString());
+async function parseResponse(res, context) {
+  metaUsage.recordHeaders(res.headers, context);
   const data = await res.json();
 
   if (data.error) {
     const err = new Error(data.error.message);
     err.code = data.error.code;
     err.type = data.error.type;
+    err.error_subcode = data.error.error_subcode || null;
+    metaUsage.recordError(err);
     throw err;
   }
 
   return data;
 }
 
-// Generic Meta API POST
+async function metaGet(endpoint, params = {}) {
+  const url = new URL(`${BASE}${endpoint}`);
+  url.searchParams.set('access_token', TOKEN);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, v);
+  }
+
+  const res = await fetch(url.toString());
+  return parseResponse(res, { source: 'meta_get', method: 'GET', endpoint });
+}
+
 async function metaPost(endpoint, body = {}) {
   const url = `${BASE}${endpoint}`;
-
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ access_token: TOKEN, ...body }),
   });
-
-  const data = await res.json();
-
-  if (data.error) {
-    const err = new Error(data.error.message);
-    err.code = data.error.code;
-    err.type = data.error.type;
-    throw err;
-  }
-
-  return data;
+  return parseResponse(res, { source: 'meta_post', method: 'POST', endpoint });
 }
-
-// ─── READ METHODS ─────────────────────────────────────────
 
 async function getAdAccounts() {
   const data = await metaGet('/me/adaccounts', {
@@ -93,72 +86,47 @@ async function getInsights(entityId, params = {}) {
   return data.data || [];
 }
 
-// Get insights with date range
 async function getInsightsRange(entityId, since, until, level = 'campaign') {
   return getInsights(entityId, {
     time_range: JSON.stringify({ since, until }),
     level,
-    time_increment: 1,  // daily breakdown
+    time_increment: 1,
   });
 }
 
-// ─── WRITE METHODS ─────────────────────────────────────────
-
 async function updateStatus(entityId, status) {
-  // status: 'ACTIVE' or 'PAUSED'
   return metaPost(`/${entityId}`, { status });
 }
 
 async function updateBudget(adSetId, dailyBudget) {
-  // dailyBudget in cents (Meta standard)
   return metaPost(`/${adSetId}`, { daily_budget: dailyBudget });
 }
 
 async function duplicateEntity(entityId, entityType) {
-  // entityType: 'campaign', 'adset', 'ad'
-  // Meta's copy API: POST /{entity-id}/copies
-  const statusField = entityType === 'campaign'
-    ? 'campaign_copy'
-    : entityType === 'adset'
-      ? 'adset_copy'
-      : 'ad_copy';
-
   return metaPost(`/${entityId}/copies`, {
-    // Deep copy by default
     deep_copy: true,
-    status_option: 'PAUSED',  // duplicate as paused
+    status_option: 'PAUSED',
   });
 }
 
-// ─── HELPERS ───────────────────────────────────────────────
-
-// Parse Meta's actions array into a flat object
-// e.g. [{action_type: "offsite_conversion.fb_pixel_lead", value: "5"}] → {lead: 5}
 function parseActions(actions) {
   if (!actions || !Array.isArray(actions)) return {};
-
   const result = {};
   for (const a of actions) {
     const type = a.action_type;
     const val = parseInt(a.value, 10) || 0;
-
-    // Map common action types to friendly names
     if (type.includes('lead')) result.leads = (result.leads || 0) + val;
     else if (type.includes('purchase')) result.purchases = (result.purchases || 0) + val;
     else if (type.includes('complete_registration')) result.registrations = (result.registrations || 0) + val;
     else if (type === 'link_click') result.link_clicks = (result.link_clicks || 0) + val;
     else if (type === 'landing_page_view') result.landing_page_views = (result.landing_page_views || 0) + val;
-
-    // Keep all under raw key too
     result[type] = val;
   }
   return result;
 }
 
-// Parse action_values for ROAS
 function parseActionValues(actionValues) {
   if (!actionValues || !Array.isArray(actionValues)) return 0;
-
   let total = 0;
   for (const a of actionValues) {
     if (a.action_type.includes('purchase') || a.action_type.includes('lead')) {
