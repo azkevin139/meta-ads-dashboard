@@ -20,6 +20,7 @@ const aiRoutes = require('./routes/ai');
 const intelligenceRoutes = require('./routes/intelligence');
 const actionsRoutes = require('./routes/actions');
 const logsRoutes = require('./routes/logs');
+const accountRoutes = require('./routes/accounts');
 
 const app = express();
 
@@ -56,7 +57,7 @@ if (readOnly) {
 app.use(['/api/meta/update-ad', '/api/meta/update-adset'], async (req, res, next) => {
   if (readOnly || req.method !== 'POST') return next();
   try {
-    const usage = await metaUsage.fetchLiveStatus();
+    const usage = await metaUsage.fetchLiveStatus(false, req.metaAccount);
     if (!usage.safe_to_write) {
       return res.status(429).json({ error: `Meta API write pressure is too high right now. Wait ${usage.estimated_regain_seconds || 0}s before trying again.` });
     }
@@ -69,6 +70,7 @@ app.use(['/api/meta/update-ad', '/api/meta/update-adset'], async (req, res, next
 const createRoutes = require('./routes/create');
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/accounts', accountRoutes);
 app.use('/api/meta', metaRateRoutes);
 app.use('/api/meta', metaEntityRoutes);
 app.use('/api/meta', metaRoutes);

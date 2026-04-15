@@ -30,7 +30,7 @@ router.get('/recommendations', async (req, res) => {
 router.post('/run', async (req, res) => {
   try {
     const accountId = parseInt(req.query.accountId || req.body.accountId, 10) || 1;
-    const result = await aiService.runAnalysis(accountId);
+    const result = await aiService.runAnalysis(accountId, req.metaAccount);
     res.json({ data: result });
   } catch (err) {
     sendError(res, err);

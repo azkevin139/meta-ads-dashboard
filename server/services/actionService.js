@@ -12,7 +12,7 @@ async function logAction(accountId, entityType, entityId, entityName, action, de
 
 // ─── PAUSE ────────────────────────────────────────────────
 
-async function pauseEntity(accountId, entityType, metaEntityId) {
+async function pauseEntity(accountId, entityType, metaEntityId, context = {}) {
   // Get entity name for logging
   const table = entityType === 'campaign' ? 'campaigns'
     : entityType === 'adset' ? 'adsets' : 'ads';
@@ -23,7 +23,7 @@ async function pauseEntity(accountId, entityType, metaEntityId) {
   if (!entity) throw new Error(`${entityType} not found: ${metaEntityId}`);
 
   // Call Meta API
-  const result = await metaApi.updateStatus(metaEntityId, 'PAUSED');
+  const result = await metaApi.updateStatus(metaEntityId, 'PAUSED', context);
 
   // Update local DB
   await query(`UPDATE ${table} SET status = 'PAUSED', updated_at = NOW() WHERE ${idCol} = $1`, [metaEntityId]);
@@ -39,7 +39,7 @@ async function pauseEntity(accountId, entityType, metaEntityId) {
 
 // ─── RESUME ───────────────────────────────────────────────
 
-async function resumeEntity(accountId, entityType, metaEntityId) {
+async function resumeEntity(accountId, entityType, metaEntityId, context = {}) {
   const table = entityType === 'campaign' ? 'campaigns'
     : entityType === 'adset' ? 'adsets' : 'ads';
   const idCol = entityType === 'campaign' ? 'meta_campaign_id'
@@ -48,7 +48,7 @@ async function resumeEntity(accountId, entityType, metaEntityId) {
   const entity = await queryOne(`SELECT id, name, status FROM ${table} WHERE ${idCol} = $1`, [metaEntityId]);
   if (!entity) throw new Error(`${entityType} not found: ${metaEntityId}`);
 
-  const result = await metaApi.updateStatus(metaEntityId, 'ACTIVE');
+  const result = await metaApi.updateStatus(metaEntityId, 'ACTIVE', context);
 
   await query(`UPDATE ${table} SET status = 'ACTIVE', updated_at = NOW() WHERE ${idCol} = $1`, [metaEntityId]);
 
@@ -62,13 +62,13 @@ async function resumeEntity(accountId, entityType, metaEntityId) {
 
 // ─── UPDATE BUDGET ────────────────────────────────────────
 
-async function updateBudget(accountId, metaAdSetId, newBudget) {
+async function updateBudget(accountId, metaAdSetId, newBudget, context = {}) {
   const adset = await queryOne('SELECT id, name, daily_budget FROM adsets WHERE meta_adset_id = $1', [metaAdSetId]);
   if (!adset) throw new Error(`Ad set not found: ${metaAdSetId}`);
 
   // Meta expects budget in cents
   const budgetCents = Math.round(newBudget * 100);
-  const result = await metaApi.updateBudget(metaAdSetId, budgetCents);
+  const result = await metaApi.updateBudget(metaAdSetId, budgetCents, context);
 
   await query('UPDATE adsets SET daily_budget = $1, updated_at = NOW() WHERE meta_adset_id = $2', [budgetCents, metaAdSetId]);
 
@@ -83,7 +83,7 @@ async function updateBudget(accountId, metaAdSetId, newBudget) {
 
 // ─── DUPLICATE ────────────────────────────────────────────
 
-async function duplicateEntity(accountId, entityType, metaEntityId) {
+async function duplicateEntity(accountId, entityType, metaEntityId, context = {}) {
   const table = entityType === 'campaign' ? 'campaigns'
     : entityType === 'adset' ? 'adsets' : 'ads';
   const idCol = entityType === 'campaign' ? 'meta_campaign_id'
@@ -92,7 +92,7 @@ async function duplicateEntity(accountId, entityType, metaEntityId) {
   const entity = await queryOne(`SELECT id, name FROM ${table} WHERE ${idCol} = $1`, [metaEntityId]);
   if (!entity) throw new Error(`${entityType} not found: ${metaEntityId}`);
 
-  const result = await metaApi.duplicateEntity(metaEntityId, entityType);
+  const result = await metaApi.duplicateEntity(metaEntityId, entityType, context);
 
   await logAction(accountId, entityType, metaEntityId, entity.name, 'duplicate', {
     source_id: metaEntityId,

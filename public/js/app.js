@@ -10,6 +10,10 @@ const META_COOLDOWN_KEY = 'meta_cooldown_until';
 const META_COOLDOWN_MESSAGE_KEY = 'meta_cooldown_message';
 let metaCooldownTimer = null;
 
+function escapeHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ─── AUTH STATE ───────────────────────────────────────────
 
 let authToken = localStorage.getItem('auth_token') || null;
@@ -274,12 +278,54 @@ const PAGES = {
 
 async function hydrateAccountContext() {
   try {
-    accountContext = await apiGet('/intelligence/account-context');
-    const id = accountContext.internal_account?.id || 1;
+    accountContext = await apiGet('/accounts');
+    const id = accountContext.active?.id || 1;
     ACCOUNT_ID = parseInt(id, 10) || 1;
     localStorage.setItem('account_id', String(ACCOUNT_ID));
+    renderAccountSwitcher();
   } catch (e) {
     accountContext = null;
+    renderAccountSwitcher();
+  }
+}
+
+function renderAccountSwitcher() {
+  const actions = document.querySelector('.page-actions');
+  if (!actions) return;
+  let wrap = document.getElementById('account-switcher-wrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'account-switcher-wrap';
+    actions.insertBefore(wrap, actions.firstChild);
+  }
+  const accounts = accountContext?.data || [];
+  const active = accountContext?.active || null;
+  if (!accounts.length) {
+    wrap.innerHTML = active ? `<span class="account-chip">${escapeHtml(active.label || active.name || active.meta_account_id || 'Meta account')}</span>` : '';
+    return;
+  }
+  wrap.innerHTML = `
+    <select id="account-switcher" class="form-select account-switcher" onchange="switchActiveAccount(this.value)">
+      ${accounts.map(a => `<option value="${a.id}" ${String(a.id) === String(active?.id) ? 'selected' : ''}>${escapeHtml(a.label || a.name || a.meta_account_id)}</option>`).join('')}
+    </select>
+  `;
+}
+
+async function switchActiveAccount(accountId) {
+  const id = parseInt(accountId, 10);
+  if (!id || id === ACCOUNT_ID) return;
+  try {
+    const res = await apiPost('/accounts/active', { accountId: id });
+    ACCOUNT_ID = id;
+    localStorage.setItem('account_id', String(ACCOUNT_ID));
+    accountContext = { ...(accountContext || {}), active: res.data };
+    toast(`Switched to ${res.data?.label || res.data?.name || 'Meta account'}`, 'success');
+    pageState = {};
+    navigateTo(currentPage);
+    await updateAIBadge();
+  } catch (err) {
+    toast(`Account switch failed: ${err.message}`, 'error');
+    renderAccountSwitcher();
   }
 }
 

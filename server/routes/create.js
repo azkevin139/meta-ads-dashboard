@@ -2,7 +2,6 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
-const config = require('../config');
 const metaUsage = require('../services/metaUsageService');
 const { logAction } = require('../services/actionService');
 
@@ -16,8 +15,8 @@ function adminOrOperator(req, res, next) {
 
 router.use(adminOrOperator);
 
-async function ensureSafeWrite(res) {
-  const usage = await metaUsage.fetchLiveStatus();
+async function ensureSafeWrite(req, res) {
+  const usage = await metaUsage.fetchLiveStatus(false, req.metaAccount);
   if (!usage.safe_to_write) {
     res.status(429).json({ error: `Meta API write pressure is too high right now. Wait ${usage.estimated_regain_seconds || 0}s before trying again.` });
     return false;
@@ -31,7 +30,7 @@ async function ensureSafeWrite(res) {
 // Body: { entityIds: [...], entityType: 'campaign'|'adset'|'ad', action: 'pause'|'resume' }
 router.post('/bulk-action', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(res))) return;
+    if (!(await ensureSafeWrite(req, res))) return;
     const { entityIds, entityType, action } = req.body;
     if (!entityIds || !Array.isArray(entityIds) || entityIds.length === 0) {
       return res.status(400).json({ error: 'entityIds array required' });
@@ -48,7 +47,7 @@ router.post('/bulk-action', async (req, res) => {
 
     for (const id of entityIds) {
       try {
-        await metaApi.metaPost(`/${id}`, { status });
+        await metaApi.metaPost(`/${id}`, { status }, req.metaAccount);
         await logAction(req.body.accountId || 1, entityType, id, id, action, {
           new_status: status,
           bulk: true,
@@ -78,7 +77,7 @@ router.post('/bulk-action', async (req, res) => {
 // POST /api/create/campaign
 router.post('/campaign', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(res))) return;
+    if (!(await ensureSafeWrite(req, res))) return;
     const {
       name,
       objective,       // OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_ENGAGEMENT, OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_APP_PROMOTION
@@ -105,7 +104,7 @@ router.post('/campaign', async (req, res) => {
     if (dailyBudget) payload.daily_budget = Math.round(dailyBudget * 100);
     if (lifetimeBudget) payload.lifetime_budget = Math.round(lifetimeBudget * 100);
 
-    const result = await metaApi.metaPost(`/${config.meta.adAccountId}/campaigns`, payload);
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/campaigns`, payload, req.metaAccount);
     await logAction(req.body.accountId || 1, 'campaign', result.id, name, 'create', {
       payload,
       performed_by: req.user?.email || req.user?.name || null,
@@ -121,7 +120,7 @@ router.post('/campaign', async (req, res) => {
 // POST /api/create/adset
 router.post('/adset', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(res))) return;
+    if (!(await ensureSafeWrite(req, res))) return;
     const {
       name,
       campaignId,
@@ -214,7 +213,7 @@ router.post('/adset', async (req, res) => {
       };
     }
 
-    const result = await metaApi.metaPost(`/${config.meta.adAccountId}/adsets`, payload);
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adsets`, payload, req.metaAccount);
     await logAction(req.body.accountId || 1, 'adset', result.id, name, 'create', {
       payload,
       performed_by: req.user?.email || req.user?.name || null,
@@ -230,7 +229,7 @@ router.post('/adset', async (req, res) => {
 // POST /api/create/ad
 router.post('/ad', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(res))) return;
+    if (!(await ensureSafeWrite(req, res))) return;
     const {
       name,
       adsetId,
@@ -297,7 +296,7 @@ router.post('/ad', async (req, res) => {
         });
       }
 
-      const creativeResult = await metaApi.metaPost(`/${config.meta.adAccountId}/adcreatives`, creativePayload);
+      const creativeResult = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adcreatives`, creativePayload, req.metaAccount);
       creative_id = creativeResult.id;
     }
 
@@ -309,7 +308,7 @@ router.post('/ad', async (req, res) => {
       creative: JSON.stringify({ creative_id }),
     };
 
-    const result = await metaApi.metaPost(`/${config.meta.adAccountId}/ads`, adPayload);
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/ads`, adPayload, req.metaAccount);
     await logAction(req.body.accountId || 1, 'ad', result.id, name, 'create', {
       adset_id: adsetId,
       creative_id,
@@ -326,10 +325,10 @@ router.post('/ad', async (req, res) => {
 
 router.get('/pixels', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(res))) return;
-    const data = await metaApi.metaGet(`/${config.meta.adAccountId}/adspixels`, {
+    if (!(await ensureSafeWrite(req, res))) return;
+    const data = await metaApi.metaGet(`/${metaApi.contextAccountId(req.metaAccount)}/adspixels`, {
       fields: 'id,name,is_unavailable',
-    });
+    }, req.metaAccount);
     res.json({ data: data.data || [] });
   } catch (err) {
     sendError(res, err);
@@ -343,7 +342,7 @@ router.get('/pages', async (req, res) => {
     const data = await metaApi.metaGet('/me/accounts', {
       fields: 'id,name,access_token',
       limit: '50',
-    });
+    }, req.metaAccount);
     res.json({ data: data.data || [] });
   } catch (err) {
     sendError(res, err);
@@ -357,9 +356,9 @@ router.post('/upload-image', async (req, res) => {
     const { imageUrl } = req.body;
     if (!imageUrl) return res.status(400).json({ error: 'imageUrl required' });
 
-    const result = await metaApi.metaPost(`/${config.meta.adAccountId}/adimages`, {
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adimages`, {
       url: imageUrl,
-    });
+    }, req.metaAccount);
 
     // Meta returns { images: { hash: { hash, url } } }
     const images = result.images || {};

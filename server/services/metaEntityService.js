@@ -101,9 +101,9 @@ function normalizeEntity(level, data) {
   };
 }
 
-async function getEntity(level, id) {
+async function getEntity(level, id, context = {}) {
   const cfg = assertLevel(level);
-  const data = await metaApi.metaGet(`/${id}`, { fields: cfg.readFields.join(',') });
+  const data = await metaApi.metaGet(`/${id}`, { fields: cfg.readFields.join(',') }, context);
   return normalizeEntity(level, data);
 }
 
@@ -151,9 +151,9 @@ function buildAdsetUpdatePayload(input = {}, currentTargeting = {}) {
   return payload;
 }
 
-async function updateEntity(accountId, level, id, rawInput = {}, performedBy = null) {
+async function updateEntity(accountId, level, id, rawInput = {}, performedBy = null, context = {}) {
   assertLevel(level);
-  const before = await getEntity(level, id);
+  const before = await getEntity(level, id, context);
   let payload;
 
   if (level === 'campaign') {
@@ -164,8 +164,8 @@ async function updateEntity(accountId, level, id, rawInput = {}, performedBy = n
 
   if (!Object.keys(payload).length) throw new Error('No editable fields provided');
 
-  await metaApi.metaPost(`/${id}`, payload);
-  const after = await getEntity(level, id);
+  await metaApi.metaPost(`/${id}`, payload, context);
+  const after = await getEntity(level, id, context);
 
   await logAction(accountId || 1, level, id, after.name || before.name || id, 'entity_update', {
     changed_fields: Object.keys(payload),
@@ -178,10 +178,10 @@ async function updateEntity(accountId, level, id, rawInput = {}, performedBy = n
   return { success: true, level, id, before, after };
 }
 
-async function updateEntityStatus(accountId, level, id, status, performedBy = null) {
-  const before = await getEntity(level, id);
-  await metaApi.updateStatus(id, status);
-  const after = await getEntity(level, id);
+async function updateEntityStatus(accountId, level, id, status, performedBy = null, context = {}) {
+  const before = await getEntity(level, id, context);
+  await metaApi.updateStatus(id, status, context);
+  const after = await getEntity(level, id, context);
   await logAction(accountId || 1, level, id, after.name || before.name || id, 'status_change', {
     previous_status: before.status,
     new_status: status,
@@ -190,9 +190,9 @@ async function updateEntityStatus(accountId, level, id, status, performedBy = nu
   return { success: true, level, id, before, after };
 }
 
-async function duplicateEntity(accountId, level, id, performedBy = null) {
-  const before = await getEntity(level, id);
-  const result = await metaApi.duplicateEntity(id, level);
+async function duplicateEntity(accountId, level, id, performedBy = null, context = {}) {
+  const before = await getEntity(level, id, context);
+  const result = await metaApi.duplicateEntity(id, level, context);
   await logAction(accountId || 1, level, id, before.name || id, 'duplicate', {
     source_id: id,
     result,

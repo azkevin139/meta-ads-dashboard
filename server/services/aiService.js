@@ -39,7 +39,7 @@ Output schema:
 
 // ─── BUILD CONTEXT FOR AI ─────────────────────────────────
 
-async function buildAnalysisContext(accountId) {
+async function buildAnalysisContext(accountId, metaContext = {}) {
   // Get account info
   const account = await queryOne('SELECT * FROM accounts WHERE id = $1', [accountId]);
   if (!account) throw new Error('Account not found');
@@ -151,7 +151,7 @@ async function buildAnalysisContext(accountId) {
 
   let liveDecisionContext = null;
   try {
-    const rules = await intelligence.getDecisionRules({ preset: 'yesterday' });
+    const rules = await intelligence.getDecisionRules({ preset: 'yesterday' }, metaContext);
     liveDecisionContext = {
       targets: intelligence.readTargets(),
       queues: Object.fromEntries(Object.entries(rules.queues || {}).map(([key, value]) => [key, value.length])),
@@ -212,8 +212,8 @@ async function callOpenAI(context) {
 
 // ─── RUN ANALYSIS + SAVE ─────────────────────────────────
 
-async function runAnalysis(accountId) {
-  const context = await buildAnalysisContext(accountId);
+async function runAnalysis(accountId, metaContext = {}) {
+  const context = await buildAnalysisContext(accountId, metaContext);
 
   if (context.entities.length === 0) {
     return { recommendations: [], summary: 'No campaign data for yesterday.' };

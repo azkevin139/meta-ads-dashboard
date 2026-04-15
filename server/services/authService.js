@@ -104,7 +104,7 @@ async function getUserFromToken(token) {
   // 2. Verify session still exists in DB (real logout)
   const tokenHash = hashSessionToken(token);
   const session = await queryOne(
-    'SELECT id, user_id, expires_at FROM user_sessions WHERE token = $1 AND expires_at > NOW()',
+    'SELECT id, user_id, expires_at, active_account_id FROM user_sessions WHERE token = $1 AND expires_at > NOW()',
     [tokenHash]
   );
   if (!session) return null;
@@ -116,7 +116,7 @@ async function getUserFromToken(token) {
   );
   if (!user || !user.is_active) return null;
 
-  return user;
+  return { ...user, session_id: session.id, session_token_hash: tokenHash, active_account_id: session.active_account_id || null };
 }
 
 // ─── ADMIN OPERATIONS ─────────────────────────────────────
@@ -169,4 +169,5 @@ module.exports = {
   register, login, logout, getUserFromToken,
   getAllUsers, getActiveSessions, updateUser, deleteUser, cleanExpiredSessions,
   verifyToken, createToken,
+  hashSessionToken,
 };

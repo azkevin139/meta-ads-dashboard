@@ -2,7 +2,6 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
-const config = require('../config');
 
 function withMetaMeta(data) {
   const paging = data && data._paging ? data._paging : null;
@@ -20,7 +19,7 @@ function adminOrOperator(req, res, next) {
 // GET /api/meta/accounts
 router.get('/accounts', async (req, res) => {
   try {
-    const accounts = await metaApi.getAdAccounts();
+    const accounts = await metaApi.getAdAccounts(req.metaAccount);
     res.json(withMetaMeta(accounts));
   } catch (err) {
     sendError(res, err);
@@ -30,8 +29,8 @@ router.get('/accounts', async (req, res) => {
 // GET /api/meta/campaigns?accountId=act_XXX
 router.get('/campaigns', async (req, res) => {
   try {
-    const accountId = req.query.accountId || config.meta.adAccountId;
-    const campaigns = await metaApi.getCampaigns(accountId);
+    const accountId = req.query.accountId || metaApi.contextAccountId(req.metaAccount);
+    const campaigns = await metaApi.getCampaigns(accountId, req.metaAccount);
     res.json(withMetaMeta(campaigns));
   } catch (err) {
     sendError(res, err);
@@ -43,7 +42,7 @@ router.get('/adsets', async (req, res) => {
   try {
     const { campaignId } = req.query;
     if (!campaignId) return res.status(400).json({ error: 'campaignId required' });
-    const adsets = await metaApi.getAdSets(campaignId);
+    const adsets = await metaApi.getAdSets(campaignId, req.metaAccount);
     res.json(withMetaMeta(adsets));
   } catch (err) {
     sendError(res, err);
@@ -55,7 +54,7 @@ router.get('/ads', async (req, res) => {
   try {
     const { adSetId } = req.query;
     if (!adSetId) return res.status(400).json({ error: 'adSetId required' });
-    const ads = await metaApi.getAds(adSetId);
+    const ads = await metaApi.getAds(adSetId, req.metaAccount);
     res.json(withMetaMeta(ads));
   } catch (err) {
     sendError(res, err);
@@ -70,12 +69,12 @@ router.get('/insights', async (req, res) => {
 
     let insights;
     if (since && until) {
-      insights = await metaApi.getInsightsRange(entityId, since, until, level || 'campaign');
+      insights = await metaApi.getInsightsRange(entityId, since, until, level || 'campaign', req.metaAccount);
     } else {
       insights = await metaApi.getInsights(entityId, {
         date_preset: datePreset || 'yesterday',
         level: level || 'campaign',
-      });
+      }, req.metaAccount);
     }
     res.json(withMetaMeta(insights));
   } catch (err) {
@@ -92,7 +91,7 @@ router.get('/creative-thumbnail', async (req, res) => {
     // Fetch the ad with creative details and preview
     const data = await metaApi.metaGet(`/${adId}`, {
       fields: 'creative{thumbnail_url,image_url,image_hash,object_story_spec,asset_feed_spec},preview_shareable_link',
-    });
+    }, req.metaAccount);
     
     const creative = data.creative || {};
     const storySpec = creative.object_story_spec || {};
@@ -136,7 +135,7 @@ router.get('/live', async (req, res) => {
       params.date_preset = 'today';
     }
 
-    const data = await metaApi.getInsights(config.meta.adAccountId, params);
+    const data = await metaApi.getInsights(metaApi.contextAccountId(req.metaAccount), params, req.metaAccount);
     res.json(withMetaMeta(data));
   } catch (err) {
     sendError(res, err);
@@ -147,11 +146,11 @@ router.get('/live', async (req, res) => {
 router.get('/today', async (req, res) => {
   try {
     const level = req.query.level || 'campaign';
-    const data = await metaApi.getInsights(config.meta.adAccountId, {
+    const data = await metaApi.getInsights(metaApi.contextAccountId(req.metaAccount), {
       date_preset: 'today',
       level: level,
       fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
-    });
+    }, req.metaAccount);
     res.json(withMetaMeta(data));
   } catch (err) {
     sendError(res, err);
@@ -165,7 +164,7 @@ router.get('/ad-detail', async (req, res) => {
     if (!adId) return res.status(400).json({ error: 'adId required' });
     const data = await metaApi.metaGet(`/${adId}`, {
       fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,link_url,image_url,thumbnail_url,object_story_spec,asset_feed_spec}',
-    });
+    }, req.metaAccount);
 
     const creative = data.creative || {};
     const storySpec = creative.object_story_spec || {};
@@ -201,7 +200,7 @@ router.post('/update-ad', adminOrOperator, async (req, res) => {
     // and then update the ad to use the new creative
     const adData = await metaApi.metaGet(`/${adId}`, {
       fields: 'creative{object_story_spec,asset_feed_spec}',
-    });
+    }, req.metaAccount);
     const oldCreative = adData.creative || {};
     const oldStorySpec = oldCreative.object_story_spec || {};
     const oldLinkData = oldStorySpec.link_data || {};
@@ -222,17 +221,17 @@ router.post('/update-ad', adminOrOperator, async (req, res) => {
     }
 
     // Create new creative
-    const newCreative = await metaApi.metaPost(`/${config.meta.adAccountId}/adcreatives`, {
+    const newCreative = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adcreatives`, {
       object_story_spec: {
         page_id: pageId,
         link_data: newLinkData,
       },
-    });
+    }, req.metaAccount);
 
     // Update ad to use new creative
     await metaApi.metaPost(`/${adId}`, {
       creative: { creative_id: newCreative.id },
-    });
+    }, req.metaAccount);
 
     res.json({ success: true, new_creative_id: newCreative.id });
   } catch (err) {
@@ -247,7 +246,7 @@ router.get('/adset-detail', async (req, res) => {
     if (!adsetId) return res.status(400).json({ error: 'adsetId required' });
     const data = await metaApi.metaGet(`/${adsetId}`, {
       fields: 'id,name,status,targeting,promoted_object,bid_strategy,optimization_goal,billing_event,daily_budget,lifetime_budget,start_time,end_time',
-    });
+    }, req.metaAccount);
 
     const targeting = data.targeting || {};
 
@@ -289,7 +288,7 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
     if (!adsetId) return res.status(400).json({ error: 'adsetId required' });
 
     // First get current targeting to merge
-    const current = await metaApi.metaGet(`/${adsetId}`, { fields: 'targeting' });
+    const current = await metaApi.metaGet(`/${adsetId}`, { fields: 'targeting' }, req.metaAccount);
     const currentTargeting = current.targeting || {};
 
     // Build update payload
@@ -312,7 +311,7 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
     if (bidStrategy) update.bid_strategy = bidStrategy;
     if (status) update.status = status;
 
-    const result = await metaApi.metaPost(`/${adsetId}`, update);
+    const result = await metaApi.metaPost(`/${adsetId}`, update, req.metaAccount);
     res.json({ success: true, result });
   } catch (err) {
     sendError(res, err);

@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const metaApi = require('./metaApi');
-const config = require('../config');
 const { queryOne } = require('../db');
+const accountService = require('./accountService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const TARGETS_FILE = path.join(DATA_DIR, 'targets.json');
@@ -161,19 +161,22 @@ function evaluateRow(row) {
   };
 }
 
-async function getAccountContext() {
-  const [dbAccount, metaAccounts] = await Promise.all([
-    queryOne('SELECT id, meta_account_id, name, currency, timezone FROM accounts WHERE is_active = true ORDER BY id LIMIT 1').catch(() => null),
-    metaApi.getAdAccounts().catch(() => []),
+async function getAccountContext(context = {}) {
+  const [accounts, dbAccount, metaAccounts] = await Promise.all([
+    accountService.listAccounts().catch(() => []),
+    context?.id ? queryOne('SELECT id, meta_account_id, name, label, currency, timezone FROM accounts WHERE id = $1', [context.id]).catch(() => null) : null,
+    metaApi.getAdAccounts(context).catch(() => []),
   ]);
+  const internalAccount = dbAccount || accountService.publicAccount(context);
   return {
-    internal_account: dbAccount || { id: 1, meta_account_id: config.meta.adAccountId, name: 'Meta account', currency: 'USD' },
+    internal_account: internalAccount,
+    accounts,
     meta_accounts: metaAccounts,
-    configured_meta_account_id: config.meta.adAccountId,
+    configured_meta_account_id: metaApi.contextAccountId(context),
   };
 }
 
-async function getDecisionRules({ since, until, preset } = {}) {
+async function getDecisionRules({ since, until, preset } = {}, context = {}) {
   const params = {
     level: 'campaign',
     fields: 'campaign_id,campaign_name,spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
@@ -181,7 +184,7 @@ async function getDecisionRules({ since, until, preset } = {}) {
   if (since && until) params.time_range = JSON.stringify({ since, until });
   else params.date_preset = preset || 'yesterday';
 
-  const rows = await metaApi.getInsights(config.meta.adAccountId, params);
+  const rows = await metaApi.getInsights(metaApi.contextAccountId(context), params, context);
   const data = rows.map(evaluateRow);
   const queues = {};
   for (const item of data) {
@@ -192,14 +195,14 @@ async function getDecisionRules({ since, until, preset } = {}) {
   return { data, queues, meta: { paging: rows._paging || null } };
 }
 
-async function getFunnel({ since, until, preset } = {}) {
+async function getFunnel({ since, until, preset } = {}, context = {}) {
   const params = {
     level: 'campaign',
     fields: 'campaign_id,campaign_name,spend,impressions,clicks,reach,actions,cost_per_action_type',
   };
   if (since && until) params.time_range = JSON.stringify({ since, until });
   else params.date_preset = preset || 'yesterday';
-  const rows = await metaApi.getInsights(config.meta.adAccountId, params);
+  const rows = await metaApi.getInsights(metaApi.contextAccountId(context), params, context);
   return rows.map(row => {
     const funnel = parseFunnel(row.actions);
     const spend = parseFloat(row.spend) || 0;
@@ -217,7 +220,7 @@ async function getFunnel({ since, until, preset } = {}) {
   });
 }
 
-async function getBreakdowns({ breakdown = 'publisher_platform', since, until, preset } = {}) {
+async function getBreakdowns({ breakdown = 'publisher_platform', since, until, preset } = {}, context = {}) {
   const allowed = new Set(['publisher_platform', 'platform_position', 'impression_device', 'age', 'gender', 'country', 'region']);
   const selected = allowed.has(breakdown) ? breakdown : 'publisher_platform';
   const params = {
@@ -227,7 +230,7 @@ async function getBreakdowns({ breakdown = 'publisher_platform', since, until, p
   };
   if (since && until) params.time_range = JSON.stringify({ since, until });
   else params.date_preset = preset || 'yesterday';
-  const rows = await metaApi.getInsights(config.meta.adAccountId, params);
+  const rows = await metaApi.getInsights(metaApi.contextAccountId(context), params, context);
   return rows.map(row => {
     const targets = targetForCampaign(row.campaign_id);
     const results = primaryResultFromActions(row.actions, targets.primary_event);
@@ -242,7 +245,7 @@ async function getBreakdowns({ breakdown = 'publisher_platform', since, until, p
   });
 }
 
-async function getCreativeLibrary({ since, until, preset } = {}) {
+async function getCreativeLibrary({ since, until, preset } = {}, context = {}) {
   const insightParams = {
     level: 'ad',
     fields: 'ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,clicks,ctr,cpm,cpc,frequency,actions',
@@ -250,7 +253,7 @@ async function getCreativeLibrary({ since, until, preset } = {}) {
   if (since && until) insightParams.time_range = JSON.stringify({ since, until });
   else insightParams.date_preset = preset || 'yesterday';
 
-  const insightRows = await metaApi.getInsights(config.meta.adAccountId, insightParams);
+  const insightRows = await metaApi.getInsights(metaApi.contextAccountId(context), insightParams, context);
   const insightsByAd = Object.fromEntries(insightRows.map(row => [row.ad_id, row]));
   const adIds = Object.keys(insightsByAd);
   const groups = {};
@@ -260,7 +263,7 @@ async function getCreativeLibrary({ since, until, preset } = {}) {
     try {
       ad = await metaApi.metaGet(`/${adId}`, {
         fields: 'id,name,creative{id,title,body,call_to_action_type,thumbnail_url,image_url,object_story_spec}',
-      });
+      }, context);
     } catch (err) {
       ad = { id: adId, name: insightsByAd[adId].ad_name, creative: {} };
     }

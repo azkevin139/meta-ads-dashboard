@@ -149,18 +149,32 @@ function ageSeconds(snapshot) {
   return Math.max(0, (Date.now() - new Date(snapshot.last_seen_at).getTime()) / 1000);
 }
 
-async function fetchLiveStatus(force = false) {
+function contextBase(context = {}) {
+  return `https://graph.facebook.com/${context.apiVersion || config.meta.apiVersion || 'v21.0'}`;
+}
+
+function contextToken(context = {}) {
+  return context.access_token || context.accessToken || config.meta.accessToken;
+}
+
+function contextAccountId(context = {}) {
+  return context.meta_account_id || context.adAccountId || config.meta.adAccountId;
+}
+
+async function fetchLiveStatus(force = false, context = {}) {
   const current = getSummary();
   if (!force && ageSeconds(current) < 15) return current;
 
-  if (!config.meta.accessToken || !config.meta.adAccountId) {
+  const token = contextToken(context);
+  const accountId = contextAccountId(context);
+  if (!token || !accountId) {
     state.latest = { ...state.latest, warning_level: 'unknown', safe_to_write: false, safe_to_read: false };
     return getSummary();
   }
 
-  const url = new URL(`${config.meta.baseUrl()}/${config.meta.adAccountId}`);
+  const url = new URL(`${contextBase(context)}/${accountId}`);
   url.searchParams.set('fields', 'id');
-  url.searchParams.set('access_token', config.meta.accessToken);
+  url.searchParams.set('access_token', token);
 
   const res = await fetch(url.toString());
   recordHeaders(res.headers, { source: 'meta_live_probe' });

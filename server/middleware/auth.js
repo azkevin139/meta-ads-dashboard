@@ -1,4 +1,5 @@
 const authService = require('../services/authService');
+const accountService = require('../services/accountService');
 
 async function authMiddleware(req, res, next) {
   // Skip auth for login/register/health only
@@ -19,6 +20,7 @@ async function authMiddleware(req, res, next) {
   }
 
   req.user = user;
+  req.metaAccount = await accountService.getActiveAccountForSession(user);
   next();
 }
 

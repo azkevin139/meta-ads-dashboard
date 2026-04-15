@@ -9,6 +9,13 @@ async function loadAdmin(container) {
   }
 
   container.innerHTML = `
+    <div class="table-container" style="margin-bottom: 20px;">
+      <div class="table-header">
+        <span class="table-title">Meta Accounts</span>
+        <button class="btn btn-sm btn-primary" onclick="openAddAccountDrawer()">+ Add Account</button>
+      </div>
+      <div id="admin-accounts"><div class="loading">Loading accounts</div></div>
+    </div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;" class="admin-grid">
       <div class="table-container">
         <div class="table-header">
@@ -26,7 +33,128 @@ async function loadAdmin(container) {
     </div>
   `;
 
-  await Promise.all([loadAdminUsers(), loadAdminSessions()]);
+  await Promise.all([loadAdminAccounts(), loadAdminUsers(), loadAdminSessions()]);
+}
+
+async function loadAdminAccounts() {
+  try {
+    const res = await apiGet('/accounts');
+    const accounts = res.data || [];
+    const activeId = res.active?.id;
+
+    document.getElementById('admin-accounts').innerHTML = accounts.length === 0
+      ? '<div class="empty-state"><div class="empty-state-text">No saved Meta accounts yet</div></div>'
+      : `<table>
+          <thead><tr>
+            <th>Account</th>
+            <th>Meta ID</th>
+            <th>Currency</th>
+            <th>Token</th>
+            <th>Default</th>
+            <th>Session</th>
+            <th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${accounts.map(a => `
+              <tr>
+                <td>
+                  <div style="font-weight: 500; font-size: 0.85rem;">${escapeHtml(a.label || a.name || 'Meta account')}</div>
+                  <div class="text-muted" style="font-size: 0.72rem;">${escapeHtml(a.name || '')}</div>
+                </td>
+                <td class="mono" style="font-size: 0.75rem;">${escapeHtml(a.meta_account_id)}</td>
+                <td>${escapeHtml(a.currency || 'USD')}</td>
+                <td class="mono" style="font-size: 0.75rem;">${a.token_last4 ? `...${escapeHtml(a.token_last4)}` : 'stored'}</td>
+                <td>${a.is_active ? '<span class="text-green">Default</span>' : '<span class="text-muted">—</span>'}</td>
+                <td>${String(a.id) === String(activeId) ? '<span class="text-green">Selected</span>' : '<span class="text-muted">—</span>'}</td>
+                <td>
+                  <div class="btn-group">
+                    <button class="btn btn-sm" onclick="setSessionAccount(${a.id})">Use</button>
+                    ${a.is_active ? '' : `<button class="btn btn-sm" onclick="setDefaultAccount(${a.id})">Default</button>`}
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  } catch (err) {
+    document.getElementById('admin-accounts').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+  }
+}
+
+function openAddAccountDrawer() {
+  openDrawer('Add Meta Account', `
+    <div class="form-group">
+      <label class="form-label">Label</label>
+      <input id="new-account-label" class="form-input" type="text" placeholder="Sports Betting CA" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Meta Ad Account ID</label>
+      <input id="new-account-id" class="form-input" type="text" placeholder="act_123456789" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Meta User Token</label>
+      <textarea id="new-account-token" class="form-textarea" rows="4" placeholder="Paste token"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Currency</label>
+        <input id="new-account-currency" class="form-input" type="text" value="USD" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Timezone</label>
+        <input id="new-account-timezone" class="form-input" type="text" value="UTC" />
+      </div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; margin-top:6px;">
+      <input id="new-account-default" type="checkbox" />
+      Make default account
+    </label>
+    <div style="display: flex; gap: 8px; margin-top: 16px;">
+      <button class="btn btn-primary" onclick="addMetaAccount()">Save Account</button>
+      <button class="btn" onclick="closeDrawer()">Cancel</button>
+    </div>
+  `);
+}
+
+async function addMetaAccount() {
+  const label = document.getElementById('new-account-label').value.trim();
+  const meta_account_id = document.getElementById('new-account-id').value.trim();
+  const token = document.getElementById('new-account-token').value.trim();
+  const currency = document.getElementById('new-account-currency').value.trim() || 'USD';
+  const timezone = document.getElementById('new-account-timezone').value.trim() || 'UTC';
+  const is_active = document.getElementById('new-account-default').checked;
+
+  if (!meta_account_id || !token) {
+    toast('Meta account ID and token are required', 'error');
+    return;
+  }
+
+  try {
+    const res = await apiPost('/accounts', { label, name: label, meta_account_id, token, currency, timezone, is_active });
+    toast('Meta account saved', 'success');
+    closeDrawer();
+    await hydrateAccountContext();
+    if (is_active && res.data?.id) await switchActiveAccount(res.data.id);
+    loadAdminAccounts();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function setSessionAccount(accountId) {
+  await switchActiveAccount(accountId);
+  loadAdminAccounts();
+}
+
+async function setDefaultAccount(accountId) {
+  try {
+    await apiPost(`/accounts/${accountId}/default`, {});
+    toast('Default account updated', 'success');
+    await hydrateAccountContext();
+    loadAdminAccounts();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
 }
 
 async function loadAdminUsers() {

@@ -12,7 +12,7 @@ function adminOrOperator(req, res, next) {
 
 router.get('/account-context', async (req, res) => {
   try {
-    res.json(await intelligence.getAccountContext());
+    res.json(await intelligence.getAccountContext(req.metaAccount));
   } catch (err) {
     sendError(res, err);
   }
@@ -41,7 +41,7 @@ router.post('/targets', adminOrOperator, async (req, res) => {
 
 router.get('/rules', async (req, res) => {
   try {
-    res.json(await intelligence.getDecisionRules(req.query));
+    res.json(await intelligence.getDecisionRules(req.query, req.metaAccount));
   } catch (err) {
     sendError(res, err);
   }
@@ -49,7 +49,7 @@ router.get('/rules', async (req, res) => {
 
 router.get('/funnel', async (req, res) => {
   try {
-    res.json({ data: await intelligence.getFunnel(req.query) });
+    res.json({ data: await intelligence.getFunnel(req.query, req.metaAccount) });
   } catch (err) {
     sendError(res, err);
   }
@@ -57,7 +57,7 @@ router.get('/funnel', async (req, res) => {
 
 router.get('/breakdowns', async (req, res) => {
   try {
-    res.json({ data: await intelligence.getBreakdowns(req.query) });
+    res.json({ data: await intelligence.getBreakdowns(req.query, req.metaAccount) });
   } catch (err) {
     sendError(res, err);
   }
@@ -65,7 +65,7 @@ router.get('/breakdowns', async (req, res) => {
 
 router.get('/creative-library', async (req, res) => {
   try {
-    res.json({ data: await intelligence.getCreativeLibrary(req.query) });
+    res.json({ data: await intelligence.getCreativeLibrary(req.query, req.metaAccount) });
   } catch (err) {
     sendError(res, err);
   }

@@ -2,10 +2,20 @@ const fetch = require('node-fetch');
 const config = require('../config');
 const metaUsage = require('./metaUsageService');
 
-const BASE = config.meta.baseUrl();
-const TOKEN = config.meta.accessToken;
 let cooldownUntil = 0;
 let cooldownMessage = null;
+
+function contextBase(context = {}) {
+  return `https://graph.facebook.com/${context.apiVersion || config.meta.apiVersion || 'v21.0'}`;
+}
+
+function contextToken(context = {}) {
+  return context.access_token || context.accessToken || config.meta.accessToken;
+}
+
+function contextAccountId(context = {}) {
+  return context.meta_account_id || context.adAccountId || config.meta.adAccountId;
+}
 
 function isUserRateLimitError(error = {}) {
   const message = String(error.message || '').toLowerCase();
@@ -54,10 +64,10 @@ function assertNotCoolingDown() {
   cooldownMessage = null;
 }
 
-async function metaGet(endpoint, params = {}) {
+async function metaGet(endpoint, params = {}, context = {}) {
   assertNotCoolingDown();
-  const url = new URL(`${BASE}${endpoint}`);
-  url.searchParams.set('access_token', TOKEN);
+  const url = new URL(`${contextBase(context)}${endpoint}`);
+  url.searchParams.set('access_token', contextToken(context));
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null) url.searchParams.set(k, v);
   }
@@ -66,7 +76,7 @@ async function metaGet(endpoint, params = {}) {
   return parseResponse(res, { source: 'meta_get', method: 'GET', endpoint });
 }
 
-async function metaGetAll(endpoint, params = {}, options = {}) {
+async function metaGetAll(endpoint, params = {}, options = {}, context = {}) {
   const limit = String(options.limit || params.limit || 100);
   const maxPages = options.maxPages || 25;
   let page = 0;
@@ -80,7 +90,7 @@ async function metaGetAll(endpoint, params = {}, options = {}) {
       const res = await fetch(nextUrl);
       data = await parseResponse(res, { source: 'meta_get_all', method: 'GET', endpoint });
     } else {
-      data = await metaGet(endpoint, { ...params, limit });
+      data = await metaGet(endpoint, { ...params, limit }, context);
     }
 
     rows.push(...(data.data || []));
@@ -99,77 +109,77 @@ async function metaGetAll(endpoint, params = {}, options = {}) {
   return rows;
 }
 
-async function metaPost(endpoint, body = {}) {
+async function metaPost(endpoint, body = {}, context = {}) {
   assertNotCoolingDown();
-  const url = `${BASE}${endpoint}`;
+  const url = `${contextBase(context)}${endpoint}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ access_token: TOKEN, ...body }),
+    body: JSON.stringify({ access_token: contextToken(context), ...body }),
   });
   return parseResponse(res, { source: 'meta_post', method: 'POST', endpoint });
 }
 
-async function getAdAccounts() {
+async function getAdAccounts(context = {}) {
   return metaGetAll('/me/adaccounts', {
     fields: 'id,name,account_id,currency,timezone_name,account_status',
     limit: '50',
-  });
+  }, {}, context);
 }
 
-async function getCampaigns(adAccountId) {
-  const id = adAccountId || config.meta.adAccountId;
+async function getCampaigns(adAccountId, context = {}) {
+  const id = adAccountId || contextAccountId(context);
   return metaGetAll(`/${id}/campaigns`, {
     fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,special_ad_categories,updated_time',
     limit: '100',
-  });
+  }, {}, context);
 }
 
-async function getAdSets(campaignId) {
+async function getAdSets(campaignId, context = {}) {
   return metaGetAll(`/${campaignId}/adsets`, {
     fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,optimization_goal,billing_event,targeting,placements,attribution_spec,start_time,end_time,updated_time',
     limit: '100',
-  });
+  }, {}, context);
 }
 
-async function getAds(adSetId) {
+async function getAds(adSetId, context = {}) {
   return metaGetAll(`/${adSetId}/ads`, {
     fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,image_url,video_id,thumbnail_url},preview_shareable_link,updated_time',
     limit: '100',
-  });
+  }, {}, context);
 }
 
-async function getInsights(entityId, params = {}) {
+async function getInsights(entityId, params = {}, context = {}) {
   const defaults = {
     fields: 'spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
     date_preset: 'yesterday',
     level: 'campaign',
   };
   const merged = { ...defaults, ...params };
-  return metaGetAll(`/${entityId}/insights`, merged, { maxPages: 50 });
+  return metaGetAll(`/${entityId}/insights`, merged, { maxPages: 50 }, context);
 }
 
-async function getInsightsRange(entityId, since, until, level = 'campaign') {
+async function getInsightsRange(entityId, since, until, level = 'campaign', context = {}) {
   return getInsights(entityId, {
     time_range: JSON.stringify({ since, until }),
     level,
     time_increment: 1,
-  });
+  }, context);
 }
 
-async function updateStatus(entityId, status) {
-  return metaPost(`/${entityId}`, { status });
+async function updateStatus(entityId, status, context = {}) {
+  return metaPost(`/${entityId}`, { status }, context);
 }
 
-async function updateBudget(adSetId, dailyBudget) {
-  return metaPost(`/${adSetId}`, { daily_budget: dailyBudget });
+async function updateBudget(adSetId, dailyBudget, context = {}) {
+  return metaPost(`/${adSetId}`, { daily_budget: dailyBudget }, context);
 }
 
-async function duplicateEntity(entityId, entityType) {
+async function duplicateEntity(entityId, entityType, context = {}) {
   return metaPost(`/${entityId}/copies`, {
     deep_copy: true,
     status_option: 'PAUSED',
-  });
+  }, context);
 }
 
 function parseActions(actions) {
@@ -201,6 +211,7 @@ function parseActionValues(actionValues) {
 
 module.exports = {
   isUserRateLimitError,
+  contextAccountId,
   metaGet,
   metaGetAll,
   metaPost,

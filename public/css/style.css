@@ -193,6 +193,25 @@ a:hover { text-decoration: underline; }
   align-items: center;
   gap: 10px;
 }
+.account-switcher {
+  width: 190px;
+  padding: 6px 28px 6px 10px;
+  font-size: 0.78rem;
+}
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 210px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Page body */
 .page-body {
