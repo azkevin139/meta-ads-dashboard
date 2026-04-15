@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const actionService = require('../services/actionService');
 
@@ -10,7 +11,7 @@ router.get('/', async (req, res) => {
     const logs = await actionService.getActionLog(accountId, limit);
     res.json({ data: logs });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

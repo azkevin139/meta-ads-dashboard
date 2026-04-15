@@ -4,6 +4,18 @@ const metaUsage = require('./metaUsageService');
 
 const BASE = config.meta.baseUrl();
 const TOKEN = config.meta.accessToken;
+let cooldownUntil = 0;
+let cooldownMessage = null;
+
+function isUserRateLimitError(error = {}) {
+  const message = String(error.message || '').toLowerCase();
+  return error.code === 17 ||
+    error.code === 4 ||
+    error.code === 613 ||
+    message.includes('user request limit reached') ||
+    message.includes('rate limit') ||
+    message.includes('too many calls');
+}
 
 async function parseResponse(res, context) {
   metaUsage.recordHeaders(res.headers, context);
@@ -14,6 +26,14 @@ async function parseResponse(res, context) {
     err.code = data.error.code;
     err.type = data.error.type;
     err.error_subcode = data.error.error_subcode || null;
+    if (isUserRateLimitError(data.error)) {
+      const retryHeader = res.headers && res.headers.get ? parseInt(res.headers.get('retry-after'), 10) : 0;
+      err.httpStatus = 429;
+      err.retryAfterSeconds = Number.isFinite(retryHeader) && retryHeader > 0 ? retryHeader : 15 * 60;
+      err.limitType = 'meta_user_request_limit';
+      cooldownUntil = Date.now() + err.retryAfterSeconds * 1000;
+      cooldownMessage = err.message;
+    }
     metaUsage.recordError(err);
     throw err;
   }
@@ -21,7 +41,21 @@ async function parseResponse(res, context) {
   return data;
 }
 
+function assertNotCoolingDown() {
+  const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
+  if (remaining > 0) {
+    const err = new Error(cooldownMessage || 'Meta user request limit reached');
+    err.httpStatus = 429;
+    err.retryAfterSeconds = remaining;
+    err.limitType = 'meta_user_request_limit';
+    throw err;
+  }
+  cooldownUntil = 0;
+  cooldownMessage = null;
+}
+
 async function metaGet(endpoint, params = {}) {
+  assertNotCoolingDown();
   const url = new URL(`${BASE}${endpoint}`);
   url.searchParams.set('access_token', TOKEN);
   for (const [k, v] of Object.entries(params)) {
@@ -66,6 +100,7 @@ async function metaGetAll(endpoint, params = {}, options = {}) {
 }
 
 async function metaPost(endpoint, body = {}) {
+  assertNotCoolingDown();
   const url = `${BASE}${endpoint}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -165,6 +200,7 @@ function parseActionValues(actionValues) {
 }
 
 module.exports = {
+  isUserRateLimitError,
   metaGet,
   metaGetAll,
   metaPost,

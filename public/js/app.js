@@ -6,6 +6,9 @@
 const API_BASE = '/api';
 let ACCOUNT_ID = parseInt(localStorage.getItem('account_id') || '1', 10);
 let accountContext = null;
+const META_COOLDOWN_KEY = 'meta_cooldown_until';
+const META_COOLDOWN_MESSAGE_KEY = 'meta_cooldown_message';
+let metaCooldownTimer = null;
 
 // ─── AUTH STATE ───────────────────────────────────────────
 
@@ -20,13 +23,85 @@ function getAuthHeaders() {
 
 // ─── API WRAPPER ──────────────────────────────────────────
 
+function isMetaHeavyPath(path) {
+  return path.startsWith('/meta') ||
+    path.startsWith('/intelligence') ||
+    path.startsWith('/create') ||
+    path.startsWith('/actions') ||
+    path.startsWith('/ai/run');
+}
+
+function getMetaCooldownRemaining() {
+  const until = parseInt(localStorage.getItem(META_COOLDOWN_KEY) || '0', 10);
+  if (!until) return 0;
+  return Math.max(0, Math.ceil((until - Date.now()) / 1000));
+}
+
+function formatCooldown(seconds) {
+  const s = Math.max(0, Math.ceil(seconds || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}m ${r}s` : `${m}m`;
+}
+
+function startMetaCooldown(seconds = 900, message = 'Meta user request limit reached') {
+  const wait = Math.max(60, parseInt(seconds, 10) || 900);
+  localStorage.setItem(META_COOLDOWN_KEY, String(Date.now() + wait * 1000));
+  localStorage.setItem(META_COOLDOWN_MESSAGE_KEY, message);
+  renderMetaCooldown();
+}
+
+function clearMetaCooldown() {
+  localStorage.removeItem(META_COOLDOWN_KEY);
+  localStorage.removeItem(META_COOLDOWN_MESSAGE_KEY);
+  const el = document.getElementById('meta-cooldown-banner');
+  if (el) el.remove();
+  if (metaCooldownTimer) clearInterval(metaCooldownTimer);
+  metaCooldownTimer = null;
+}
+
+function renderMetaCooldown() {
+  const remaining = getMetaCooldownRemaining();
+  if (remaining <= 0) {
+    clearMetaCooldown();
+    return;
+  }
+
+  let el = document.getElementById('meta-cooldown-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'meta-cooldown-banner';
+    el.className = 'meta-cooldown-banner';
+    document.body.appendChild(el);
+  }
+  const msg = localStorage.getItem(META_COOLDOWN_MESSAGE_KEY) || 'Meta user request limit reached';
+  el.innerHTML = `
+    <div>
+      <strong>Meta cooldown active</strong>
+      <span>${msg}. Retrying Meta calls in <span class="mono">${formatCooldown(remaining)}</span>.</span>
+    </div>
+    <button class="btn btn-sm" onclick="clearMetaCooldown()">Clear</button>
+  `;
+
+  if (!metaCooldownTimer) {
+    metaCooldownTimer = setInterval(renderMetaCooldown, 1000);
+  }
+}
+
 async function api(path, options = {}) {
+  const cooldownRemaining = getMetaCooldownRemaining();
+  if (cooldownRemaining > 0 && isMetaHeavyPath(path)) {
+    renderMetaCooldown();
+    throw new Error(`Meta cooldown active. Try again in ${formatCooldown(cooldownRemaining)}.`);
+  }
+
   const url = `${API_BASE}${path}`;
   const res = await fetch(url, {
     headers: getAuthHeaders(),
     ...options,
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (res.status === 401) {
     // Token expired
     authToken = null;
@@ -34,7 +109,14 @@ async function api(path, options = {}) {
     showLogin();
     throw new Error('Session expired — please login again');
   }
-  if (!res.ok) throw new Error(data.error || `API error ${res.status}`);
+  if (!res.ok) {
+    const message = data.error || `API error ${res.status}`;
+    const lower = String(message).toLowerCase();
+    if (res.status === 429 || lower.includes('user request limit reached')) {
+      startMetaCooldown(data.retry_after_seconds || 900, message);
+    }
+    throw new Error(message);
+  }
   return data;
 }
 
@@ -459,6 +541,8 @@ async function showDashboard() {
 // ─── INIT ─────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  renderMetaCooldown();
+
   // Nav click handlers (desktop)
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', (e) => { e.preventDefault(); navigateTo(el.dataset.page); });

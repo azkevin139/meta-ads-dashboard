@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
 const config = require('../config');
@@ -22,7 +23,7 @@ router.get('/accounts', async (req, res) => {
     const accounts = await metaApi.getAdAccounts();
     res.json(withMetaMeta(accounts));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -33,7 +34,7 @@ router.get('/campaigns', async (req, res) => {
     const campaigns = await metaApi.getCampaigns(accountId);
     res.json(withMetaMeta(campaigns));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -45,7 +46,7 @@ router.get('/adsets', async (req, res) => {
     const adsets = await metaApi.getAdSets(campaignId);
     res.json(withMetaMeta(adsets));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -57,7 +58,7 @@ router.get('/ads', async (req, res) => {
     const ads = await metaApi.getAds(adSetId);
     res.json(withMetaMeta(ads));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -78,7 +79,7 @@ router.get('/insights', async (req, res) => {
     }
     res.json(withMetaMeta(insights));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -138,7 +139,7 @@ router.get('/live', async (req, res) => {
     const data = await metaApi.getInsights(config.meta.adAccountId, params);
     res.json(withMetaMeta(data));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -153,7 +154,7 @@ router.get('/today', async (req, res) => {
     });
     res.json(withMetaMeta(data));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -186,7 +187,7 @@ router.get('/ad-detail', async (req, res) => {
       thumbnail_url: creative.thumbnail_url || '',
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -235,7 +236,7 @@ router.post('/update-ad', adminOrOperator, async (req, res) => {
 
     res.json({ success: true, new_creative_id: newCreative.id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -277,7 +278,7 @@ router.get('/adset-detail', async (req, res) => {
       targeting_raw: targeting,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -314,7 +315,7 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
     const result = await metaApi.metaPost(`/${adsetId}`, update);
     res.json({ success: true, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

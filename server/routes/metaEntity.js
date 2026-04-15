@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaUsage = require('../services/metaUsageService');
 const entityService = require('../services/metaEntityService');
@@ -24,7 +25,7 @@ router.get('/entity/:level/:id', async (req, res) => {
     const data = await entityService.getEntity(req.params.level, req.params.id);
     res.json({ data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -40,7 +41,7 @@ router.post('/entity/:level/:id/update', adminOrOperator, async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -57,7 +58,7 @@ router.post('/entity/:level/:id/status', adminOrOperator, async (req, res) => {
     );
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -72,7 +73,7 @@ router.post('/entity/:level/:id/duplicate', adminOrOperator, async (req, res) =>
     );
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

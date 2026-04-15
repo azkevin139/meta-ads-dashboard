@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const insights = require('../services/insightsService');
 
@@ -16,7 +17,7 @@ router.get('/overview', async (req, res) => {
 
     res.json({ overview, deltas, activeCampaigns });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -28,7 +29,7 @@ router.get('/campaigns', async (req, res) => {
     const campaigns = await insights.getCampaignInsights(accountId, days);
     res.json({ data: campaigns });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -41,7 +42,7 @@ router.get('/campaign-trend', async (req, res) => {
     const trend = await insights.getCampaignTrend(campaignId, days);
     res.json({ data: trend });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -54,7 +55,7 @@ router.get('/adsets', async (req, res) => {
     const adsets = await insights.getAdSetInsights(campaignId, days);
     res.json({ data: adsets });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -67,7 +68,7 @@ router.get('/ads', async (req, res) => {
     const ads = await insights.getAdInsights(adsetId, days);
     res.json({ data: ads });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -81,7 +82,7 @@ router.get('/trend', async (req, res) => {
     const trend = await insights.getTrend(entityId, level, days);
     res.json({ data: trend });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

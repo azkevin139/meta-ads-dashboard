@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const actionService = require('../services/actionService');
 const metaUsage = require('../services/metaUsageService');
@@ -32,7 +33,7 @@ router.post('/pause', adminOrOperator, async (req, res) => {
     const result = await actionService.pauseEntity(accountId || 1, entityType, metaEntityId);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -47,7 +48,7 @@ router.post('/resume', adminOrOperator, async (req, res) => {
     const result = await actionService.resumeEntity(accountId || 1, entityType, metaEntityId);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -63,7 +64,7 @@ router.post('/budget', adminOrOperator, async (req, res) => {
     const result = await actionService.updateBudget(accountId || 1, metaAdSetId, parseFloat(newBudget));
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -79,7 +80,7 @@ router.post('/duplicate', adminOrOperator, async (req, res) => {
     const result = await actionService.duplicateEntity(accountId || 1, entityType, metaEntityId);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

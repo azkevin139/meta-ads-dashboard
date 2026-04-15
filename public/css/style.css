@@ -497,6 +497,31 @@ tbody td.name-cell a:hover {
   color: var(--accent);
 }
 
+.meta-cooldown-banner {
+  position: fixed;
+  left: calc(var(--sidebar-w) + 18px);
+  right: 18px;
+  bottom: 18px;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  background: var(--yellow-dim);
+  border: 1px solid rgba(251,191,36,0.35);
+  border-radius: var(--radius);
+  color: var(--yellow);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  font-size: 0.82rem;
+}
+.meta-cooldown-banner strong {
+  display: block;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* ─── LOADING / EMPTY STATES ───────────────────────────── */
 .loading {
   display: flex;
@@ -672,6 +697,7 @@ tbody td.name-cell a:hover {
   .page-header { padding: 0 16px; }
   .admin-grid { grid-template-columns: 1fr !important; }
   .grid-two { grid-template-columns: 1fr !important; }
+  .meta-cooldown-banner { left: 12px; right: 12px; bottom: 76px; }
 
   /* Drawer full-width on mobile */
   .drawer { width: 100%; max-width: 100%; right: -100%; }

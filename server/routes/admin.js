@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const auth = require('../services/authService');
 
@@ -18,7 +19,7 @@ router.get('/users', async (req, res) => {
     const users = await auth.getAllUsers();
     res.json({ data: users });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -28,7 +29,7 @@ router.get('/sessions', async (req, res) => {
     const sessions = await auth.getActiveSessions();
     res.json({ data: sessions });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -40,7 +41,7 @@ router.post('/users/:id', async (req, res) => {
     await auth.updateUser(userId, { role, is_active, name, meta_token, password });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -52,7 +53,7 @@ router.delete('/users/:id', async (req, res) => {
     await auth.deleteUser(userId);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

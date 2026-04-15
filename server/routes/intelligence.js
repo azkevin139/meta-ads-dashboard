@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const intelligence = require('../services/intelligenceService');
 
@@ -13,7 +14,7 @@ router.get('/account-context', async (req, res) => {
   try {
     res.json(await intelligence.getAccountContext());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -21,7 +22,7 @@ router.get('/targets', async (req, res) => {
   try {
     res.json({ data: intelligence.readTargets(), defaults: intelligence.DEFAULT_TARGETS });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -34,7 +35,7 @@ router.post('/targets', adminOrOperator, async (req, res) => {
     };
     res.json({ data: intelligence.writeTargets(next) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -42,7 +43,7 @@ router.get('/rules', async (req, res) => {
   try {
     res.json(await intelligence.getDecisionRules(req.query));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -50,7 +51,7 @@ router.get('/funnel', async (req, res) => {
   try {
     res.json({ data: await intelligence.getFunnel(req.query) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -58,7 +59,7 @@ router.get('/breakdowns', async (req, res) => {
   try {
     res.json({ data: await intelligence.getBreakdowns(req.query) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -66,7 +67,7 @@ router.get('/creative-library', async (req, res) => {
   try {
     res.json({ data: await intelligence.getCreativeLibrary(req.query) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

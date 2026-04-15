@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
 const config = require('../config');
@@ -68,7 +69,7 @@ router.post('/bulk-action', async (req, res) => {
       results,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -111,7 +112,7 @@ router.post('/campaign', async (req, res) => {
     });
     res.json({ success: true, campaign_id: result.id, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -220,7 +221,7 @@ router.post('/adset', async (req, res) => {
     });
     res.json({ success: true, adset_id: result.id, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -317,7 +318,7 @@ router.post('/ad', async (req, res) => {
     });
     res.json({ success: true, ad_id: result.id, creative_id, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -331,7 +332,7 @@ router.get('/pixels', async (req, res) => {
     });
     res.json({ data: data.data || [] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -345,7 +346,7 @@ router.get('/pages', async (req, res) => {
     });
     res.json({ data: data.data || [] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -367,7 +368,7 @@ router.post('/upload-image', async (req, res) => {
 
     res.json({ success: true, hash: imageData.hash, url: imageData.url });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

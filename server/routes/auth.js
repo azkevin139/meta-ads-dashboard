@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const auth = require('../services/authService');
 
@@ -36,7 +37,7 @@ router.post('/logout', async (req, res) => {
     if (token) await auth.logout(token);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -49,7 +50,7 @@ router.get('/me', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'Invalid or expired token' });
     res.json({ user });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 

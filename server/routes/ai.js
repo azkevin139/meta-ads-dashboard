@@ -1,4 +1,5 @@
 const express = require('express');
+const { sendError } = require('../errorResponse');
 const router = express.Router();
 const aiService = require('../services/aiService');
 
@@ -9,7 +10,7 @@ router.get('/daily', async (req, res) => {
     const analysis = await aiService.getDailyAnalysis(accountId);
     res.json({ data: analysis });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -21,7 +22,7 @@ router.get('/recommendations', async (req, res) => {
     const recs = await aiService.getRecommendations(accountId, status);
     res.json({ data: recs });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -32,7 +33,7 @@ router.post('/run', async (req, res) => {
     const result = await aiService.runAnalysis(accountId);
     res.json({ data: result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -43,7 +44,7 @@ router.post('/approve/:id', async (req, res) => {
     await aiService.updateRecommendation(id, 'approved');
     res.json({ success: true, id, status: 'approved' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
@@ -54,7 +55,7 @@ router.post('/dismiss/:id', async (req, res) => {
     await aiService.updateRecommendation(id, 'dismissed');
     res.json({ success: true, id, status: 'dismissed' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, err);
   }
 });
 
