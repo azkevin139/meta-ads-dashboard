@@ -55,6 +55,38 @@ router.get('/funnel', async (req, res) => {
   }
 });
 
+router.get('/first-party-funnel', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getFirstPartyFunnel(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/journey', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getJourney(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/true-roas', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getTrueRoas(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/audience-health', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getAudienceHealth(req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 router.get('/breakdowns', async (req, res) => {
   try {
     res.json({ data: await intelligence.getBreakdowns(req.query, req.metaAccount) });

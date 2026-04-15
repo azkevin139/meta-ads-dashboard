@@ -21,6 +21,8 @@ const intelligenceRoutes = require('./routes/intelligence');
 const actionsRoutes = require('./routes/actions');
 const logsRoutes = require('./routes/logs');
 const accountRoutes = require('./routes/accounts');
+const trackingRoutes = require('./routes/tracking');
+const webhookRoutes = require('./routes/webhooks');
 
 const app = express();
 
@@ -69,6 +71,8 @@ app.use(['/api/meta/update-ad', '/api/meta/update-adset'], async (req, res, next
 
 const createRoutes = require('./routes/create');
 app.use('/api/auth', authRoutes);
+app.use('/api/track', trackingRoutes);
+app.use('/api/webhooks', webhookRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/meta', metaRateRoutes);

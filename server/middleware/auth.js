@@ -2,8 +2,8 @@ const authService = require('../services/authService');
 const accountService = require('../services/accountService');
 
 async function authMiddleware(req, res, next) {
-  // Skip auth for login/register/health only
-  if (req.path.startsWith('/auth/') || req.path === '/health') {
+  // Skip auth for public auth, health, tracking, and webhook endpoints.
+  if (req.path.startsWith('/auth/') || req.path === '/health' || req.path.startsWith('/track/') || req.path.startsWith('/webhooks/')) {
     return next();
   }
 

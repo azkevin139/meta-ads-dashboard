@@ -22,7 +22,7 @@ async function loadIntelligence(container) {
     <div id="intel-rules" class="mb-md"><div class="loading">Loading decision queues</div></div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1.2fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
-        <div class="table-header"><span class="table-title">Funnel Steps</span><span class="badge badge-active">META</span></div>
+        <div class="table-header"><span class="table-title">First-Party Funnel</span><span class="badge badge-active">META + TRACKING</span></div>
         <div id="intel-funnel"><div class="loading">Loading funnel</div></div>
       </div>
       <div class="table-container">
@@ -39,6 +39,20 @@ async function loadIntelligence(container) {
       <div class="table-header"><span class="table-title">Creative Library</span><span class="badge badge-active">GROUPED</span></div>
       <div id="intel-creatives"><div class="loading">Loading creatives</div></div>
     </div>
+    <div class="grid-two mt-md" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
+      <div class="table-container">
+        <div class="table-header"><span class="table-title">True ROAS</span><span class="badge badge-active">FIRST PARTY</span></div>
+        <div id="intel-roas"><div class="loading">Loading ROAS</div></div>
+      </div>
+      <div class="table-container">
+        <div class="table-header"><span class="table-title">Audience Health</span><span class="badge badge-active">META</span></div>
+        <div id="intel-audiences"><div class="loading">Loading audiences</div></div>
+      </div>
+    </div>
+    <div class="table-container mt-md">
+      <div class="table-header"><span class="table-title">Recent Journeys</span><span class="badge badge-active">TRACKING</span></div>
+      <div id="intel-journeys"><div class="loading">Loading journeys</div></div>
+    </div>
   `;
 
   await Promise.all([
@@ -46,6 +60,9 @@ async function loadIntelligence(container) {
     loadFunnel(),
     loadBreakdowns(),
     loadCreativeLibrary(),
+    loadTrueRoas(),
+    loadAudienceHealth(),
+    loadJourneys(),
   ]);
 }
 
@@ -97,11 +114,63 @@ function queueCard(title, items) {
 async function loadFunnel() {
   const el = document.getElementById('intel-funnel');
   try {
-    const res = await apiGet(`/intelligence/funnel?${intelRangeQuery()}`);
+    const res = await apiGet(`/intelligence/first-party-funnel?${intelRangeQuery()}`);
     const rows = (res.data || []).sort((a, b) => b.spend - a.spend).slice(0, 20);
-    el.innerHTML = rows.length ? `<div style="overflow:auto;"><table><thead><tr><th>Campaign</th><th class="right">Spend</th><th class="right">Clicks</th><th class="right">LPV</th><th class="right">Checkout</th><th class="right">Lead</th><th class="right">Purchase</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.link_clicks || r.clicks,'integer')}</td><td class="right">${fmt(r.landing_page_views,'integer')}</td><td class="right">${fmt(r.initiate_checkouts,'integer')}</td><td class="right">${fmt(r.leads,'integer')}</td><td class="right">${fmt(r.purchases,'integer')}</td></tr>`).join('')}
+    el.innerHTML = rows.length ? `<div style="overflow:auto;"><table><thead><tr><th>Campaign</th><th class="right">Spend</th><th class="right">Clicks</th><th class="right">Visits</th><th class="right">Leads</th><th class="right">Contacted</th><th class="right">Qualified</th><th class="right">Closed</th><th class="right">ROAS</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.link_clicks || r.clicks,'integer')}</td><td class="right">${fmt(r.page_visits || r.landing_page_views,'integer')}</td><td class="right">${fmt(r.leads,'integer')}</td><td class="right">${fmt(r.ghl_contacted,'integer')}</td><td class="right">${fmt(r.qualified,'integer')}</td><td class="right">${fmt(r.closed,'integer')}</td><td class="right">${r.true_roas ? fmt(r.true_roas,'decimal') + 'x' : '—'}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No funnel data</div></div>';
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+  }
+}
+
+async function loadTrueRoas() {
+  const el = document.getElementById('intel-roas');
+  try {
+    const res = await apiGet(`/intelligence/true-roas?${intelRangeQuery()}`);
+    const rows = (res.data || []).slice(0, 12);
+    el.innerHTML = rows.length ? `<div style="overflow:auto;"><table><thead><tr><th>Campaign</th><th class="right">Spend</th><th class="right">Meta ROAS</th><th class="right">Your ROAS</th><th class="right">Revenue</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.meta_reported_roas,'decimal')}x</td><td class="right">${fmt(r.true_roas,'decimal')}x</td><td class="right">${fmt(r.first_party_revenue,'currency')}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No first-party revenue yet</div></div>';
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+  }
+}
+
+async function loadAudienceHealth() {
+  const el = document.getElementById('intel-audiences');
+  try {
+    const res = await apiGet('/intelligence/audience-health');
+    const rows = (res.data || []).slice(0, 15);
+    const badge = { healthy: 'active', watch: 'warning', too_small: 'critical' };
+    el.innerHTML = rows.length ? `<div style="overflow:auto;"><table><thead><tr><th>Audience</th><th class="right">Size</th><th>Status</th></tr></thead><tbody>
+      ${rows.map(a => `<tr><td class="name-cell">${escapeHtml(a.name || a.id)}<div class="text-muted" style="font-size:0.7rem;">${escapeHtml(a.subtype || '')}</div></td><td class="right">${fmt(a.approximate_count,'integer')}</td><td><span class="badge badge-${badge[a.status] || 'low'}">${a.status.replace('_',' ')}</span></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No custom audiences returned</div></div>';
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+  }
+}
+
+async function loadJourneys() {
+  const el = document.getElementById('intel-journeys');
+  try {
+    const res = await apiGet('/intelligence/journey?limit=10');
+    const rows = res.data || [];
+    el.innerHTML = rows.length ? `<div style="display:grid; gap:10px;">
+      ${rows.map(item => {
+        const v = item.visitor || {};
+        const events = item.events || [];
+        return `<div class="reco-card">
+          <div class="flex-between" style="gap:12px; align-items:flex-start;">
+            <div><div style="font-weight:600;">${escapeHtml(v.ghl_contact_id || v.client_id)}</div><div class="text-muted" style="font-size:0.74rem;">Campaign ${escapeHtml(v.campaign_id || 'unknown')} · ${fmtDateTime(v.first_seen_at)}</div></div>
+            <div class="right"><div>${fmt(v.revenue || 0, 'currency')}</div><div class="text-muted" style="font-size:0.74rem;">${escapeHtml(v.current_stage || 'unresolved')}</div></div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+            ${events.slice(-6).map(e => `<span class="badge badge-low">${escapeHtml(e.event_name)} · ${fmtDateTime(e.fired_at)}</span>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : '<div class="empty-state"><div class="empty-state-text">No tracked journeys yet</div></div>';
   } catch (err) {
     el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
   }

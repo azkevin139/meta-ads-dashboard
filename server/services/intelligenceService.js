@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const metaApi = require('./metaApi');
-const { queryOne } = require('../db');
+const { query, queryOne, queryAll } = require('../db');
 const accountService = require('./accountService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -45,6 +45,15 @@ function parseActionCount(actions, candidates) {
   let total = 0;
   for (const action of actions) {
     if (candidates.includes(action.action_type)) total += parseInt(action.value, 10) || 0;
+  }
+  return total;
+}
+
+function parseActionValue(actionValues, candidates) {
+  if (!Array.isArray(actionValues)) return 0;
+  let total = 0;
+  for (const action of actionValues) {
+    if (candidates.includes(action.action_type)) total += parseFloat(action.value) || 0;
   }
   return total;
 }
@@ -220,6 +229,177 @@ async function getFunnel({ since, until, preset } = {}, context = {}) {
   });
 }
 
+async function getFirstPartyFunnel({ since, until, preset } = {}, context = {}) {
+  const params = since && until ? { since, until } : { preset: preset || 'yesterday' };
+  const metaRows = await getFunnel(params, context);
+  const accountId = context?.id || null;
+  if (!accountId) return metaRows.map(row => ({ ...row, page_visits: 0, ghl_contacted: 0, qualified: 0, closed: 0, revenue: 0, true_roas: 0 }));
+
+  const range = resolveDateRange({ since, until, preset });
+  const rows = await queryAll(`
+    SELECT
+      v.campaign_id,
+      COUNT(DISTINCT v.client_id) AS page_visits,
+      COUNT(DISTINCT CASE WHEN v.ghl_contact_id IS NOT NULL OR v.meta_lead_id IS NOT NULL OR v.email_hash IS NOT NULL THEN v.client_id END) AS leads,
+      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%contact%' THEN v.client_id END) AS ghl_contacted,
+      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%qualif%' THEN v.client_id END) AS qualified,
+      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%closed%' OR COALESCE(v.revenue, 0) > 0 THEN v.client_id END) AS closed,
+      COALESCE(SUM(v.revenue), 0) AS revenue
+    FROM visitors v
+    WHERE v.account_id = $1
+      AND v.campaign_id IS NOT NULL
+      AND v.first_seen_at::date BETWEEN $2::date AND $3::date
+    GROUP BY v.campaign_id
+  `, [accountId, range.since, range.until]);
+  const tracked = Object.fromEntries(rows.map(row => [String(row.campaign_id), row]));
+  return metaRows.map(row => {
+    const t = tracked[String(row.id)] || {};
+    const revenue = parseFloat(t.revenue) || 0;
+    return {
+      ...row,
+      page_visits: parseInt(t.page_visits, 10) || 0,
+      leads: Math.max(row.leads || 0, parseInt(t.leads, 10) || 0),
+      ghl_contacted: parseInt(t.ghl_contacted, 10) || 0,
+      qualified: parseInt(t.qualified, 10) || 0,
+      closed: parseInt(t.closed, 10) || 0,
+      revenue,
+      true_roas: row.spend > 0 ? revenue / row.spend : 0,
+    };
+  });
+}
+
+async function getJourney({ clientId, contactId, limit = 20 } = {}, context = {}) {
+  const accountId = context?.id || null;
+  const values = [];
+  const filters = [];
+  if (accountId) {
+    values.push(accountId);
+    filters.push(`v.account_id = $${values.length}`);
+  }
+  if (clientId) {
+    values.push(clientId);
+    filters.push(`v.client_id = $${values.length}`);
+  }
+  if (contactId) {
+    values.push(contactId);
+    filters.push(`v.ghl_contact_id = $${values.length}`);
+  }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  values.push(Math.min(parseInt(limit, 10) || 20, 100));
+  const visitors = await queryAll(`
+    SELECT * FROM visitors v
+    ${where}
+    ORDER BY v.last_seen_at DESC
+    LIMIT $${values.length}
+  `, values);
+  const data = [];
+  for (const visitor of visitors) {
+    const events = await queryAll(`
+      SELECT event_name, page_url, value, currency, metadata, fired_at
+      FROM visitor_events
+      WHERE client_id = $1
+      ORDER BY fired_at ASC
+      LIMIT 200
+    `, [visitor.client_id]);
+    data.push({ visitor, events });
+  }
+  return data;
+}
+
+async function getTrueRoas({ since, until, preset } = {}, context = {}) {
+  const params = {
+    level: 'campaign',
+    fields: 'campaign_id,campaign_name,spend,actions,action_values',
+  };
+  if (since && until) params.time_range = JSON.stringify({ since, until });
+  else params.date_preset = preset || 'yesterday';
+  const metaRows = await metaApi.getInsights(metaApi.contextAccountId(context), params, context);
+  const accountId = context?.id || null;
+  const range = resolveDateRange({ since, until, preset });
+  const visitorRows = accountId ? await queryAll(`
+    SELECT campaign_id, COALESCE(SUM(revenue), 0) AS revenue, COUNT(*) FILTER (WHERE revenue > 0) AS closed
+    FROM visitors
+    WHERE account_id = $1
+      AND campaign_id IS NOT NULL
+      AND first_seen_at::date BETWEEN $2::date AND $3::date
+    GROUP BY campaign_id
+  `, [accountId, range.since, range.until]) : [];
+  const firstParty = Object.fromEntries(visitorRows.map(row => [String(row.campaign_id), row]));
+  return metaRows.map(row => {
+    const spend = parseFloat(row.spend) || 0;
+    const metaRevenue = parseActionValue(row.action_values, ['offsite_conversion.fb_pixel_purchase', 'purchase']);
+    const tracked = firstParty[String(row.campaign_id)] || {};
+    const revenue = parseFloat(tracked.revenue) || 0;
+    return {
+      id: row.campaign_id,
+      name: row.campaign_name || row.campaign_id,
+      spend,
+      meta_reported_roas: spend > 0 ? metaRevenue / spend : 0,
+      meta_reported_revenue: metaRevenue,
+      first_party_revenue: revenue,
+      true_roas: spend > 0 ? revenue / spend : 0,
+      closed: parseInt(tracked.closed, 10) || 0,
+    };
+  }).sort((a, b) => b.spend - a.spend);
+}
+
+function daysAgoIso(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function resolveDateRange({ since, until, preset } = {}) {
+  if (since && until) return { since, until };
+  const selected = preset || 'yesterday';
+  if (selected === 'today') {
+    const today = new Date().toISOString().slice(0, 10);
+    return { since: today, until: today };
+  }
+  const untilDate = daysAgoIso(1);
+  if (selected === '30d') return { since: daysAgoIso(30), until: untilDate };
+  if (selected === '7d') return { since: daysAgoIso(7), until: untilDate };
+  return { since: untilDate, until: untilDate };
+}
+
+async function getAudienceHealth(context = {}) {
+  const accountId = context?.id || null;
+  const adAccountId = metaApi.contextAccountId(context);
+  const audiences = await metaApi.metaGetAll(`/${adAccountId}/customaudiences`, {
+    fields: 'id,name,subtype,approximate_count,delivery_status,operation_status,updated_time',
+    limit: '100',
+  }, { maxPages: 5 }, context);
+  if (accountId) {
+    for (const audience of audiences) {
+      await query(`
+        INSERT INTO audience_snapshots (account_id, audience_id, name, subtype, approximate_count, delivery_status, operation_status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        accountId,
+        audience.id,
+        audience.name || null,
+        audience.subtype || null,
+        audience.approximate_count ? Number(audience.approximate_count) : null,
+        JSON.stringify(audience.delivery_status || {}),
+        JSON.stringify(audience.operation_status || {}),
+      ]).catch(() => null);
+    }
+  }
+  return audiences.map(audience => {
+    const size = Number(audience.approximate_count) || 0;
+    return {
+      id: audience.id,
+      name: audience.name,
+      subtype: audience.subtype,
+      approximate_count: size,
+      status: size > 5000 ? 'healthy' : size >= 1000 ? 'watch' : 'too_small',
+      delivery_status: audience.delivery_status || null,
+      operation_status: audience.operation_status || null,
+      updated_time: audience.updated_time || null,
+    };
+  }).sort((a, b) => a.approximate_count - b.approximate_count);
+}
+
 async function getBreakdowns({ breakdown = 'publisher_platform', since, until, preset } = {}, context = {}) {
   const allowed = new Set(['publisher_platform', 'platform_position', 'impression_device', 'age', 'gender', 'country', 'region']);
   const selected = allowed.has(breakdown) ? breakdown : 'publisher_platform';
@@ -312,6 +492,10 @@ module.exports = {
   writeTargets,
   getDecisionRules,
   getFunnel,
+  getFirstPartyFunnel,
+  getJourney,
+  getTrueRoas,
+  getAudienceHealth,
   getBreakdowns,
   getCreativeLibrary,
 };
