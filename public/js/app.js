@@ -4,7 +4,8 @@
    ═══════════════════════════════════════════════════════════ */
 
 const API_BASE = '/api';
-const ACCOUNT_ID = 1;
+let ACCOUNT_ID = parseInt(localStorage.getItem('account_id') || '1', 10);
+let accountContext = null;
 
 // ─── AUTH STATE ───────────────────────────────────────────
 
@@ -179,6 +180,7 @@ function metricColor(value, thresholds, invert = false) {
 
 const PAGES = {
   overview: { title: 'Overview', load: 'loadOverview', icon: 'grid' },
+  intelligence: { title: 'Decision Center', load: 'loadIntelligence', icon: 'brain' },
   campaigns: { title: 'Campaigns', load: 'loadCampaigns', icon: 'list' },
   adsets: { title: 'Ad Sets', load: 'loadAdSets', icon: 'target' },
   ads: { title: 'Ads', load: 'loadAds', icon: 'image' },
@@ -187,6 +189,17 @@ const PAGES = {
   admin: { title: 'Admin', load: 'loadAdmin', icon: 'users', adminOnly: true },
   settings: { title: 'Settings', load: 'loadSettings', icon: 'gear' },
 };
+
+async function hydrateAccountContext() {
+  try {
+    accountContext = await apiGet('/intelligence/account-context');
+    const id = accountContext.internal_account?.id || 1;
+    ACCOUNT_ID = parseInt(id, 10) || 1;
+    localStorage.setItem('account_id', String(ACCOUNT_ID));
+  } catch (e) {
+    accountContext = null;
+  }
+}
 
 let currentPage = 'overview';
 let pageState = {};
@@ -434,6 +447,8 @@ async function showDashboard() {
   // Show user info
   const userInfo = document.getElementById('user-info');
   if (userInfo) userInfo.textContent = currentUser.name || currentUser.email;
+
+  await hydrateAccountContext();
 
   const hash = location.hash.replace('#', '') || 'overview';
   navigateTo(hash);

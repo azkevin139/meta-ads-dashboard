@@ -32,6 +32,39 @@ async function metaGet(endpoint, params = {}) {
   return parseResponse(res, { source: 'meta_get', method: 'GET', endpoint });
 }
 
+async function metaGetAll(endpoint, params = {}, options = {}) {
+  const limit = String(options.limit || params.limit || 100);
+  const maxPages = options.maxPages || 25;
+  let page = 0;
+  let nextUrl = null;
+  const rows = [];
+  const paging = { complete: true, pages: 0, truncated: false };
+
+  do {
+    let data;
+    if (nextUrl) {
+      const res = await fetch(nextUrl);
+      data = await parseResponse(res, { source: 'meta_get_all', method: 'GET', endpoint });
+    } else {
+      data = await metaGet(endpoint, { ...params, limit });
+    }
+
+    rows.push(...(data.data || []));
+    page += 1;
+    paging.pages = page;
+    nextUrl = data.paging && data.paging.next ? data.paging.next : null;
+
+    if (nextUrl && page >= maxPages) {
+      paging.complete = false;
+      paging.truncated = true;
+      break;
+    }
+  } while (nextUrl);
+
+  rows._paging = paging;
+  return rows;
+}
+
 async function metaPost(endpoint, body = {}) {
   const url = `${BASE}${endpoint}`;
   const res = await fetch(url, {
@@ -43,36 +76,32 @@ async function metaPost(endpoint, body = {}) {
 }
 
 async function getAdAccounts() {
-  const data = await metaGet('/me/adaccounts', {
+  return metaGetAll('/me/adaccounts', {
     fields: 'id,name,account_id,currency,timezone_name,account_status',
     limit: '50',
   });
-  return data.data || [];
 }
 
 async function getCampaigns(adAccountId) {
   const id = adAccountId || config.meta.adAccountId;
-  const data = await metaGet(`/${id}/campaigns`, {
+  return metaGetAll(`/${id}/campaigns`, {
     fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,special_ad_categories,updated_time',
     limit: '100',
   });
-  return data.data || [];
 }
 
 async function getAdSets(campaignId) {
-  const data = await metaGet(`/${campaignId}/adsets`, {
+  return metaGetAll(`/${campaignId}/adsets`, {
     fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,optimization_goal,billing_event,targeting,placements,attribution_spec,start_time,end_time,updated_time',
     limit: '100',
   });
-  return data.data || [];
 }
 
 async function getAds(adSetId) {
-  const data = await metaGet(`/${adSetId}/ads`, {
+  return metaGetAll(`/${adSetId}/ads`, {
     fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,image_url,video_id,thumbnail_url},preview_shareable_link,updated_time',
     limit: '100',
   });
-  return data.data || [];
 }
 
 async function getInsights(entityId, params = {}) {
@@ -82,8 +111,7 @@ async function getInsights(entityId, params = {}) {
     level: 'campaign',
   };
   const merged = { ...defaults, ...params };
-  const data = await metaGet(`/${entityId}/insights`, merged);
-  return data.data || [];
+  return metaGetAll(`/${entityId}/insights`, merged, { maxPages: 50 });
 }
 
 async function getInsightsRange(entityId, since, until, level = 'campaign') {
@@ -138,6 +166,7 @@ function parseActionValues(actionValues) {
 
 module.exports = {
   metaGet,
+  metaGetAll,
   metaPost,
   getAdAccounts,
   getCampaigns,

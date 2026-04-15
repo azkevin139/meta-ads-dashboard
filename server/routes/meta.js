@@ -3,6 +3,11 @@ const router = express.Router();
 const metaApi = require('../services/metaApi');
 const config = require('../config');
 
+function withMetaMeta(data) {
+  const paging = data && data._paging ? data._paging : null;
+  return paging ? { data, meta: { paging } } : { data };
+}
+
 // Role guard for write operations
 function adminOrOperator(req, res, next) {
   if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
@@ -15,7 +20,7 @@ function adminOrOperator(req, res, next) {
 router.get('/accounts', async (req, res) => {
   try {
     const accounts = await metaApi.getAdAccounts();
-    res.json({ data: accounts });
+    res.json(withMetaMeta(accounts));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -26,7 +31,7 @@ router.get('/campaigns', async (req, res) => {
   try {
     const accountId = req.query.accountId || config.meta.adAccountId;
     const campaigns = await metaApi.getCampaigns(accountId);
-    res.json({ data: campaigns });
+    res.json(withMetaMeta(campaigns));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -38,7 +43,7 @@ router.get('/adsets', async (req, res) => {
     const { campaignId } = req.query;
     if (!campaignId) return res.status(400).json({ error: 'campaignId required' });
     const adsets = await metaApi.getAdSets(campaignId);
-    res.json({ data: adsets });
+    res.json(withMetaMeta(adsets));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -50,7 +55,7 @@ router.get('/ads', async (req, res) => {
     const { adSetId } = req.query;
     if (!adSetId) return res.status(400).json({ error: 'adSetId required' });
     const ads = await metaApi.getAds(adSetId);
-    res.json({ data: ads });
+    res.json(withMetaMeta(ads));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -71,7 +76,7 @@ router.get('/insights', async (req, res) => {
         level: level || 'campaign',
       });
     }
-    res.json({ data: insights });
+    res.json(withMetaMeta(insights));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -131,7 +136,7 @@ router.get('/live', async (req, res) => {
     }
 
     const data = await metaApi.getInsights(config.meta.adAccountId, params);
-    res.json({ data });
+    res.json(withMetaMeta(data));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -146,7 +151,7 @@ router.get('/today', async (req, res) => {
       level: level,
       fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
     });
-    res.json({ data });
+    res.json(withMetaMeta(data));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

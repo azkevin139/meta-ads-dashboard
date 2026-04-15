@@ -247,7 +247,80 @@ async function adsetDuplicate(adsetId) {
   try { await apiPost(`/meta/entity/adset/${adsetId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Ad set duplicated', 'success'); closeDrawer(); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 
-function openCreateAdSet(campaignId) { navigateTo('adsets', { ...pageState, createAdSetCampaignId: campaignId }); toast('Use the existing create drawer if you still need it. Edit flow is now available for existing ad sets.', 'info'); }
+async function openCreateAdSet(campaignId) {
+  openDrawer('Create Ad Set', '<div class="loading">Loading conversion assets…</div>');
+  let pixels = [];
+  try {
+    const pixelsRes = await apiGet('/create/pixels');
+    pixels = pixelsRes.data || [];
+  } catch (e) {}
+
+  setDrawerBody(`
+    <div class="form-group"><label class="form-label">Name</label><input id="cas-name" class="form-input" placeholder="e.g. CA Sportsbook Checkout - Broad - V1" /></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Daily Budget</label><input id="cas-daily-budget" class="form-input" type="number" step="0.01" placeholder="50.00" /></div>
+      <div class="form-group"><label class="form-label">Status</label><select id="cas-status" class="form-select"><option value="PAUSED">Paused</option><option value="ACTIVE">Active</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Optimization Goal</label><select id="cas-optimization" class="form-select">${['OFFSITE_CONVERSIONS','LANDING_PAGE_VIEWS','LINK_CLICKS','REACH','IMPRESSIONS'].map(v => `<option value="${v}">${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+      <div class="form-group"><label class="form-label">Billing Event</label><select id="cas-billing" class="form-select"><option value="IMPRESSIONS">IMPRESSIONS</option><option value="LINK_CLICKS">LINK CLICKS</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Pixel / Dataset</label><select id="cas-pixel" class="form-select"><option value="">No pixel selected</option>${pixels.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`).join('')}</select></div>
+      <div class="form-group"><label class="form-label">Conversion Event</label><select id="cas-event" class="form-select">${['INITIATE_CHECKOUT','PURCHASE','LEAD','COMPLETE_REGISTRATION','ADD_TO_CART','VIEW_CONTENT'].map(v => `<option value="${v}">${v.replace(/_/g,' ')}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Countries</label><input id="cas-countries" class="form-input" value="CA" placeholder="CA, US" /></div>
+      <div class="form-group"><label class="form-label">Age</label><div style="display:flex; gap:8px;"><input id="cas-age-min" class="form-input" type="number" value="18" /><input id="cas-age-max" class="form-input" type="number" value="65" /></div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Gender</label><select id="cas-gender" class="form-select"><option value="all">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
+      <div class="form-group"><label class="form-label">Placements</label><select id="cas-placement-mode" class="form-select"><option value="auto">Automatic</option><option value="manual">Facebook + Instagram Feeds/Reels/Stories</option></select></div>
+    </div>
+    <div class="form-group"><label class="form-label">Custom Audience IDs</label><input id="cas-custom-audiences" class="form-input" placeholder="123, 456" /></div>
+    <div class="form-group"><label class="form-label">Excluded Audience IDs</label><input id="cas-excluded-audiences" class="form-input" placeholder="789" /></div>
+    <div style="display:flex; gap:8px; margin-top:18px;"><button class="btn btn-primary" onclick="submitCreateAdSet('${campaignId}')">Create Ad Set</button><button class="btn" onclick="closeDrawer()">Cancel</button></div>
+  `);
+}
+
+async function submitCreateAdSet(campaignId) {
+  const name = document.getElementById('cas-name').value.trim();
+  if (!name) { toast('Ad set name required', 'error'); return; }
+  const gender = document.getElementById('cas-gender').value;
+  const placementMode = document.getElementById('cas-placement-mode').value;
+  const payload = {
+    accountId: ACCOUNT_ID,
+    campaignId,
+    name,
+    status: document.getElementById('cas-status').value,
+    dailyBudget: blankToUndefined(document.getElementById('cas-daily-budget').value),
+    optimizationGoal: document.getElementById('cas-optimization').value,
+    billingEvent: document.getElementById('cas-billing').value,
+    pixelId: document.getElementById('cas-pixel').value || undefined,
+    customEventType: document.getElementById('cas-event').value,
+    ageMin: parseInt(document.getElementById('cas-age-min').value, 10) || 18,
+    ageMax: parseInt(document.getElementById('cas-age-max').value, 10) || 65,
+    genders: gender === 'all' ? [] : [parseInt(gender, 10)],
+    geoLocations: { countries: csvStrings(document.getElementById('cas-countries').value) },
+    customAudiences: csvStrings(document.getElementById('cas-custom-audiences').value),
+    excludedCustomAudiences: csvStrings(document.getElementById('cas-excluded-audiences').value),
+  };
+  if (placementMode === 'manual') {
+    payload.publisherPlatforms = ['facebook', 'instagram'];
+    payload.facebookPositions = ['feed', 'facebook_reels', 'story'];
+    payload.instagramPositions = ['stream', 'reels', 'story'];
+    payload.devicePlatforms = ['mobile'];
+  }
+  try {
+    toast('Creating ad set...', 'info');
+    await apiPost('/create/adset', payload);
+    toast('Ad set created', 'success');
+    closeDrawer();
+    navigateTo('adsets', pageState);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
 
 function csvStrings(value) { return (value || '').split(',').map(s => s.trim()).filter(Boolean); }
 function csvNumbers(value) { return csvStrings(value).map(v => parseInt(v, 10)).filter(Boolean); }

@@ -76,10 +76,16 @@ async function loadSettings(container) {
   }
 
   try {
-    const overview = await apiGet(`/insights/overview?accountId=${ACCOUNT_ID}&days=30`);
+    const [overview, context] = await Promise.all([
+      apiGet(`/insights/overview?accountId=${ACCOUNT_ID}&days=30`),
+      apiGet('/intelligence/account-context').catch(() => null),
+    ]);
+    const account = context?.internal_account || {};
     document.getElementById('account-info').innerHTML = `
       <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.8;">
         <div><span class="text-muted">Account ID:</span> Internal #${ACCOUNT_ID}</div>
+        <div><span class="text-muted">Meta Account:</span> ${account.meta_account_id || context?.configured_meta_account_id || '—'}</div>
+        <div><span class="text-muted">Name:</span> ${account.name || '—'}</div>
         <div><span class="text-muted">30-day data:</span> ${overview.overview?.days_with_data || 0} days</div>
         <div><span class="text-muted">30-day spend:</span> ${fmt(overview.overview?.total_spend, 'currency')}</div>
       </div>

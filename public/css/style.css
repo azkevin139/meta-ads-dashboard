@@ -323,6 +323,7 @@ tbody td.name-cell a:hover {
 .badge-paused  { background: var(--yellow-dim); color: var(--yellow); }
 .badge-error   { background: var(--red-dim); color: var(--red); }
 .badge-critical { background: var(--red-dim); color: var(--red); }
+.badge-warning { background: var(--yellow-dim); color: var(--yellow); }
 .badge-high    { background: rgba(251,146,60,0.12); color: var(--orange); }
 .badge-medium  { background: var(--yellow-dim); color: var(--yellow); }
 .badge-low     { background: rgba(79,143,247,0.1); color: var(--accent); }
@@ -670,6 +671,7 @@ tbody td.name-cell a:hover {
   .page-body { padding: 16px; }
   .page-header { padding: 0 16px; }
   .admin-grid { grid-template-columns: 1fr !important; }
+  .grid-two { grid-template-columns: 1fr !important; }
 
   /* Drawer full-width on mobile */
   .drawer { width: 100%; max-width: 100%; right: -100%; }
@@ -691,6 +693,7 @@ tbody td.name-cell a:hover {
   tbody td { padding: 9px 10px; }
   .btn-sm { padding: 4px 8px; font-size: 0.68rem; }
   .btn-group { gap: 4px; }
+  .mobile-nav-item { font-size: 0.58rem; padding-left: 2px; padding-right: 2px; }
 }
 
 /* ─── SCROLLBAR ────────────────────────────────────────── */
@@ -822,4 +825,3 @@ tbody td.name-cell a:hover {
   color: var(--text-muted);
   padding: 0 22px 16px;
 }
-

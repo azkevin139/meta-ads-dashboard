@@ -17,6 +17,7 @@ const metaRateRoutes = require('./routes/metaRate');
 const metaEntityRoutes = require('./routes/metaEntity');
 const insightsRoutes = require('./routes/insights');
 const aiRoutes = require('./routes/ai');
+const intelligenceRoutes = require('./routes/intelligence');
 const actionsRoutes = require('./routes/actions');
 const logsRoutes = require('./routes/logs');
 
@@ -73,6 +74,7 @@ app.use('/api/meta', metaEntityRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/insights', insightsRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/intelligence', intelligenceRoutes);
 app.use('/api/actions', actionsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/create', createRoutes);

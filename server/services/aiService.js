@@ -1,6 +1,7 @@
 const fetch = require('node-fetch');
 const config = require('../config');
 const { queryAll, queryOne, query } = require('../db');
+const intelligence = require('./intelligenceService');
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -148,11 +149,31 @@ async function buildAnalysisContext(accountId) {
     } : null,
   }));
 
+  let liveDecisionContext = null;
+  try {
+    const rules = await intelligence.getDecisionRules({ preset: 'yesterday' });
+    liveDecisionContext = {
+      targets: intelligence.readTargets(),
+      queues: Object.fromEntries(Object.entries(rules.queues || {}).map(([key, value]) => [key, value.length])),
+      top_recommendations: (rules.data || []).slice(0, 20).map(item => ({
+        name: item.name,
+        spend: item.spend,
+        results: item.results,
+        cpa: item.cpa,
+        confidence: item.confidence,
+        recommendation: item.recommendations && item.recommendations[0],
+      })),
+    };
+  } catch (err) {
+    liveDecisionContext = { error: err.message };
+  }
+
   return {
     account: account.name,
     currency: account.currency,
     date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
     entities,
+    live_decision_context: liveDecisionContext,
   };
 }
 
