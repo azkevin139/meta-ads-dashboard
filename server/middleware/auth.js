@@ -1,5 +1,12 @@
 const authService = require('../services/authService');
 const accountService = require('../services/accountService');
+const { parseCookies } = require('../utils/cookies');
+
+function readSessionToken(req) {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) return authHeader.slice(7);
+  return parseCookies(req.headers.cookie || '').session_token || '';
+}
 
 async function authMiddleware(req, res, next) {
   // Skip auth for public auth, health, tracking, and webhook endpoints.
@@ -8,7 +15,7 @@ async function authMiddleware(req, res, next) {
   }
 
   // Token from Authorization header ONLY (no query string)
-  const token = (req.headers.authorization || '').replace('Bearer ', '');
+  const token = readSessionToken(req);
 
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });

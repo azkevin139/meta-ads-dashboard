@@ -2,16 +2,22 @@
    Ad Sets Page — editor driven
    ═══════════════════════════════════════════════════════════ */
 
-let selectedAdSets = new Set();
+const adsetEditorUtils = window.EditorUtils;
+const adsetBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
+  checkboxSelector: '.adset-check',
+  barId: 'adset-bulk-bar',
+  countId: 'adset-bulk-count',
+});
+
 let adsetDrawerSection = 'identity';
 
 async function loadAdSets(container) {
   const metaCampaignId = pageState.metaCampaignId || pageState.campaignId;
   const campaignName = pageState.campaignName || 'Campaign';
-  selectedAdSets.clear();
+  adsetBulkSelection.clear();
 
   if (!metaCampaignId) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📂</div><div class="empty-state-text">Select a campaign first</div><button class="btn mt-md" onclick="navigateTo(\'campaigns\')">← Go to Campaigns</button></div>';
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📂</div><div class="empty-state-text">Select a campaign first</div><button class="btn mt-md" data-adset-nav="campaigns">← Go to Campaigns</button></div>';
     return;
   }
 
@@ -20,21 +26,22 @@ async function loadAdSets(container) {
   container.innerHTML = `
     <div class="flex-between mb-md">
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-sm" onclick="navigateTo('campaigns')">← Back</button>
-        <button class="btn btn-primary btn-sm" onclick="openCreateAdSet('${metaCampaignId}')">+ New Ad Set</button>
+        <button class="btn btn-sm" data-adset-nav="campaigns">← Back</button>
+        <button class="btn btn-primary btn-sm" data-adset-create="${metaCampaignId}">+ New Ad Set</button>
       </div>
     </div>
     <div id="adset-bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px;">
       <span id="adset-bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
-      <button class="btn btn-sm btn-danger" onclick="bulkAdSetAction('pause')">Pause</button>
-      <button class="btn btn-sm" onclick="bulkAdSetAction('resume')">Resume</button>
-      <button class="btn btn-sm" onclick="clearAdSetSelection()">Clear</button>
+      <button class="btn btn-sm btn-danger" data-adset-bulk="pause">Pause</button>
+      <button class="btn btn-sm" data-adset-bulk="resume">Resume</button>
+      <button class="btn btn-sm" data-adset-bulk="clear">Clear</button>
     </div>
     <div class="table-container">
       <div class="table-header"><span class="table-title">Ad Sets</span><span class="badge badge-active" style="font-size: 0.7rem;">LIVE</span></div>
       <div id="adsets-table"><div class="loading">Loading ad sets</div></div>
     </div>
   `;
+  bindAdSetControls(container);
 
   try {
     const res = await apiGet(`/meta/adsets?campaignId=${metaCampaignId}`);
@@ -42,7 +49,8 @@ async function loadAdSets(container) {
 
     let insightsMap = {};
     try {
-      const insRes = await apiGet(`/meta/live?level=adset&since=${campDateFrom || daysAgoStr(1)}&until=${campDateTo || daysAgoStr(1)}`);
+      const campaignRange = window.getCampaignDateRange ? window.getCampaignDateRange() : { from: daysAgoStr(1), to: daysAgoStr(1) };
+      const insRes = await apiGet(`/meta/live?level=adset&since=${campaignRange.from}&until=${campaignRange.to}`);
       for (const row of (insRes.data || [])) if (row.adset_id) insightsMap[row.adset_id] = row;
     } catch (e) {}
 
@@ -53,20 +61,20 @@ async function loadAdSets(container) {
 
     document.getElementById('adsets-table').innerHTML = `
       <div style="overflow-x: auto;"><table><thead><tr>
-        <th style="width:36px;"><input type="checkbox" onchange="toggleAllAdSets(this, ${JSON.stringify(adsets.map(a => a.id)).replace(/"/g, '&quot;')})" /></th>
+        <th style="width:36px;"><input type="checkbox" data-adset-toggle-all='${escapeHtml(JSON.stringify(adsets.map(a => a.id)))}' /></th>
         <th>Ad Set</th><th>Status</th><th class="right">Budget</th><th class="right">Spend</th>
         <th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Bid</th>
         <th class="right">Optimization</th><th>Actions</th>
       </tr></thead><tbody>
         ${adsets.map(a => {
           const ins = insightsMap[a.id] || {};
-          const result = parseResults(ins.actions);
+          const result = parseResults(ins.actions, a.desired_event);
           const cpr = parseCostPerResult(ins.cost_per_action_type, result.type);
           const spend = parseFloat(ins.spend) || 0;
           const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
           return `<tr>
-            <td><input type="checkbox" class="adset-check" value="${a.id}" onchange="updateAdSetSelection()" /></td>
-            <td class="name-cell"><a href="#" onclick="navigateTo('ads', {metaAdsetId:'${a.id}', adsetName:'${(a.name||'').replace(/'/g,"\\'")}', metaCampaignId:'${metaCampaignId}', campaignName:'${campaignName.replace(/'/g,"\\'")}'}); return false;">${a.name}</a></td>
+            <td><input type="checkbox" class="adset-check" value="${a.id}" /></td>
+            <td class="name-cell"><a href="#" data-adset-open="${a.id}" data-adset-name="${escapeHtml(a.name || '')}" data-campaign-id="${metaCampaignId}" data-campaign-name="${escapeHtml(campaignName || '')}">${a.name}</a></td>
             <td>${statusBadge(a.effective_status || a.status)}</td>
             <td class="right">${a.daily_budget ? fmtBudget(a.daily_budget) : a.lifetime_budget ? fmtBudget(a.lifetime_budget) + ' LT' : '—'}</td>
             <td class="right">${spend > 0 ? fmt(spend,'currency') : '—'}</td>
@@ -75,9 +83,9 @@ async function loadAdSets(container) {
             <td class="right">${a.bid_strategy ? a.bid_strategy.replace(/_/g,' ') : '—'}</td>
             <td class="right">${a.optimization_goal ? a.optimization_goal.replace(/_/g,' ') : '—'}</td>
             <td><div class="btn-group">
-              <button class="btn btn-sm btn-primary" onclick="openAdSetEditor('${a.id}')">Edit</button>
-              <button class="btn btn-sm" onclick="adsetStatusAction('${a.id}','${(a.effective_status || a.status) === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}')">${(a.effective_status || a.status) === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
-              <button class="btn btn-sm" onclick="adsetDuplicate('${a.id}')">Dup</button>
+              <button class="btn btn-sm btn-primary" data-adset-edit="${a.id}">Edit</button>
+              <button class="btn btn-sm" data-adset-status="${a.id}" data-adset-next-status="${(a.effective_status || a.status) === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">${(a.effective_status || a.status) === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
+              <button class="btn btn-sm" data-adset-duplicate="${a.id}">Dup</button>
             </div></td>
           </tr>`;
         }).join('')}
@@ -88,18 +96,49 @@ async function loadAdSets(container) {
   }
 }
 
-function toggleAllAdSets(cb, ids) { document.querySelectorAll('.adset-check').forEach(c => { c.checked = cb.checked; }); selectedAdSets = cb.checked ? new Set(ids) : new Set(); updateAdSetBulkBar(); }
-function updateAdSetSelection() { selectedAdSets.clear(); document.querySelectorAll('.adset-check:checked').forEach(c => selectedAdSets.add(c.value)); updateAdSetBulkBar(); }
-function clearAdSetSelection() { selectedAdSets.clear(); document.querySelectorAll('.adset-check').forEach(c => { c.checked = false; }); updateAdSetBulkBar(); }
-function updateAdSetBulkBar() { const bar = document.getElementById('adset-bulk-bar'); const count = document.getElementById('adset-bulk-count'); if (selectedAdSets.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedAdSets.size} selected`; } else { bar.style.display = 'none'; } }
+function toggleAllAdSets(cb, ids) { adsetBulkSelection.toggleAll(ids, cb.checked); }
+function updateAdSetSelection() { adsetBulkSelection.sync(); }
+function clearAdSetSelection() { adsetBulkSelection.clear(); }
 async function bulkAdSetAction(action) {
-  if (!selectedAdSets.size) return;
+  if (!adsetBulkSelection.size()) return;
   const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE';
   try {
-    for (const id of selectedAdSets) await apiPost(`/meta/entity/adset/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus });
-    toast(`Updated ${selectedAdSets.size} ad set(s)`, 'success');
+    for (const id of adsetBulkSelection.getSelected()) await apiPost(`/meta/entity/adset/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus });
+    toast(`Updated ${adsetBulkSelection.size()} ad set(s)`, 'success');
     navigateTo('adsets', pageState);
   } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+}
+function bindAdSetControls(container) {
+  container.addEventListener('change', (event) => {
+    if (event.target.matches('.adset-check')) updateAdSetSelection();
+    if (event.target.matches('[data-adset-toggle-all]')) {
+      toggleAllAdSets(event.target, JSON.parse(event.target.dataset.adsetToggleAll || '[]'));
+    }
+  });
+  container.addEventListener('click', (event) => {
+    const nav = event.target.closest('[data-adset-nav]');
+    if (nav) return navigateTo(nav.dataset.adsetNav);
+    const create = event.target.closest('[data-adset-create]');
+    if (create) return openCreateAdSet(create.dataset.adsetCreate);
+    const bulk = event.target.closest('[data-adset-bulk]');
+    if (bulk) return bulk.dataset.adsetBulk === 'clear' ? clearAdSetSelection() : bulkAdSetAction(bulk.dataset.adsetBulk);
+    const open = event.target.closest('[data-adset-open]');
+    if (open) {
+      event.preventDefault();
+      return navigateTo('ads', {
+        metaAdsetId: open.dataset.adsetOpen,
+        adsetName: open.dataset.adsetName || '',
+        metaCampaignId: open.dataset.campaignId || '',
+        campaignName: open.dataset.campaignName || '',
+      });
+    }
+    const edit = event.target.closest('[data-adset-edit]');
+    if (edit) return openAdSetEditor(edit.dataset.adsetEdit);
+    const status = event.target.closest('[data-adset-status]');
+    if (status) return adsetStatusAction(status.dataset.adsetStatus, status.dataset.adsetNextStatus);
+    const duplicate = event.target.closest('[data-adset-duplicate]');
+    if (duplicate) return adsetDuplicate(duplicate.dataset.adsetDuplicate);
+  });
 }
 
 async function openAdSetEditor(adsetId) {
@@ -145,8 +184,8 @@ function renderAdSetEditor(entity, pixels) {
 
     <div data-entity-section="schedule" style="display:${adsetDrawerSection === 'schedule' ? 'block' : 'none'};">
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Start Time</label><input id="ae-start-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.start_time)}" /></div>
-        <div class="form-group"><label class="form-label">End Time</label><input id="ae-end-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.end_time)}" /></div>
+        <div class="form-group"><label class="form-label">Start Time</label><input id="ae-start-time" class="form-input" type="datetime-local" value="${adsetEditorUtils.toLocalDateTime(entity.start_time)}" /></div>
+        <div class="form-group"><label class="form-label">End Time</label><input id="ae-end-time" class="form-input" type="datetime-local" value="${adsetEditorUtils.toLocalDateTime(entity.end_time)}" /></div>
       </div>
       <div class="form-group"><label class="form-label">Attribution (days)</label><select id="ae-attribution" class="form-select">${[1,7].map(v => `<option value="${v}" ${(entity.attribution_spec && entity.attribution_spec[0] && String(entity.attribution_spec[0].event_type || '').includes(`${v}d`)) ? 'selected' : ''}>${v} day click</option>`).join('')}</select></div>
     </div>
@@ -183,7 +222,7 @@ function renderAdSetEditor(entity, pixels) {
     <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px;">
       <button class="btn btn-primary" onclick="saveAdSetEditor('${entity.id}')">Publish</button>
       <button class="btn" onclick="adsetDuplicate('${entity.id}')">Duplicate</button>
-      <button class="btn" onclick="renderAdSetEditor(${safeJson(entity)}, ${safeJson(pixels)})">Revert</button>
+      <button class="btn" onclick="renderAdSetEditor(${adsetEditorUtils.safeJson(entity)}, ${adsetEditorUtils.safeJson(pixels)})">Revert</button>
       <button class="btn" onclick="closeDrawer()">Close</button>
     </div>
   `);
@@ -201,14 +240,14 @@ async function saveAdSetEditor(adsetId) {
     accountId: ACCOUNT_ID,
     name: document.getElementById('ae-name').value,
     status: document.getElementById('ae-status').value,
-    daily_budget: blankToUndefined(document.getElementById('ae-daily-budget').value),
-    lifetime_budget: blankToUndefined(document.getElementById('ae-lifetime-budget').value),
+    daily_budget: adsetEditorUtils.blankToUndefined(document.getElementById('ae-daily-budget').value),
+    lifetime_budget: adsetEditorUtils.blankToUndefined(document.getElementById('ae-lifetime-budget').value),
     bid_strategy: document.getElementById('ae-bid-strategy').value,
-    bid_amount: blankToUndefined(document.getElementById('ae-bid-amount').value),
+    bid_amount: adsetEditorUtils.blankToUndefined(document.getElementById('ae-bid-amount').value),
     optimization_goal: document.getElementById('ae-optimization-goal').value,
     billing_event: document.getElementById('ae-billing-event').value,
-    start_time: localDateTimeToIso(document.getElementById('ae-start-time').value),
-    end_time: localDateTimeToIso(document.getElementById('ae-end-time').value),
+    start_time: adsetEditorUtils.localDateTimeToIso(document.getElementById('ae-start-time').value),
+    end_time: adsetEditorUtils.localDateTimeToIso(document.getElementById('ae-end-time').value),
     attribution_spec: [{ event_type: `${document.getElementById('ae-attribution').value}d_click` }],
     promoted_object: {
       pixel_id: document.getElementById('ae-pixel').value || undefined,
@@ -218,18 +257,18 @@ async function saveAdSetEditor(adsetId) {
       age_min: parseInt(document.getElementById('ae-age-min').value) || 18,
       age_max: parseInt(document.getElementById('ae-age-max').value) || 65,
       genders: genderValue === 'all' ? [] : [parseInt(genderValue)],
-      locales: csvNumbers(document.getElementById('ae-locales').value),
-      geo_locations: { countries: csvStrings(document.getElementById('ae-geo-countries').value) },
-      excluded_geo_locations: { countries: csvStrings(document.getElementById('ae-geo-excluded').value) },
-      interests: parseJsonArray(document.getElementById('ae-interests').value),
-      custom_audiences: csvStrings(document.getElementById('ae-custom-audiences').value),
-      excluded_custom_audiences: csvStrings(document.getElementById('ae-excluded-audiences').value),
-      publisher_platforms: csvStrings(document.getElementById('ae-platforms').value),
-      facebook_positions: csvStrings(document.getElementById('ae-fb-pos').value),
-      instagram_positions: csvStrings(document.getElementById('ae-ig-pos').value),
-      device_platforms: csvStrings(document.getElementById('ae-device-platforms').value),
+      locales: adsetEditorUtils.csvNumbers(document.getElementById('ae-locales').value),
+      geo_locations: { countries: adsetEditorUtils.csvStrings(document.getElementById('ae-geo-countries').value) },
+      excluded_geo_locations: { countries: adsetEditorUtils.csvStrings(document.getElementById('ae-geo-excluded').value) },
+      interests: adsetEditorUtils.parseJsonArray(document.getElementById('ae-interests').value),
+      custom_audiences: adsetEditorUtils.csvStrings(document.getElementById('ae-custom-audiences').value),
+      excluded_custom_audiences: adsetEditorUtils.csvStrings(document.getElementById('ae-excluded-audiences').value),
+      publisher_platforms: adsetEditorUtils.csvStrings(document.getElementById('ae-platforms').value),
+      facebook_positions: adsetEditorUtils.csvStrings(document.getElementById('ae-fb-pos').value),
+      instagram_positions: adsetEditorUtils.csvStrings(document.getElementById('ae-ig-pos').value),
+      device_platforms: adsetEditorUtils.csvStrings(document.getElementById('ae-device-platforms').value),
     },
-    internal_tags: tagsToArray(document.getElementById('ae-tags').value),
+    internal_tags: adsetEditorUtils.tagsToArray(document.getElementById('ae-tags').value),
   };
   if (!payload.promoted_object.pixel_id) delete payload.promoted_object.pixel_id;
   try {
@@ -250,6 +289,8 @@ async function adsetDuplicate(adsetId) {
 async function openCreateAdSet(campaignId) {
   openDrawer('Create Ad Set', '<div class="loading">Loading conversion assets…</div>');
   let pixels = [];
+  const pendingAudienceIds = localStorage.getItem('pending_custom_audience_ids') || '';
+  const pendingAudienceName = localStorage.getItem('pending_custom_audience_name') || '';
   try {
     const pixelsRes = await apiGet('/create/pixels');
     pixels = pixelsRes.data || [];
@@ -277,7 +318,8 @@ async function openCreateAdSet(campaignId) {
       <div class="form-group"><label class="form-label">Gender</label><select id="cas-gender" class="form-select"><option value="all">All</option><option value="1">Male</option><option value="2">Female</option></select></div>
       <div class="form-group"><label class="form-label">Placements</label><select id="cas-placement-mode" class="form-select"><option value="auto">Automatic</option><option value="manual">Facebook + Instagram Feeds/Reels/Stories</option></select></div>
     </div>
-    <div class="form-group"><label class="form-label">Custom Audience IDs</label><input id="cas-custom-audiences" class="form-input" placeholder="123, 456" /></div>
+    ${pendingAudienceIds ? `<div class="alert-banner alert-info">Using audience: ${escapeHtml(pendingAudienceName || pendingAudienceIds)}</div>` : ''}
+    <div class="form-group"><label class="form-label">Custom Audience IDs</label><input id="cas-custom-audiences" class="form-input" value="${escapeHtml(pendingAudienceIds)}" placeholder="123, 456" /></div>
     <div class="form-group"><label class="form-label">Excluded Audience IDs</label><input id="cas-excluded-audiences" class="form-input" placeholder="789" /></div>
     <div style="display:flex; gap:8px; margin-top:18px;"><button class="btn btn-primary" onclick="submitCreateAdSet('${campaignId}')">Create Ad Set</button><button class="btn" onclick="closeDrawer()">Cancel</button></div>
   `);
@@ -293,7 +335,7 @@ async function submitCreateAdSet(campaignId) {
     campaignId,
     name,
     status: document.getElementById('cas-status').value,
-    dailyBudget: blankToUndefined(document.getElementById('cas-daily-budget').value),
+    dailyBudget: adsetEditorUtils.blankToUndefined(document.getElementById('cas-daily-budget').value),
     optimizationGoal: document.getElementById('cas-optimization').value,
     billingEvent: document.getElementById('cas-billing').value,
     pixelId: document.getElementById('cas-pixel').value || undefined,
@@ -301,9 +343,9 @@ async function submitCreateAdSet(campaignId) {
     ageMin: parseInt(document.getElementById('cas-age-min').value, 10) || 18,
     ageMax: parseInt(document.getElementById('cas-age-max').value, 10) || 65,
     genders: gender === 'all' ? [] : [parseInt(gender, 10)],
-    geoLocations: { countries: csvStrings(document.getElementById('cas-countries').value) },
-    customAudiences: csvStrings(document.getElementById('cas-custom-audiences').value),
-    excludedCustomAudiences: csvStrings(document.getElementById('cas-excluded-audiences').value),
+    geoLocations: { countries: adsetEditorUtils.csvStrings(document.getElementById('cas-countries').value) },
+    customAudiences: adsetEditorUtils.csvStrings(document.getElementById('cas-custom-audiences').value),
+    excludedCustomAudiences: adsetEditorUtils.csvStrings(document.getElementById('cas-excluded-audiences').value),
   };
   if (placementMode === 'manual') {
     payload.publisherPlatforms = ['facebook', 'instagram'];
@@ -314,6 +356,8 @@ async function submitCreateAdSet(campaignId) {
   try {
     toast('Creating ad set...', 'info');
     await apiPost('/create/adset', payload);
+    localStorage.removeItem('pending_custom_audience_ids');
+    localStorage.removeItem('pending_custom_audience_name');
     toast('Ad set created', 'success');
     closeDrawer();
     navigateTo('adsets', pageState);
@@ -321,9 +365,3 @@ async function submitCreateAdSet(campaignId) {
     toast(`Error: ${err.message}`, 'error');
   }
 }
-
-function csvStrings(value) { return (value || '').split(',').map(s => s.trim()).filter(Boolean); }
-function csvNumbers(value) { return csvStrings(value).map(v => parseInt(v, 10)).filter(Boolean); }
-function parseJsonArray(value) { try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch (e) { return []; } }
-function blankToUndefined(v) { return v === '' ? undefined : parseFloat(v); }
-function tagsToArray(v) { return (v || '').split(',').map(s => s.trim()).filter(Boolean); }

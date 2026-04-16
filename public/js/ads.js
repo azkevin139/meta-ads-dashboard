@@ -2,14 +2,23 @@
    Ads Page — bulk + create + edit
    ═══════════════════════════════════════════════════════════ */
 
-let selectedAds = new Set();
+const adsBulk = window.AdsBulkHelpers.createAdsBulk({
+  getPageState: () => pageState,
+});
+const adsCreative = window.AdsCreativeHelpers.createAdsCreative();
+const adsBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
+  checkboxSelector: '.ad-check',
+  barId: 'ad-bulk-bar',
+  countId: 'ad-bulk-count',
+});
 
 async function loadAds(container) {
   const metaAdsetId = pageState.metaAdsetId || pageState.adsetId;
   const adsetName = pageState.adsetName || 'Ad Set';
   const metaCampaignId = pageState.metaCampaignId;
   const campaignName = pageState.campaignName || 'Campaign';
-  selectedAds.clear();
+  adsBulkSelection.clear();
+  adsBulk.init(adsBulkSelection);
 
   if (!metaAdsetId) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎨</div><div class="empty-state-text">Select an ad set first</div><button class="btn mt-md" onclick="navigateTo(\'campaigns\')">← Go to Campaigns</button></div>';
@@ -40,7 +49,8 @@ async function loadAds(container) {
 
     let insightsMap = {};
     try {
-      const insRes = await apiGet(`/meta/live?level=ad&since=${campDateFrom || daysAgoStr(1)}&until=${campDateTo || daysAgoStr(1)}`);
+      const campaignRange = window.getCampaignDateRange ? window.getCampaignDateRange() : { from: daysAgoStr(1), to: daysAgoStr(1) };
+      const insRes = await apiGet(`/meta/live?level=ad&since=${campaignRange.from}&until=${campaignRange.to}`);
       for (const row of (insRes.data || [])) { if (row.ad_id) insightsMap[row.ad_id] = row; }
     } catch (e) {}
 
@@ -55,7 +65,8 @@ async function loadAds(container) {
       </div>
     `;
 
-    for (const ad of ads) { loadAdCreative(ad.id); }
+    bindAdsControls(container);
+    for (const ad of ads) { adsCreative.loadAdCreative(ad.id); }
   } catch (err) {
     document.getElementById('ads-grid').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
   }
@@ -64,27 +75,13 @@ async function loadAds(container) {
 // ─── BULK ─────────────────────────────────────────────────
 
 function updateAdSelection() {
-  selectedAds.clear();
-  document.querySelectorAll('.ad-check:checked').forEach(c => selectedAds.add(c.value));
-  const bar = document.getElementById('ad-bulk-bar');
-  const count = document.getElementById('ad-bulk-count');
-  if (selectedAds.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedAds.size} selected`; }
-  else { bar.style.display = 'none'; }
+  adsBulkSelection.sync();
 }
 function clearAdSelection() {
-  selectedAds.clear();
-  document.querySelectorAll('.ad-check').forEach(c => { c.checked = false; });
-  document.getElementById('ad-bulk-bar').style.display = 'none';
+  adsBulkSelection.clear();
 }
 async function bulkAdAction(action) {
-  if (selectedAds.size === 0) return;
-  if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${selectedAds.size} ad(s)?`)) return;
-  try {
-    toast('Processing...', 'info');
-    const res = await apiPost('/create/bulk-action', { entityIds: Array.from(selectedAds), entityType: 'ad', action });
-    toast(res.message, 'success');
-    navigateTo('ads', pageState);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+  return adsBulk.bulkAdAction(action);
 }
 
 // ─── AD CARD ──────────────────────────────────────────────
@@ -139,35 +136,13 @@ function adCard(ad, ins) {
   `;
 }
 
-// ─── LOAD CREATIVE ────────────────────────────────────────
-
-async function loadAdCreative(metaAdId) {
-  const imgEl = document.getElementById(`creative-${metaAdId}`);
-  const detailEl = document.getElementById(`details-${metaAdId}`);
-  try {
-    const res = await apiGet(`/meta/ad-detail?adId=${metaAdId}`);
-    if (imgEl) {
-      const imgUrl = res.image_url || res.thumbnail_url;
-      imgEl.innerHTML = imgUrl
-        ? `<img src="${imgUrl}" alt="Creative" style="width:100%; max-height:350px; object-fit:contain; border-radius:6px; background:var(--bg-base);" onerror="this.parentElement.innerHTML='<div style=\\'padding:30px; text-align:center; color:var(--text-muted);\\'>Preview not available</div>'" />`
-        : '<div style="padding:30px; text-align:center; color:var(--text-muted);">Preview not available</div>';
-    }
-    if (detailEl) {
-      detailEl.innerHTML = `<div style="font-size:0.8rem; line-height:1.7;">
-        ${res.headline ? `<div><span class="kpi-label" style="display:inline;">Headline:</span> ${res.headline}</div>` : ''}
-        ${res.primary_text ? `<div><span class="kpi-label" style="display:inline;">Primary Text:</span> <span class="text-secondary">${truncate(res.primary_text,150)}</span></div>` : ''}
-        ${res.cta ? `<div><span class="kpi-label" style="display:inline;">CTA:</span> ${res.cta.replace(/_/g,' ')}</div>` : ''}
-        ${res.link_url ? `<div><span class="kpi-label" style="display:inline;">Link:</span> <a href="${res.link_url}" target="_blank" style="font-size:0.75rem;">${truncate(res.link_url,50)}</a></div>` : ''}
-      </div>`;
-    }
-  } catch (e) {
-    if (imgEl) imgEl.innerHTML = '<div style="padding:30px; text-align:center; color:var(--text-muted);">Preview not available</div>';
-    if (detailEl) detailEl.innerHTML = '';
-  }
-}
-
 function truncate(str, len) { return str && str.length > len ? str.substring(0, len) + '...' : str || ''; }
 function escapeHtml(str) { return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function bindAdsControls(container) {
+  container.addEventListener('change', (event) => {
+    if (event.target.matches('.ad-check')) updateAdSelection();
+  });
+}
 
 // ─── CREATE AD DRAWER ─────────────────────────────────────
 
@@ -311,7 +286,7 @@ async function saveAdEdit(metaAdId, creativeId) {
     await apiPost('/meta/update-ad', { adId: metaAdId, creativeId, headline, primaryText, description, cta, linkUrl });
     toast('Ad updated', 'success');
     closeDrawer();
-    loadAdCreative(metaAdId);
+    adsCreative.loadAdCreative(metaAdId);
   } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 

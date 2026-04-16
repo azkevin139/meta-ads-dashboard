@@ -3,6 +3,7 @@ const { sendError } = require('../errorResponse');
 const router = express.Router();
 const actionService = require('../services/actionService');
 const metaUsage = require('../services/metaUsageService');
+const { ensureNonEmptyString, ensureObject, optionalNumber } = require('../validation');
 
 // Role guard — only operators and admins can make changes
 function adminOrOperator(req, res, next) {
@@ -26,10 +27,10 @@ async function ensureSafeWrite(req, res) {
 router.post('/pause', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const { accountId, entityType, metaEntityId } = req.body;
-    if (!entityType || !metaEntityId) {
-      return res.status(400).json({ error: 'entityType and metaEntityId required' });
-    }
+    const body = ensureObject(req.body);
+    const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
+    const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
+    const accountId = body.accountId;
     const result = await actionService.pauseEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
     res.json(result);
   } catch (err) {
@@ -41,10 +42,10 @@ router.post('/pause', adminOrOperator, async (req, res) => {
 router.post('/resume', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const { accountId, entityType, metaEntityId } = req.body;
-    if (!entityType || !metaEntityId) {
-      return res.status(400).json({ error: 'entityType and metaEntityId required' });
-    }
+    const body = ensureObject(req.body);
+    const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
+    const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
+    const accountId = body.accountId;
     const result = await actionService.resumeEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
     res.json(result);
   } catch (err) {
@@ -57,11 +58,11 @@ router.post('/resume', adminOrOperator, async (req, res) => {
 router.post('/budget', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const { accountId, metaAdSetId, newBudget } = req.body;
-    if (!metaAdSetId || newBudget === undefined) {
-      return res.status(400).json({ error: 'metaAdSetId and newBudget required' });
-    }
-    const result = await actionService.updateBudget(accountId || 1, metaAdSetId, parseFloat(newBudget), req.metaAccount);
+    const body = ensureObject(req.body);
+    const metaAdSetId = ensureNonEmptyString(body.metaAdSetId, 'metaAdSetId required');
+    const newBudget = optionalNumber(body.newBudget, 'newBudget must be numeric');
+    if (newBudget === undefined) return res.status(400).json({ error: 'newBudget required' });
+    const result = await actionService.updateBudget(body.accountId || 1, metaAdSetId, newBudget, req.metaAccount);
     res.json(result);
   } catch (err) {
     sendError(res, err);
@@ -73,10 +74,10 @@ router.post('/budget', adminOrOperator, async (req, res) => {
 router.post('/duplicate', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const { accountId, entityType, metaEntityId } = req.body;
-    if (!entityType || !metaEntityId) {
-      return res.status(400).json({ error: 'entityType and metaEntityId required' });
-    }
+    const body = ensureObject(req.body);
+    const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
+    const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
+    const accountId = body.accountId;
     const result = await actionService.duplicateEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
     res.json(result);
   } catch (err) {

@@ -1,9 +1,39 @@
 const fetch = require('node-fetch');
 const config = require('../config');
 const metaUsage = require('./metaUsageService');
+let metaCache; // lazy-loaded to avoid circular require
+function getCache() {
+  if (!metaCache) metaCache = require('./metaCache');
+  return metaCache;
+}
 
 let cooldownUntil = 0;
 let cooldownMessage = null;
+
+// Per-account serial queue. Calls to the same account are processed one-at-a-time
+// with a small delay between them. Calls to different accounts run concurrently.
+const accountQueues = new Map(); // accountKey → Promise chain
+const CALL_SPACING_MS = parseInt(process.env.META_CALL_SPACING_MS, 10) || 250;
+
+function queueForAccount(accountKey, fn) {
+  const prev = accountQueues.get(accountKey) || Promise.resolve();
+  const next = prev.then(async () => {
+    const result = await fn();
+    await new Promise(r => setTimeout(r, CALL_SPACING_MS));
+    return result;
+  }, async () => {
+    // If the prev call errored, still run this one (queue errors don't cascade).
+    const result = await fn();
+    await new Promise(r => setTimeout(r, CALL_SPACING_MS));
+    return result;
+  });
+  accountQueues.set(accountKey, next.catch(() => {})); // swallow at tail
+  return next;
+}
+
+function accountKeyFromContext(context = {}) {
+  return context.id || context.meta_account_id || contextAccountId(context) || 'default';
+}
 
 function contextBase(context = {}) {
   return `https://graph.facebook.com/${context.apiVersion || config.meta.apiVersion || 'v21.0'}`;
@@ -64,16 +94,22 @@ function assertNotCoolingDown() {
   cooldownMessage = null;
 }
 
+function getCooldownRemainingSeconds() {
+  return Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+}
+
 async function metaGet(endpoint, params = {}, context = {}) {
   assertNotCoolingDown();
-  const url = new URL(`${contextBase(context)}${endpoint}`);
-  url.searchParams.set('access_token', contextToken(context));
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) url.searchParams.set(k, v);
-  }
-
-  const res = await fetch(url.toString());
-  return parseResponse(res, { source: 'meta_get', method: 'GET', endpoint });
+  return queueForAccount(accountKeyFromContext(context), async () => {
+    assertNotCoolingDown();
+    const url = new URL(`${contextBase(context)}${endpoint}`);
+    url.searchParams.set('access_token', contextToken(context));
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) url.searchParams.set(k, v);
+    }
+    const res = await fetch(url.toString());
+    return parseResponse(res, { source: 'meta_get', method: 'GET', endpoint });
+  });
 }
 
 async function metaGetAll(endpoint, params = {}, options = {}, context = {}) {
@@ -111,42 +147,190 @@ async function metaGetAll(endpoint, params = {}, options = {}, context = {}) {
 
 async function metaPost(endpoint, body = {}, context = {}) {
   assertNotCoolingDown();
-  const url = `${contextBase(context)}${endpoint}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ access_token: contextToken(context), ...body }),
+  return queueForAccount(accountKeyFromContext(context), async () => {
+    assertNotCoolingDown();
+    const url = `${contextBase(context)}${endpoint}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: contextToken(context), ...body }),
+    });
+    return parseResponse(res, { source: 'meta_post', method: 'POST', endpoint });
   });
-  return parseResponse(res, { source: 'meta_post', method: 'POST', endpoint });
 }
 
 async function getAdAccounts(context = {}) {
-  return metaGetAll('/me/adaccounts', {
-    fields: 'id,name,account_id,currency,timezone_name,account_status',
-    limit: '50',
-  }, {}, context);
+  const cache = getCache();
+  const token = contextToken(context);
+  // Cache by token tail so different tokens don't collide.
+  const tokenKey = (token || '').slice(-12);
+  const { data } = await cache.wrap(
+    {
+      accountId: context.id || null,
+      key: `ad_accounts::${tokenKey}`,
+      freshMs: 60 * 60 * 1000,      // 1h — these rarely change
+      staleMs: 24 * 60 * 60 * 1000, // 24h
+    },
+    () => metaGetAll('/me/adaccounts', {
+      fields: 'id,name,account_id,currency,timezone_name,account_status',
+      limit: '50',
+    }, {}, context)
+  );
+  return data;
+}
+
+const EVENT_LABELS = {
+  LEAD: 'Lead',
+  PURCHASE: 'Purchase',
+  COMPLETE_REGISTRATION: 'Registration',
+  INITIATE_CHECKOUT: 'Initiate Checkout',
+  ADD_TO_CART: 'Add to Cart',
+  VIEW_CONTENT: 'View Content',
+  CONTACT: 'Contact',
+  SUBSCRIBE: 'Subscribe',
+  SCHEDULE: 'Schedule',
+  START_TRIAL: 'Start Trial',
+  SUBMIT_APPLICATION: 'Submit Application',
+  ADD_PAYMENT_INFO: 'Add Payment Info',
+  ADD_TO_WISHLIST: 'Add to Wishlist',
+  SEARCH: 'Search',
+  DONATE: 'Donate',
+  OTHER: 'Custom',
+};
+
+const OBJECTIVE_FALLBACK_EVENT = {
+  OUTCOME_LEADS: 'LEAD',
+  OUTCOME_SALES: 'PURCHASE',
+  OUTCOME_TRAFFIC: 'LINK_CLICK',
+  OUTCOME_ENGAGEMENT: 'LINK_CLICK',
+  OUTCOME_APP_PROMOTION: 'INSTALL',
+};
+
+function labelForEvent(type) {
+  if (!type) return null;
+  const key = String(type).toUpperCase();
+  if (EVENT_LABELS[key]) return EVENT_LABELS[key];
+  return key.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function extractDesiredEvent(campaign) {
+  const adsets = (campaign.adsets && campaign.adsets.data) || [];
+  for (const adset of adsets) {
+    const po = adset.promoted_object || {};
+    if (po.custom_event_type) {
+      return {
+        event_type: po.custom_event_type,
+        event_label: labelForEvent(po.custom_event_type),
+        optimization_goal: adset.optimization_goal || null,
+        pixel_id: po.pixel_id || null,
+        source: 'promoted_object',
+      };
+    }
+    if (adset.optimization_goal) {
+      return {
+        event_type: null,
+        event_label: labelForEvent(adset.optimization_goal),
+        optimization_goal: adset.optimization_goal,
+        pixel_id: null,
+        source: 'optimization_goal',
+      };
+    }
+  }
+  const fallback = OBJECTIVE_FALLBACK_EVENT[campaign.objective];
+  if (fallback) {
+    return {
+      event_type: fallback,
+      event_label: labelForEvent(fallback),
+      optimization_goal: null,
+      pixel_id: null,
+      source: 'objective',
+    };
+  }
+  return null;
 }
 
 async function getCampaigns(adAccountId, context = {}) {
   const id = adAccountId || contextAccountId(context);
-  return metaGetAll(`/${id}/campaigns`, {
-    fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,special_ad_categories,updated_time',
+  const cache = getCache();
+  const { data: campaigns } = await cache.wrap(
+    {
+      accountId: context.id || id,
+      key: `campaigns::${id}`,
+      freshMs: 5 * 60 * 1000,      // 5 min fresh
+      staleMs: 60 * 60 * 1000,     // 1 h max stale
+    },
+    async () => {
+      const rows = await metaGetAll(`/${id}/campaigns`, {
+        fields: 'id,name,objective,status,effective_status,daily_budget,lifetime_budget,buying_type,special_ad_categories,updated_time,adsets.limit(3){id,optimization_goal,promoted_object}',
+        limit: '100',
+      }, {}, context);
+      for (const campaign of rows) {
+        campaign.desired_event = extractDesiredEvent(campaign);
+        delete campaign.adsets;
+      }
+      return rows;
+    }
+  );
+  return campaigns;
+}
+
+async function _getAdSetsUncached(campaignId, context = {}) {
+  const adsets = await metaGetAll(`/${campaignId}/adsets`, {
+    fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,optimization_goal,billing_event,targeting,placements,attribution_spec,promoted_object,start_time,end_time,updated_time',
     limit: '100',
   }, {}, context);
+  for (const adset of adsets) {
+    const po = adset.promoted_object || {};
+    if (po.custom_event_type) {
+      adset.desired_event = {
+        event_type: po.custom_event_type,
+        event_label: labelForEvent(po.custom_event_type),
+        optimization_goal: adset.optimization_goal || null,
+        pixel_id: po.pixel_id || null,
+        source: 'promoted_object',
+      };
+    } else if (adset.optimization_goal) {
+      adset.desired_event = {
+        event_type: null,
+        event_label: labelForEvent(adset.optimization_goal),
+        optimization_goal: adset.optimization_goal,
+        pixel_id: null,
+        source: 'optimization_goal',
+      };
+    }
+  }
+  return adsets;
 }
 
 async function getAdSets(campaignId, context = {}) {
-  return metaGetAll(`/${campaignId}/adsets`, {
-    fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,optimization_goal,billing_event,targeting,placements,attribution_spec,start_time,end_time,updated_time',
-    limit: '100',
-  }, {}, context);
+  const cache = getCache();
+  const { data } = await cache.wrap(
+    {
+      accountId: context.id || null,
+      key: `adsets::${campaignId}`,
+      freshMs: 5 * 60 * 1000,
+      staleMs: 60 * 60 * 1000,
+    },
+    () => _getAdSetsUncached(campaignId, context)
+  );
+  return data;
 }
 
 async function getAds(adSetId, context = {}) {
-  return metaGetAll(`/${adSetId}/ads`, {
-    fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,image_url,video_id,thumbnail_url},preview_shareable_link,updated_time',
-    limit: '100',
-  }, {}, context);
+  const cache = getCache();
+  const { data } = await cache.wrap(
+    {
+      accountId: context.id || null,
+      key: `ads::${adSetId}`,
+      freshMs: 5 * 60 * 1000,
+      staleMs: 60 * 60 * 1000,
+    },
+    () => metaGetAll(`/${adSetId}/ads`, {
+      fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,image_url,video_id,thumbnail_url},preview_shareable_link,updated_time',
+      limit: '100',
+    }, {}, context)
+  );
+  return data;
 }
 
 async function getInsights(entityId, params = {}, context = {}) {
@@ -156,7 +340,30 @@ async function getInsights(entityId, params = {}, context = {}) {
     level: 'campaign',
   };
   const merged = { ...defaults, ...params };
-  return metaGetAll(`/${entityId}/insights`, merged, { maxPages: 50 }, context);
+  // TTL depends on how "live" the window is:
+  //   - today       → 60s fresh, 5min stale
+  //   - yesterday   → 30min fresh, 4h stale
+  //   - historical  → 1h fresh, 24h stale
+  const preset = String(merged.date_preset || '').toLowerCase();
+  const isToday = preset === 'today' || (merged.time_range && String(merged.time_range).includes(new Date().toISOString().slice(0, 10)));
+  const isYesterday = preset === 'yesterday';
+  let freshMs, staleMs;
+  if (isToday) { freshMs = 60 * 1000; staleMs = 5 * 60 * 1000; }
+  else if (isYesterday) { freshMs = 30 * 60 * 1000; staleMs = 4 * 60 * 60 * 1000; }
+  else { freshMs = 60 * 60 * 1000; staleMs = 24 * 60 * 60 * 1000; }
+
+  const paramKey = JSON.stringify(Object.keys(merged).sort().reduce((o, k) => (o[k] = merged[k], o), {}));
+  const cache = getCache();
+  const { data } = await cache.wrap(
+    {
+      accountId: context.id || null,
+      key: `insights::${entityId}::${paramKey}`,
+      freshMs,
+      staleMs,
+    },
+    () => metaGetAll(`/${entityId}/insights`, merged, { maxPages: 50 }, context)
+  );
+  return data;
 }
 
 async function getInsightsRange(entityId, since, until, level = 'campaign', context = {}) {
@@ -167,19 +374,32 @@ async function getInsightsRange(entityId, since, until, level = 'campaign', cont
   }, context);
 }
 
+function invalidateForEntity(accountId, entityId) {
+  const cache = getCache();
+  cache.invalidate(accountId, (key) => key.includes(entityId));
+  // Also clear the campaigns/adsets/ads list caches since effective_status might have changed.
+  cache.invalidate(accountId, (key) => key.startsWith('campaigns::') || key.startsWith('adsets::') || key.startsWith('ads::'));
+}
+
 async function updateStatus(entityId, status, context = {}) {
-  return metaPost(`/${entityId}`, { status }, context);
+  const result = await metaPost(`/${entityId}`, { status }, context);
+  invalidateForEntity(context.id || null, entityId);
+  return result;
 }
 
 async function updateBudget(adSetId, dailyBudget, context = {}) {
-  return metaPost(`/${adSetId}`, { daily_budget: dailyBudget }, context);
+  const result = await metaPost(`/${adSetId}`, { daily_budget: dailyBudget }, context);
+  invalidateForEntity(context.id || null, adSetId);
+  return result;
 }
 
 async function duplicateEntity(entityId, entityType, context = {}) {
-  return metaPost(`/${entityId}/copies`, {
+  const result = await metaPost(`/${entityId}/copies`, {
     deep_copy: true,
     status_option: 'PAUSED',
   }, context);
+  invalidateForEntity(context.id || null, entityId);
+  return result;
 }
 
 function parseActions(actions) {
@@ -211,6 +431,7 @@ function parseActionValues(actionValues) {
 
 module.exports = {
   isUserRateLimitError,
+  getCooldownRemainingSeconds,
   contextAccountId,
   metaGet,
   metaGetAll,
@@ -226,4 +447,8 @@ module.exports = {
   duplicateEntity,
   parseActions,
   parseActionValues,
+  labelForEvent,
+  extractDesiredEvent,
+  EVENT_LABELS,
+  invalidateForEntity,
 };

@@ -3,6 +3,9 @@ const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaUsage = require('../services/metaUsageService');
 const entityService = require('../services/metaEntityService');
+const { ensureEnum, ensureInteger, ensureNonEmptyString, ensureObject } = require('../validation');
+
+const ENTITY_LEVELS = ['campaign', 'adset', 'ad'];
 
 function adminOrOperator(req, res, next) {
   if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
@@ -22,7 +25,8 @@ async function ensureSafeWrite(req, res) {
 
 router.get('/entity/:level/:id', async (req, res) => {
   try {
-    const data = await entityService.getEntity(req.params.level, req.params.id, req.metaAccount);
+    const level = ensureEnum(req.params.level, ENTITY_LEVELS, 'Invalid entity level');
+    const data = await entityService.getEntity(level, ensureNonEmptyString(req.params.id, 'id required'), req.metaAccount);
     res.json({ data });
   } catch (err) {
     sendError(res, err);
@@ -32,11 +36,13 @@ router.get('/entity/:level/:id', async (req, res) => {
 router.post('/entity/:level/:id/update', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
+    const body = ensureObject(req.body);
+    const level = ensureEnum(req.params.level, ENTITY_LEVELS, 'Invalid entity level');
     const result = await entityService.updateEntity(
-      req.body.accountId || 1,
-      req.params.level,
-      req.params.id,
-      req.body,
+      body.accountId || 1,
+      level,
+      ensureNonEmptyString(req.params.id, 'id required'),
+      body,
       req.user?.email || req.user?.name || null,
       req.metaAccount
     );
@@ -49,12 +55,14 @@ router.post('/entity/:level/:id/update', adminOrOperator, async (req, res) => {
 router.post('/entity/:level/:id/status', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    if (!req.body.status) return res.status(400).json({ error: 'status required' });
+    const body = ensureObject(req.body);
+    const level = ensureEnum(req.params.level, ENTITY_LEVELS, 'Invalid entity level');
+    const status = ensureNonEmptyString(body.status, 'status required');
     const result = await entityService.updateEntityStatus(
-      req.body.accountId || 1,
-      req.params.level,
-      req.params.id,
-      req.body.status,
+      body.accountId || 1,
+      level,
+      ensureNonEmptyString(req.params.id, 'id required'),
+      status,
       req.user?.email || req.user?.name || null,
       req.metaAccount
     );
@@ -67,10 +75,12 @@ router.post('/entity/:level/:id/status', adminOrOperator, async (req, res) => {
 router.post('/entity/:level/:id/duplicate', adminOrOperator, async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
+    const body = ensureObject(req.body);
+    const level = ensureEnum(req.params.level, ENTITY_LEVELS, 'Invalid entity level');
     const result = await entityService.duplicateEntity(
-      req.body.accountId || 1,
-      req.params.level,
-      req.params.id,
+      body.accountId || 1,
+      level,
+      ensureNonEmptyString(req.params.id, 'id required'),
       req.user?.email || req.user?.name || null,
       req.metaAccount
     );

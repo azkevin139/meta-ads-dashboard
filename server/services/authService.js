@@ -2,6 +2,11 @@ const crypto = require('crypto');
 const { query, queryOne, queryAll } = require('../db');
 const config = require('../config');
 
+function signTokenParts(header, body, secret) {
+  return crypto.createHmac('sha256', secret)
+    .update(`${header}.${body}`).digest('base64url');
+}
+
 // ─── PASSWORD HASHING (PBKDF2 with 100k iterations) ──────
 
 function hashPassword(password) {
@@ -23,20 +28,22 @@ function createToken(payload, expiresInHours = 24) {
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(JSON.stringify({
     ...payload,
-    iat: now,
-    exp: now + (expiresInHours * 3600),
+      iat: now,
+      exp: now + (expiresInHours * 3600),
   })).toString('base64url');
-  const signature = crypto.createHmac('sha256', config.authSecret)
-    .update(`${header}.${body}`).digest('base64url');
+  const signature = signTokenParts(header, body, config.sessionSecret);
   return `${header}.${body}.${signature}`;
 }
 
 function verifyToken(token) {
   try {
     const [header, body, signature] = token.split('.');
-    const expected = crypto.createHmac('sha256', config.authSecret)
-      .update(`${header}.${body}`).digest('base64url');
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+    const secrets = [config.sessionSecret, ...(config.legacySessionSecrets || [])];
+    const matched = secrets.some((secret) => {
+      const expected = signTokenParts(header, body, secret);
+      return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    });
+    if (!matched) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;

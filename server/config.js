@@ -1,11 +1,56 @@
 require('dotenv').config();
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const isProduction = nodeEnv === 'production';
+
+function envOrDefault(name, fallback, { productionRequired = false } = {}) {
+  const value = process.env[name];
+  if (value) return value;
+  if (isProduction && productionRequired) {
+    throw new Error(`${name} must be set in production`);
+  }
+  return fallback;
+}
+
+function secretOrThrow(value, message, fallback = 'dev-secret') {
+  if (value) return value;
+  if (isProduction) throw new Error(message);
+  return fallback;
+}
+
+function secretList(name) {
+  return String(process.env[name] || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+const legacyAuthSecret = process.env.AUTH_SECRET || '';
+const sessionSecret = secretOrThrow(
+  process.env.SESSION_SIGNING_SECRET || legacyAuthSecret,
+  'SESSION_SIGNING_SECRET or AUTH_SECRET must be set in production'
+);
+const accountTokenSecret = secretOrThrow(
+  process.env.ACCOUNT_TOKEN_ENCRYPTION_SECRET || legacyAuthSecret,
+  'ACCOUNT_TOKEN_ENCRYPTION_SECRET or AUTH_SECRET must be set in production'
+);
+const legacySessionSecrets = Array.from(new Set([
+  ...(legacyAuthSecret && legacyAuthSecret !== sessionSecret ? [legacyAuthSecret] : []),
+  ...secretList('LEGACY_SESSION_SIGNING_SECRETS'),
+])).filter((value) => value !== sessionSecret);
+const legacyAccountTokenSecrets = Array.from(new Set([
+  ...(legacyAuthSecret && legacyAuthSecret !== accountTokenSecret ? [legacyAuthSecret] : []),
+  ...secretList('LEGACY_ACCOUNT_TOKEN_ENCRYPTION_SECRETS'),
+])).filter((value) => value !== accountTokenSecret);
+
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 4000,
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
 
   db: {
-    connectionString: process.env.DATABASE_URL || 'postgresql://meta_dash:password@localhost:5432/meta_dashboard',
+    connectionString: envOrDefault('DATABASE_URL', 'postgresql://meta_dash:password@localhost:5432/meta_dashboard', {
+      productionRequired: true,
+    }),
   },
 
   meta: {
@@ -22,5 +67,11 @@ module.exports = {
     model: 'gpt-4o',
   },
 
-  authSecret: process.env.AUTH_SECRET || 'dev-secret',
+  authSecret: sessionSecret,
+  sessionSecret,
+  accountTokenSecret,
+  legacySessionSecrets,
+  legacyAccountTokenSecrets,
+  allowSelfSignup: process.env.ALLOW_SELF_SIGNUP === 'true',
+  isProduction,
 };

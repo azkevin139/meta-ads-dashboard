@@ -10,6 +10,8 @@ DROP TABLE IF EXISTS daily_insights CASCADE;
 DROP TABLE IF EXISTS ads CASCADE;
 DROP TABLE IF EXISTS adsets CASCADE;
 DROP TABLE IF EXISTS campaigns CASCADE;
+DROP TABLE IF EXISTS user_sessions CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
 
 -- ============================================================
@@ -19,13 +21,63 @@ CREATE TABLE accounts (
   id              SERIAL PRIMARY KEY,
   meta_account_id TEXT UNIQUE NOT NULL,       -- e.g. 'act_123456789'
   name            TEXT NOT NULL,
+  label           TEXT,
   currency        TEXT DEFAULT 'USD',
   timezone        TEXT DEFAULT 'America/Montreal',
-  access_token    TEXT NOT NULL,               -- store encrypted in prod
+  access_token    TEXT,                        -- legacy/plain fallback only
+  encrypted_token TEXT,                        -- primary token storage
+  token_last4     TEXT,
+  token_expires_at TIMESTAMPTZ,
+  token_checked_at TIMESTAMPTZ,
+  token_scopes    JSONB,
+  token_is_system_user BOOLEAN DEFAULT FALSE,
+  token_last_error TEXT,
+  last_leads_sync_at TIMESTAMPTZ,
+  last_leads_sync_count INTEGER DEFAULT 0,
+  last_leads_sync_error TEXT,
+  ghl_api_key_encrypted TEXT,
+  ghl_location_id TEXT,
+  ghl_last_sync_at TIMESTAMPTZ,
+  ghl_last_sync_count INTEGER DEFAULT 0,
+  ghl_last_sync_error TEXT,
   is_active       BOOLEAN DEFAULT TRUE,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ============================================================
+-- 1B. USERS + SESSIONS
+-- ============================================================
+CREATE TABLE users (
+  id            SERIAL PRIMARY KEY,
+  email         TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  name          TEXT,
+  role          TEXT DEFAULT 'viewer' CHECK (role IN ('admin', 'operator', 'viewer')),
+  is_active     BOOLEAN DEFAULT TRUE,
+  last_login    TIMESTAMPTZ,
+  login_count   INTEGER DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_role ON users(role);
+
+CREATE TABLE user_sessions (
+  id                SERIAL PRIMARY KEY,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token             TEXT UNIQUE NOT NULL,
+  ip_address        TEXT,
+  user_agent        TEXT,
+  expires_at        TIMESTAMPTZ NOT NULL,
+  active_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_sessions_user ON user_sessions(user_id);
+CREATE INDEX idx_sessions_token ON user_sessions(token);
+CREATE INDEX idx_sessions_active_account ON user_sessions(active_account_id);
 
 -- ============================================================
 -- 2. CAMPAIGNS

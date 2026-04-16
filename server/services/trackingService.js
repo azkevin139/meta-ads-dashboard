@@ -155,10 +155,66 @@ async function handleMetaLead(input = {}) {
   });
 }
 
+async function getHealth(accountId) {
+  const id = accountId ? parseInt(accountId, 10) : null;
+  const whereVisitors = id ? 'WHERE account_id = $1' : '';
+  const whereEvents = id ? 'WHERE account_id = $1' : '';
+  const params = id ? [id] : [];
+
+  const visitors = await queryOne(`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE last_seen_at > NOW() - INTERVAL '24 hours') AS last_24h,
+      COUNT(*) FILTER (WHERE last_seen_at > NOW() - INTERVAL '1 hour') AS last_1h,
+      COUNT(*) FILTER (WHERE fbclid IS NOT NULL) AS with_fbclid,
+      COUNT(*) FILTER (WHERE ghl_contact_id IS NOT NULL OR meta_lead_id IS NOT NULL OR email_hash IS NOT NULL) AS resolved,
+      MAX(last_seen_at) AS last_seen_at
+    FROM visitors ${whereVisitors}
+  `, params);
+
+  const events = await queryOne(`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE fired_at > NOW() - INTERVAL '24 hours') AS last_24h,
+      COUNT(*) FILTER (WHERE fired_at > NOW() - INTERVAL '1 hour') AS last_1h,
+      MAX(fired_at) AS last_fired_at
+    FROM visitor_events ${whereEvents}
+  `, params);
+
+  const total = parseInt(visitors.total, 10) || 0;
+  const withFbclid = parseInt(visitors.with_fbclid, 10) || 0;
+  const last24h = parseInt(visitors.last_24h, 10) || 0;
+
+  let status = 'no_data';
+  if (last24h > 0) status = 'live';
+  else if (total > 0) status = 'stale';
+
+  return {
+    status,
+    account_id: id,
+    visitors: {
+      total,
+      last_24h: last24h,
+      last_1h: parseInt(visitors.last_1h, 10) || 0,
+      with_fbclid: withFbclid,
+      resolved: parseInt(visitors.resolved, 10) || 0,
+      last_seen_at: visitors.last_seen_at,
+      fbclid_rate: total > 0 ? Math.round((withFbclid / total) * 100) : 0,
+    },
+    events: {
+      total: parseInt(events.total, 10) || 0,
+      last_24h: parseInt(events.last_24h, 10) || 0,
+      last_1h: parseInt(events.last_1h, 10) || 0,
+      last_fired_at: events.last_fired_at,
+    },
+  };
+}
+
 module.exports = {
   recordEvent,
   upsertVisitor,
   handleGhlWebhook,
   handleMetaLead,
   hashIdentity,
+  getHealth,
 };

@@ -1,0 +1,11 @@
+{
+  "account": {
+    "primary_event": "Lead",
+    "target_cpa": 80,
+    "target_roas": 1.5,
+    "max_frequency": 3.5,
+    "min_spend_before_judgment": 50,
+    "scale_budget_pct": 20
+  },
+  "campaigns": {}
+}

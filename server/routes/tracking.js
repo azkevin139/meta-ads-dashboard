@@ -1,6 +1,7 @@
 const express = require('express');
 const { sendError } = require('../errorResponse');
 const tracking = require('../services/trackingService');
+const { ensureNonEmptyString, ensureObject, optionalTrimmedString } = require('../validation');
 
 const router = express.Router();
 
@@ -18,9 +19,12 @@ router.use(setTrackCors);
 
 router.post('/pageview', async (req, res) => {
   try {
+    const body = ensureObject(req.body);
+    const metaAccountId = ensureNonEmptyString(body.meta_account_id, 'meta_account_id required');
     const visitor = await tracking.recordEvent({
-      ...req.body,
-      event_name: req.body.event_name || 'PageView',
+      ...body,
+      meta_account_id: metaAccountId,
+      event_name: optionalTrimmedString(body.event_name, 100) || 'PageView',
       metadata: {
         user_agent: req.headers['user-agent'] || null,
         ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || null,
@@ -34,7 +38,12 @@ router.post('/pageview', async (req, res) => {
 
 router.post('/event', async (req, res) => {
   try {
-    const visitor = await tracking.recordEvent(req.body);
+    const body = ensureObject(req.body);
+    const visitor = await tracking.recordEvent({
+      ...body,
+      meta_account_id: ensureNonEmptyString(body.meta_account_id, 'meta_account_id required'),
+      event_name: ensureNonEmptyString(body.event_name, 'event_name required'),
+    });
     res.json({ success: true, client_id: visitor.client_id });
   } catch (err) {
     sendError(res, err);

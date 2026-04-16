@@ -4,6 +4,14 @@ const router = express.Router();
 const metaApi = require('../services/metaApi');
 const metaUsage = require('../services/metaUsageService');
 const { logAction } = require('../services/actionService');
+const {
+  ensureArray,
+  ensureEnum,
+  ensureNonEmptyString,
+  ensureObject,
+  optionalNumber,
+  optionalTrimmedString,
+} = require('../validation');
 
 // Role guard
 function adminOrOperator(req, res, next) {
@@ -31,16 +39,10 @@ async function ensureSafeWrite(req, res) {
 router.post('/bulk-action', async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const { entityIds, entityType, action } = req.body;
-    if (!entityIds || !Array.isArray(entityIds) || entityIds.length === 0) {
-      return res.status(400).json({ error: 'entityIds array required' });
-    }
-    if (!['pause', 'resume'].includes(action)) {
-      return res.status(400).json({ error: 'action must be pause or resume' });
-    }
-    if (!['campaign', 'adset', 'ad'].includes(entityType)) {
-      return res.status(400).json({ error: 'entityType must be campaign, adset, or ad' });
-    }
+    const body = ensureObject(req.body);
+    const entityIds = ensureArray(body.entityIds, 'entityIds array required').map((id) => ensureNonEmptyString(id, 'entityIds must contain ids'));
+    const entityType = ensureEnum(body.entityType, ['campaign', 'adset', 'ad'], 'entityType must be campaign, adset, or ad');
+    const action = ensureEnum(body.action, ['pause', 'resume'], 'action must be pause or resume');
 
     const status = action === 'pause' ? 'PAUSED' : 'ACTIVE';
     const results = [];
@@ -78,19 +80,14 @@ router.post('/bulk-action', async (req, res) => {
 router.post('/campaign', async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const {
-      name,
-      objective,       // OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_ENGAGEMENT, OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_APP_PROMOTION
-      status,          // PAUSED or ACTIVE
-      dailyBudget,     // in dollars (converted to cents)
-      lifetimeBudget,  // in dollars
-      specialAdCategories, // ['CREDIT', 'EMPLOYMENT', 'HOUSING', 'SOCIAL_ISSUES_ELECTIONS_POLITICS']
-      buyingType,      // AUCTION (default)
-    } = req.body;
-
-    if (!name || !objective) {
-      return res.status(400).json({ error: 'name and objective required' });
-    }
+    const body = ensureObject(req.body);
+    const name = ensureNonEmptyString(body.name, 'name required');
+    const objective = ensureNonEmptyString(body.objective, 'objective required');
+    const status = optionalTrimmedString(body.status, 50);
+    const dailyBudget = optionalNumber(body.dailyBudget, 'dailyBudget must be numeric');
+    const lifetimeBudget = optionalNumber(body.lifetimeBudget, 'lifetimeBudget must be numeric');
+    const specialAdCategories = Array.isArray(body.specialAdCategories) ? body.specialAdCategories : [];
+    const buyingType = optionalTrimmedString(body.buyingType, 50);
 
     const payload = {
       name,
@@ -121,42 +118,33 @@ router.post('/campaign', async (req, res) => {
 router.post('/adset', async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const {
-      name,
-      campaignId,
-      status,
-      dailyBudget,
-      lifetimeBudget,
-      bidStrategy,       // LOWEST_COST_WITHOUT_CAP, COST_CAP, etc.
-      bidAmount,         // for COST_CAP in cents
-      optimizationGoal,  // OFFSITE_CONVERSIONS, LINK_CLICKS, IMPRESSIONS, REACH, LANDING_PAGE_VIEWS
-      billingEvent,      // IMPRESSIONS, LINK_CLICKS
-      // Pixel & conversion
-      pixelId,
-      customEventType,   // INITIATE_CHECKOUT, PURCHASE, LEAD, COMPLETE_REGISTRATION, ADD_TO_CART
-      // Targeting
-      ageMin,
-      ageMax,
-      genders,           // [] = all, [1] = male, [2] = female
-      geoLocations,      // { countries: [], regions: [], cities: [] }
-      excludedGeoLocations,
-      locales,           // language locale IDs
-      interests,         // [{ id, name }]
-      customAudiences,   // [{ id }]
-      excludedCustomAudiences,
-      // Placements
-      publisherPlatforms,    // ['facebook', 'instagram', 'messenger', 'audience_network']
-      facebookPositions,     // ['feed', 'story', 'reels', 'right_hand_column', 'marketplace', etc.]
-      instagramPositions,    // ['stream', 'story', 'reels', 'explore']
-      devicePlatforms,       // ['mobile', 'desktop']
-      // Schedule
-      startTime,
-      endTime,
-    } = req.body;
-
-    if (!name || !campaignId) {
-      return res.status(400).json({ error: 'name and campaignId required' });
-    }
+    const body = ensureObject(req.body);
+    const name = ensureNonEmptyString(body.name, 'name required');
+    const campaignId = ensureNonEmptyString(body.campaignId, 'campaignId required');
+    const status = optionalTrimmedString(body.status, 50);
+    const dailyBudget = optionalNumber(body.dailyBudget, 'dailyBudget must be numeric');
+    const lifetimeBudget = optionalNumber(body.lifetimeBudget, 'lifetimeBudget must be numeric');
+    const bidStrategy = optionalTrimmedString(body.bidStrategy, 100);
+    const bidAmount = optionalNumber(body.bidAmount, 'bidAmount must be numeric');
+    const optimizationGoal = optionalTrimmedString(body.optimizationGoal, 100);
+    const billingEvent = optionalTrimmedString(body.billingEvent, 100);
+    const pixelId = optionalTrimmedString(body.pixelId, 100);
+    const customEventType = optionalTrimmedString(body.customEventType, 100);
+    const ageMin = body.ageMin;
+    const ageMax = body.ageMax;
+    const genders = body.genders;
+    const geoLocations = body.geoLocations;
+    const excludedGeoLocations = body.excludedGeoLocations;
+    const locales = body.locales;
+    const interests = body.interests;
+    const customAudiences = body.customAudiences;
+    const excludedCustomAudiences = body.excludedCustomAudiences;
+    const publisherPlatforms = body.publisherPlatforms;
+    const facebookPositions = body.facebookPositions;
+    const instagramPositions = body.instagramPositions;
+    const devicePlatforms = body.devicePlatforms;
+    const startTime = optionalTrimmedString(body.startTime, 100);
+    const endTime = optionalTrimmedString(body.endTime, 100);
 
     // Build targeting spec
     const targeting = {};
@@ -230,27 +218,20 @@ router.post('/adset', async (req, res) => {
 router.post('/ad', async (req, res) => {
   try {
     if (!(await ensureSafeWrite(req, res))) return;
-    const {
-      name,
-      adsetId,
-      status,
-      // Creative fields
-      pageId,
-      imageHash,      // from uploaded image
-      imageUrl,       // direct URL
-      videoId,
-      primaryText,
-      headline,
-      description,
-      linkUrl,
-      cta,            // SIGN_UP, LEARN_MORE, etc.
-      // Or use existing creative
-      creativeId,
-    } = req.body;
-
-    if (!name || !adsetId) {
-      return res.status(400).json({ error: 'name and adsetId required' });
-    }
+    const body = ensureObject(req.body);
+    const name = ensureNonEmptyString(body.name, 'name required');
+    const adsetId = ensureNonEmptyString(body.adsetId, 'adsetId required');
+    const status = optionalTrimmedString(body.status, 50);
+    const pageId = optionalTrimmedString(body.pageId, 100);
+    const imageHash = optionalTrimmedString(body.imageHash, 500);
+    const imageUrl = optionalTrimmedString(body.imageUrl, 2000);
+    const videoId = optionalTrimmedString(body.videoId, 100);
+    const primaryText = optionalTrimmedString(body.primaryText, 5000);
+    const headline = optionalTrimmedString(body.headline, 500);
+    const description = optionalTrimmedString(body.description, 2000);
+    const linkUrl = optionalTrimmedString(body.linkUrl, 2000);
+    const cta = optionalTrimmedString(body.cta, 100);
+    const creativeId = optionalTrimmedString(body.creativeId, 100);
 
     let creative_id = creativeId;
 
@@ -353,8 +334,8 @@ router.get('/pages', async (req, res) => {
 
 router.post('/upload-image', async (req, res) => {
   try {
-    const { imageUrl } = req.body;
-    if (!imageUrl) return res.status(400).json({ error: 'imageUrl required' });
+    const body = ensureObject(req.body);
+    const imageUrl = ensureNonEmptyString(body.imageUrl, 'imageUrl required');
 
     const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adimages`, {
       url: imageUrl,

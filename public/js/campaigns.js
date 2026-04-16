@@ -2,32 +2,42 @@
    Campaigns Page — responsive editor driven
    ═══════════════════════════════════════════════════════════ */
 
-let campDateFrom = daysAgoStr(1);
-let campDateTo = daysAgoStr(1);
-let campPreset = 'yesterday';
-let selectedCampaigns = new Set();
+const campaignFilterState = window.PageFilterHelpers.createDateRangeState({
+  initialPreset: 'yesterday',
+  presets: ['today', 'yesterday', '7d', '30d', 'custom'],
+  todayStr,
+  daysAgoStr,
+});
+const campaignMetrics = window.DashboardMetrics;
+const campaignBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
+  checkboxSelector: '.camp-check',
+  barId: 'bulk-bar',
+  countId: 'bulk-count',
+});
+window.getCampaignDateRange = () => campaignFilterState.getState();
 let campaignDrawerSection = 'identity';
 
 async function loadCampaigns(container) {
-  selectedCampaigns.clear();
+  campaignBulkSelection.clear();
   const isMobile = window.innerWidth <= 768;
+  const { from: campDateFrom, to: campDateTo, preset: campPreset } = campaignFilterState.getState();
 
   container.innerHTML = `
     <div class="flex-between mb-md" style="flex-wrap: wrap; gap: 10px;">
-      <button class="btn btn-primary" onclick="openCreateCampaign()">+ New Campaign</button>
+      <button class="btn btn-primary" data-campaign-action="create">+ New Campaign</button>
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width:${isMobile ? '100%' : 'auto'};">
         <div class="date-selector" style="${isMobile ? 'width:100%; overflow:auto; white-space:nowrap;' : ''}">
-          <button class="date-btn ${campPreset === 'today' ? 'active' : ''}" onclick="setCampPreset('today')">Today</button>
-          <button class="date-btn ${campPreset === 'yesterday' ? 'active' : ''}" onclick="setCampPreset('yesterday')">Yesterday</button>
-          <button class="date-btn ${campPreset === '7d' ? 'active' : ''}" onclick="setCampPreset('7d')">7d</button>
-          <button class="date-btn ${campPreset === '30d' ? 'active' : ''}" onclick="setCampPreset('30d')">30d</button>
-          <button class="date-btn ${campPreset === 'custom' ? 'active' : ''}" onclick="toggleCampDatePicker()">Custom</button>
+          <button class="date-btn ${campPreset === 'today' ? 'active' : ''}" data-campaign-preset="today">Today</button>
+          <button class="date-btn ${campPreset === 'yesterday' ? 'active' : ''}" data-campaign-preset="yesterday">Yesterday</button>
+          <button class="date-btn ${campPreset === '7d' ? 'active' : ''}" data-campaign-preset="7d">7d</button>
+          <button class="date-btn ${campPreset === '30d' ? 'active' : ''}" data-campaign-preset="30d">30d</button>
+          <button class="date-btn ${campPreset === 'custom' ? 'active' : ''}" data-campaign-preset="custom">Custom</button>
         </div>
         <div id="camp-date-picker" style="display: ${campPreset === 'custom' ? 'flex' : 'none'}; align-items: center; gap: 6px; flex-wrap:wrap; width:${isMobile ? '100%' : 'auto'};">
           <input type="date" id="camp-date-from" class="form-input" style="width: ${isMobile ? 'calc(50% - 20px)' : '140px'}; padding: 6px 10px; font-size: 0.78rem;" value="${campDateFrom}" />
           <span class="text-muted">→</span>
           <input type="date" id="camp-date-to" class="form-input" style="width: ${isMobile ? 'calc(50% - 20px)' : '140px'}; padding: 6px 10px; font-size: 0.78rem;" value="${campDateTo}" />
-          <button class="btn btn-sm btn-primary" onclick="applyCampDate()">Apply</button>
+          <button class="btn btn-sm btn-primary" data-campaign-action="apply-date">Apply</button>
         </div>
       </div>
     </div>
@@ -36,9 +46,9 @@ async function loadCampaigns(container) {
 
     <div id="bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px; flex-wrap:wrap;">
       <span id="bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
-      <button class="btn btn-sm btn-danger" onclick="bulkAction('pause')">Pause Selected</button>
-      <button class="btn btn-sm" onclick="bulkAction('resume')">Resume Selected</button>
-      <button class="btn btn-sm" onclick="clearSelection()">Clear</button>
+      <button class="btn btn-sm btn-danger" data-campaign-bulk="pause">Pause Selected</button>
+      <button class="btn btn-sm" data-campaign-bulk="resume">Resume Selected</button>
+      <button class="btn btn-sm" data-campaign-bulk="clear">Clear</button>
     </div>
 
     <div class="text-muted mb-sm" style="font-size: 0.78rem; text-align: right;">${campDateFrom === campDateTo ? campDateFrom : campDateFrom + ' → ' + campDateTo}</div>
@@ -50,6 +60,7 @@ async function loadCampaigns(container) {
       <div id="campaigns-table"><div class="loading">Loading campaigns from Meta</div></div>
     </div>
   `;
+  bindCampaignControls(container);
 
   try {
     const [liveRes, listRes, usageRes] = await Promise.all([
@@ -62,6 +73,10 @@ async function loadCampaigns(container) {
     const insights = liveRes.data || [];
     const entities = listRes.data || [];
     const entityMap = Object.fromEntries(entities.map(c => [c.id, c]));
+    for (const ins of insights) {
+      const meta = entityMap[ins.campaign_id];
+      if (meta && meta.desired_event) ins.desired_event = meta.desired_event;
+    }
 
     if (insights.length === 0 && entities.length === 0) {
       document.getElementById('campaigns-table').innerHTML = '<div class="empty-state"><div class="empty-state-text">No campaigns found</div></div>';
@@ -89,7 +104,7 @@ function renderCampaignUsageInline(rateRes) {
         <div><div class="kpi-label">Ads Mgmt</div><div>${fmtPct(summary.ads_management?.call_count)}</div></div>
         <div><div class="kpi-label">Insights</div><div>${fmtPct(summary.ads_insights?.call_count)}</div></div>
         <div><div class="kpi-label">Account</div><div>${fmtPct(summary.ad_account_util_pct)}</div></div>
-        <div><div class="kpi-label">Reset</div><div>${formatSeconds(rateRes.estimated_regain_seconds || 0)}</div></div>
+        <div><div class="kpi-label">Reset</div><div>${campaignMetrics.formatSeconds(rateRes.estimated_regain_seconds || 0)}</div></div>
       </div>
       ${!rateRes.safe_to_write ? `<div class="alert-banner alert-warning" style="margin-top:8px;">High pressure: better wait before more edits.</div>` : ''}
     </div>
@@ -103,8 +118,8 @@ function renderCampaignDesktopTable(rows) {
       <table>
         <thead>
           <tr>
-            <th style="width: 36px;"><input type="checkbox" onchange="toggleAllCampaigns(this, ${JSON.stringify(rows.map(c => c.campaign_id)).replace(/"/g, '&quot;')})" /></th>
-            <th>Campaign</th><th>Status</th><th class="right">Spend</th><th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Budget</th><th class="right">Objective</th><th class="right">CTR</th><th class="right">CPC</th><th>Actions</th>
+            <th style="width: 36px;"><input type="checkbox" data-campaign-toggle-all='${escapeHtml(JSON.stringify(rows.map(c => c.campaign_id)))}' /></th>
+            <th>Campaign</th><th>Status</th><th class="right">Spend</th><th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Budget</th><th class="right">Target</th><th class="right">CTR</th><th class="right">CPC</th><th>Actions</th>
           </tr>
         </thead>
         <tbody>${rows.map(renderCampaignRow).join('')}</tbody>
@@ -113,24 +128,25 @@ function renderCampaignDesktopTable(rows) {
 }
 
 function renderCampaignRow(c) {
-  const result = parseResults(c.actions);
+  const result = parseResults(c.actions, c.desired_event);
   const cpr = parseCostPerResult(c.cost_per_action_type, result.type);
   const spend = parseFloat(c.spend) || 0;
   const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
   const status = c.meta?.effective_status || c.meta?.status || '—';
   const budget = c.meta?.daily_budget ? fmtBudget(c.meta.daily_budget) : c.meta?.lifetime_budget ? fmtBudget(c.meta.lifetime_budget) + ' LT' : '—';
+  const target = c.desired_event?.event_label ? `<span class="badge badge-low" title="${c.desired_event.source}">${c.desired_event.event_label}</span>` : '—';
   return `<tr>
-    <td><input type="checkbox" class="camp-check" value="${c.campaign_id}" onchange="updateCampSelection()" /></td>
-    <td class="name-cell"><a href="#" onclick="navigateTo('adsets', {metaCampaignId: '${c.campaign_id}', campaignName: '${(c.campaign_name || '').replace(/'/g, "\\'")}'}); return false;">${c.campaign_name}</a></td>
+    <td><input type="checkbox" class="camp-check" value="${c.campaign_id}" /></td>
+    <td class="name-cell"><a href="#" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">${c.campaign_name}</a></td>
     <td>${statusBadge(status)}</td>
     <td class="right">${spend > 0 ? fmt(spend,'currency') : '—'}</td>
-    <td class="right" style="font-weight:600;">${result.count > 0 ? result.count : '—'}</td>
+    <td class="right" style="font-weight:600;">${result.count > 0 ? `${result.count}<div class="text-muted" style="font-size:0.66rem; font-weight:400;">${result.type}</div>` : '—'}</td>
     <td class="right">${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</td>
     <td class="right">${budget}</td>
-    <td class="right">${c.meta?.objective ? c.meta.objective.replace(/_/g,' ') : '—'}</td>
+    <td class="right">${target}</td>
     <td class="right">${c.ctr ? fmt(c.ctr,'percent') : '—'}</td>
     <td class="right">${c.cpc ? fmt(c.cpc,'currency') : '—'}</td>
-    <td><div class="btn-group"><button class="btn btn-sm btn-primary" onclick="openCampaignEditor('${c.campaign_id}')">Edit</button><button class="btn btn-sm" onclick="campaignStatusAction('${c.campaign_id}','${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}')">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button><button class="btn btn-sm" onclick="campaignDuplicate('${c.campaign_id}')">Dup</button></div></td>
+    <td><div class="btn-group"><button class="btn btn-sm btn-primary" data-campaign-edit="${c.campaign_id}">Edit</button><button class="btn btn-sm" data-campaign-status="${c.campaign_id}" data-campaign-next-status="${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button><button class="btn btn-sm" data-campaign-duplicate="${c.campaign_id}">Dup</button></div></td>
   </tr>`;
 }
 
@@ -144,10 +160,10 @@ function renderCampaignCards(rows) {
     const budget = c.meta?.daily_budget ? fmtBudget(c.meta.daily_budget) : c.meta?.lifetime_budget ? fmtBudget(c.meta.lifetime_budget) + ' LT' : '—';
     return `<div class="reco-card">
       <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:10px;">
-        <input type="checkbox" class="camp-check" value="${c.campaign_id}" onchange="updateCampSelection()" style="margin-top:4px;" />
+        <input type="checkbox" class="camp-check" value="${c.campaign_id}" style="margin-top:4px;" />
         <div style="flex:1; min-width:0;">
           <div style="font-weight:600; font-size:0.86rem; line-height:1.4; margin-bottom:6px;">${c.campaign_name}</div>
-          <div style="display:flex; gap:6px; flex-wrap:wrap;">${statusBadge(status)}${c.meta?.objective ? `<span class="badge badge-low">${c.meta.objective.replace(/_/g,' ')}</span>` : ''}</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">${statusBadge(status)}${c.desired_event?.event_label ? `<span class="badge badge-low">Target: ${c.desired_event.event_label}</span>` : c.meta?.objective ? `<span class="badge badge-low">${c.meta.objective.replace(/_/g,' ')}</span>` : ''}</div>
         </div>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.8rem; margin-bottom:12px;">
@@ -159,20 +175,19 @@ function renderCampaignCards(rows) {
         <div><div class="kpi-label">CPC</div><div>${c.cpc ? fmt(c.cpc,'currency') : '—'}</div></div>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <button class="btn btn-sm btn-primary" onclick="openCampaignEditor('${c.campaign_id}')">Edit</button>
-        <button class="btn btn-sm" onclick="campaignStatusAction('${c.campaign_id}','${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}')">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
-        <button class="btn btn-sm" onclick="campaignDuplicate('${c.campaign_id}')">Duplicate</button>
-        <button class="btn btn-sm" onclick="navigateTo('adsets', {metaCampaignId: '${c.campaign_id}', campaignName: '${(c.campaign_name || '').replace(/'/g, "\\'")}'});">Open</button>
+        <button class="btn btn-sm btn-primary" data-campaign-edit="${c.campaign_id}">Edit</button>
+        <button class="btn btn-sm" data-campaign-status="${c.campaign_id}" data-campaign-next-status="${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
+        <button class="btn btn-sm" data-campaign-duplicate="${c.campaign_id}">Duplicate</button>
+        <button class="btn btn-sm" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">Open</button>
       </div>
     </div>`;
   }).join('')}</div>`;
 }
 
-function toggleAllCampaigns(checkbox, ids) { document.querySelectorAll('.camp-check').forEach(c => { c.checked = checkbox.checked; }); selectedCampaigns = checkbox.checked ? new Set(ids) : new Set(); updateBulkBar(); }
-function updateCampSelection() { selectedCampaigns.clear(); document.querySelectorAll('.camp-check:checked').forEach(c => selectedCampaigns.add(c.value)); updateBulkBar(); }
-function updateBulkBar() { const bar = document.getElementById('bulk-bar'); const count = document.getElementById('bulk-count'); if (selectedCampaigns.size > 0) { bar.style.display = 'flex'; count.textContent = `${selectedCampaigns.size} selected`; } else { bar.style.display = 'none'; } }
-function clearSelection() { selectedCampaigns.clear(); document.querySelectorAll('.camp-check').forEach(c => { c.checked = false; }); updateBulkBar(); }
-async function bulkAction(action) { if (!selectedCampaigns.size) return; const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE'; if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${selectedCampaigns.size} campaign(s)?`)) return; try { for (const id of selectedCampaigns) await apiPost(`/meta/entity/campaign/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus }); toast(`Updated ${selectedCampaigns.size} campaign(s)`, 'success'); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
+function toggleAllCampaigns(checkbox, ids) { campaignBulkSelection.toggleAll(ids, checkbox.checked); }
+function updateCampSelection() { campaignBulkSelection.sync(); }
+function clearSelection() { campaignBulkSelection.clear(); }
+async function bulkAction(action) { if (!campaignBulkSelection.size()) return; const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE'; if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${campaignBulkSelection.size()} campaign(s)?`)) return; try { for (const id of campaignBulkSelection.getSelected()) await apiPost(`/meta/entity/campaign/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus }); toast(`Updated ${campaignBulkSelection.size()} campaign(s)`, 'success'); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
 async function openCampaignEditor(campaignId) { campaignDrawerSection = 'identity'; openDrawer('Edit Campaign', '<div class="loading">Loading campaign…</div>'); try { const res = await apiGet(`/meta/entity/campaign/${campaignId}`); renderCampaignEditor(res.data); } catch (err) { setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`); } }
 function renderCampaignEditor(entity) { const s = entity.special_ad_categories || []; setDrawerBody(`
   ${entitySectionNav('campaign', campaignDrawerSection, ['identity','budget','schedule'])}
@@ -191,6 +206,56 @@ function blankToUndefined(v) { return v === '' ? undefined : parseFloat(v); }
 function tagsToArray(v) { return (v || '').split(',').map(s => s.trim()).filter(Boolean); }
 function toLocalDateTime(iso) { if (!iso) return ''; const d = new Date(iso); const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function localDateTimeToIso(v) { return v ? new Date(v).toISOString() : null; }
-function setCampPreset(preset) { campPreset = preset; switch (preset) { case 'today': campDateFrom = todayStr(); campDateTo = todayStr(); break; case 'yesterday': campDateFrom = daysAgoStr(1); campDateTo = daysAgoStr(1); break; case '7d': campDateFrom = daysAgoStr(7); campDateTo = daysAgoStr(1); break; case '30d': campDateFrom = daysAgoStr(30); campDateTo = daysAgoStr(1); break; case 'custom': toggleCampDatePicker(); return; } navigateTo('campaigns'); }
-function toggleCampDatePicker() { campPreset = 'custom'; const picker = document.getElementById('camp-date-picker'); if (picker) picker.style.display = 'flex'; }
-function applyCampDate() { campDateFrom = document.getElementById('camp-date-from').value; campDateTo = document.getElementById('camp-date-to').value; if (!campDateFrom || !campDateTo) { toast('Select both dates', 'error'); return; } campPreset = 'custom'; navigateTo('campaigns'); }
+function bindCampaignControls(container) {
+  container.addEventListener('change', (event) => {
+    if (event.target.matches('.camp-check')) updateCampSelection();
+    if (event.target.matches('[data-campaign-toggle-all]')) {
+      toggleAllCampaigns(event.target, JSON.parse(event.target.dataset.campaignToggleAll || '[]'));
+    }
+  });
+  container.addEventListener('click', (event) => {
+    const open = event.target.closest('[data-campaign-open]');
+    if (open) {
+      event.preventDefault();
+      return navigateTo('adsets', { metaCampaignId: open.dataset.campaignOpen, campaignName: open.dataset.campaignName || '' });
+    }
+    const edit = event.target.closest('[data-campaign-edit]');
+    if (edit) return openCampaignEditor(edit.dataset.campaignEdit);
+    const duplicate = event.target.closest('[data-campaign-duplicate]');
+    if (duplicate) return campaignDuplicate(duplicate.dataset.campaignDuplicate);
+    const status = event.target.closest('[data-campaign-status]');
+    if (status) return campaignStatusAction(status.dataset.campaignStatus, status.dataset.campaignNextStatus);
+  });
+  container.querySelectorAll('[data-campaign-preset]').forEach((el) => {
+    el.addEventListener('click', () => setCampPreset(el.dataset.campaignPreset));
+  });
+  container.querySelectorAll('[data-campaign-action]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (el.dataset.campaignAction === 'create') return openCreateCampaign();
+      if (el.dataset.campaignAction === 'apply-date') return applyCampDate();
+    });
+  });
+  container.querySelectorAll('[data-campaign-bulk]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (el.dataset.campaignBulk === 'clear') return clearSelection();
+      return bulkAction(el.dataset.campaignBulk);
+    });
+  });
+}
+
+function setCampPreset(preset) {
+  campaignFilterState.setPreset(preset);
+  if (preset === 'custom') {
+    const picker = document.getElementById('camp-date-picker');
+    if (picker) picker.style.display = 'flex';
+    return;
+  }
+  navigateTo('campaigns');
+}
+function applyCampDate() {
+  const campDateFrom = document.getElementById('camp-date-from').value;
+  const campDateTo = document.getElementById('camp-date-to').value;
+  if (!campDateFrom || !campDateTo) { toast('Select both dates', 'error'); return; }
+  campaignFilterState.setCustom(campDateFrom, campDateTo);
+  navigateTo('campaigns');
+}

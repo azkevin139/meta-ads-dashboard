@@ -15,6 +15,7 @@ Rules:
 - Rate confidence from 0.0 to 1.0.
 - Never recommend spending more without evidence of positive ROAS or CPA trend.
 - If data is insufficient (< 3 days of history), say so.
+- When first_party data is available, TRUST it over Meta-reported ROAS/CPA. Meta overreports; first-party revenue is the ground truth. Flag divergence (>40%) between meta_reported_roas and first_party true_roas_30d as a tracking/attribution issue worth investigating.
 - Output ONLY valid JSON. No markdown, no commentary, no code fences.
 
 Output schema:
@@ -87,6 +88,21 @@ async function buildAnalysisContext(accountId, metaContext = {}) {
     GROUP BY campaign_id
   `, [accountId]);
 
+  // First-party revenue + resolved-contact counts per campaign
+  const firstParty = await queryAll(`
+    SELECT
+      campaign_id,
+      COALESCE(SUM(revenue), 0) AS first_party_revenue,
+      COUNT(*) FILTER (WHERE revenue > 0) AS closed_count,
+      COUNT(*) FILTER (WHERE ghl_contact_id IS NOT NULL OR meta_lead_id IS NOT NULL OR email_hash IS NOT NULL) AS resolved_count,
+      COUNT(*) AS tracked_visitor_count
+    FROM visitors
+    WHERE account_id = $1
+      AND campaign_id IS NOT NULL
+      AND last_seen_at >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY campaign_id
+  `, [accountId]);
+
   // 3-day trend direction
   const trend3d = await queryAll(`
     SELECT
@@ -111,6 +127,9 @@ async function buildAnalysisContext(accountId, metaContext = {}) {
   for (const r of avg30d) avg30dMap[r.campaign_id] = r;
   const trend3dMap = {};
   for (const r of trend3d) trend3dMap[r.campaign_id] = r;
+  // First-party keyed by meta_campaign_id (string) since visitors.campaign_id holds Meta IDs
+  const firstPartyByMeta = {};
+  for (const r of firstParty) firstPartyByMeta[String(r.campaign_id)] = r;
 
   // Assemble entities
   const entities = yesterday.map((y) => ({
@@ -147,6 +166,19 @@ async function buildAnalysisContext(accountId, metaContext = {}) {
       cpa: trend3dMap[y.campaign_id].cpa_trend,
       frequency: trend3dMap[y.campaign_id].frequency_trend,
     } : null,
+    first_party: (function () {
+      const fp = firstPartyByMeta[String(y.meta_campaign_id)] || null;
+      if (!fp) return null;
+      const revenue = parseFloat(fp.first_party_revenue) || 0;
+      const spend30d = parseFloat(avg7dMap[y.campaign_id]?.avg_spend || 0) * 7;
+      return {
+        tracked_visitors: parseInt(fp.tracked_visitor_count, 10) || 0,
+        resolved_contacts: parseInt(fp.resolved_count, 10) || 0,
+        closed_conversions: parseInt(fp.closed_count, 10) || 0,
+        revenue_30d: revenue,
+        true_roas_30d: spend30d > 0 ? Math.round((revenue / spend30d) * 100) / 100 : null,
+      };
+    })(),
   }));
 
   let liveDecisionContext = null;
@@ -258,12 +290,20 @@ async function runAnalysis(accountId, metaContext = {}) {
 // ─── GET RECOMMENDATIONS ──────────────────────────────────
 
 async function getRecommendations(accountId, status = 'pending') {
+  if (status === 'all') {
+    return queryAll(`
+      SELECT * FROM v_pending_recommendations
+      WHERE account_id = $1
+      ORDER BY created_at DESC
+    `, [accountId]);
+  }
+
   return queryAll(`
     SELECT * FROM v_pending_recommendations
     WHERE account_id = $1
-    ${status !== 'all' ? "AND status = '" + status + "'" : ''}
+      AND status = $2
     ORDER BY created_at DESC
-  `, [accountId]);
+  `, [accountId, status]);
 }
 
 async function getDailyAnalysis(accountId) {

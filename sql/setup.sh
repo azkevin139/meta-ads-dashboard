@@ -18,9 +18,25 @@ psql -U "$DB_USER" -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | 
   psql -U "$DB_USER" -c "CREATE DATABASE $DB_NAME"
 echo "  ✓ Database ready"
 
-# 2. Run schema
+# 2. Run schema + migrations
 echo "[2/3] Running schema.sql..."
 psql -U "$DB_USER" -d "$DB_NAME" -f "$(dirname "$0")/schema.sql"
+for migration in \
+  v2_users.sql \
+  v3_multi_accounts.sql \
+  v4_tracking_attribution.sql \
+  v5_meta_lead_sync.sql \
+  v6_token_health.sql \
+  v7_ghl_integration.sql \
+  v8_audience_push.sql \
+  v9_attribution_fields.sql \
+  v10_role_grants.sql
+do
+  if [ -f "$(dirname "$0")/$migration" ]; then
+    echo "    • $migration"
+    psql -U "$DB_USER" -d "$DB_NAME" -f "$(dirname "$0")/$migration"
+  fi
+done
 echo "  ✓ Schema created"
 
 # 3. Run seed

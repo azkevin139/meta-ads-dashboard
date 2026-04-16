@@ -268,6 +268,81 @@ async function getFirstPartyFunnel({ since, until, preset } = {}, context = {}) 
   });
 }
 
+async function getContactDetail({ clientId, contactId } = {}, context = {}) {
+  const accountId = context?.id || null;
+  if (!clientId && !contactId) throw new Error('clientId or contactId required');
+
+  const visitor = await queryOne(`
+    SELECT * FROM visitors
+    WHERE ${clientId ? 'client_id = $1' : 'ghl_contact_id = $1'}
+    ${accountId ? 'AND account_id = $2' : ''}
+    LIMIT 1
+  `, accountId ? [clientId || contactId, accountId] : [clientId || contactId]);
+
+  if (!visitor) return null;
+
+  const events = await queryAll(`
+    SELECT event_name, page_url, campaign_id, adset_id, ad_id, value, currency, metadata, fired_at
+    FROM visitor_events
+    WHERE client_id = $1
+    ORDER BY fired_at ASC
+  `, [visitor.client_id]);
+
+  // Collect every distinct ad this visitor interacted with
+  const adIds = new Set();
+  if (visitor.ad_id) adIds.add(visitor.ad_id);
+  for (const e of events) if (e.ad_id) adIds.add(e.ad_id);
+
+  const ads = [];
+  for (const adId of adIds) {
+    try {
+      const ad = await metaApi.metaGet(`/${adId}`, {
+        fields: 'id,name,status,effective_status,adset_id,campaign_id,creative{id,title,body,image_url,thumbnail_url,object_story_spec}',
+      }, context);
+      const creative = ad.creative || {};
+      const story = creative.object_story_spec || {};
+      const link = story.link_data || {};
+      const video = story.video_data || {};
+      ads.push({
+        id: ad.id,
+        name: ad.name,
+        status: ad.effective_status || ad.status,
+        adset_id: ad.adset_id,
+        campaign_id: ad.campaign_id,
+        headline: link.name || video.title || creative.title || '',
+        body: link.message || video.message || creative.body || '',
+        image_url: link.picture || video.image_url || creative.image_url || creative.thumbnail_url || null,
+      });
+    } catch (err) {
+      ads.push({ id: adId, name: null, error: err.message });
+    }
+  }
+
+  // Resolve campaign and adset names for context
+  const campaignIds = new Set();
+  const adsetIds = new Set();
+  if (visitor.campaign_id) campaignIds.add(visitor.campaign_id);
+  if (visitor.adset_id) adsetIds.add(visitor.adset_id);
+  for (const a of ads) {
+    if (a.campaign_id) campaignIds.add(a.campaign_id);
+    if (a.adset_id) adsetIds.add(a.adset_id);
+  }
+  const campaignMap = {};
+  for (const cid of campaignIds) {
+    try {
+      const c = await metaApi.metaGet(`/${cid}`, { fields: 'id,name,objective' }, context);
+      campaignMap[cid] = c;
+    } catch (e) { /* skip */ }
+  }
+
+  return {
+    visitor,
+    events,
+    ads_seen: ads,
+    campaigns: campaignMap,
+  };
+}
+
 async function getJourney({ clientId, contactId, limit = 20 } = {}, context = {}) {
   const accountId = context?.id || null;
   const values = [];
@@ -366,11 +441,13 @@ async function getAudienceHealth(context = {}) {
   const accountId = context?.id || null;
   const adAccountId = metaApi.contextAccountId(context);
   const audiences = await metaApi.metaGetAll(`/${adAccountId}/customaudiences`, {
-    fields: 'id,name,subtype,approximate_count,delivery_status,operation_status,updated_time',
+    fields: 'id,name,subtype,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status,updated_time',
     limit: '100',
   }, { maxPages: 5 }, context);
   if (accountId) {
     for (const audience of audiences) {
+      const upperBound = Number(audience.approximate_count_upper_bound) || null;
+      const lowerBound = Number(audience.approximate_count_lower_bound) || null;
       await query(`
         INSERT INTO audience_snapshots (account_id, audience_id, name, subtype, approximate_count, delivery_status, operation_status)
         VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -379,25 +456,111 @@ async function getAudienceHealth(context = {}) {
         audience.id,
         audience.name || null,
         audience.subtype || null,
-        audience.approximate_count ? Number(audience.approximate_count) : null,
+        upperBound || lowerBound,
         JSON.stringify(audience.delivery_status || {}),
         JSON.stringify(audience.operation_status || {}),
       ]).catch(() => null);
     }
   }
   return audiences.map(audience => {
-    const size = Number(audience.approximate_count) || 0;
+    const lowerBound = Number(audience.approximate_count_lower_bound) || 0;
+    const upperBound = Number(audience.approximate_count_upper_bound) || lowerBound;
+    const size = upperBound || lowerBound;
     return {
       id: audience.id,
       name: audience.name,
       subtype: audience.subtype,
       approximate_count: size,
+      approximate_count_lower_bound: lowerBound,
+      approximate_count_upper_bound: upperBound,
       status: size > 5000 ? 'healthy' : size >= 1000 ? 'watch' : 'too_small',
       delivery_status: audience.delivery_status || null,
       operation_status: audience.operation_status || null,
       updated_time: audience.updated_time || null,
     };
   }).sort((a, b) => a.approximate_count - b.approximate_count);
+}
+
+async function getAudienceSegments({ since, until, preset } = {}, context = {}) {
+  const accountId = context?.id || null;
+  const range = resolveDateRange({ since, until, preset });
+  const firstParty = [];
+
+  if (accountId) {
+    const rows = await queryAll(`
+      WITH base AS (
+        SELECT v.*
+        FROM visitors v
+        WHERE v.account_id = $1
+          AND v.last_seen_at::date BETWEEN $2::date AND $3::date
+      ),
+      event_counts AS (
+        SELECT client_id, COUNT(*) AS touches
+        FROM visitor_events
+        WHERE account_id = $1
+          AND fired_at::date BETWEEN $2::date AND $3::date
+        GROUP BY client_id
+      )
+      SELECT *
+      FROM (
+        SELECT 'all_visitors' AS key, 'All tracked website visitors' AS name, 'first_party' AS source, 'Website visitors with an anonymous dashboard client ID.' AS description, COUNT(DISTINCT client_id) AS size FROM base
+        UNION ALL
+        SELECT 'ad_click_visitors', 'Visitors with Meta click ID', 'first_party', 'Visitors carrying fbclid or _fbc from a Meta ad click.', COUNT(DISTINCT client_id) FROM base WHERE fbclid IS NOT NULL OR fbc IS NOT NULL
+        UNION ALL
+        SELECT 'browser_id_visitors', 'Visitors with Meta browser ID', 'first_party', 'Visitors carrying _fbp, useful for attribution diagnostics and matching.', COUNT(DISTINCT client_id) FROM base WHERE fbp IS NOT NULL
+        UNION ALL
+        SELECT 'multi_touch_visitors', 'Multi-touch visitors', 'first_party', 'Anonymous visitors with two or more recorded touchpoints.', COUNT(DISTINCT b.client_id) FROM base b JOIN event_counts e ON e.client_id = b.client_id WHERE e.touches >= 2
+        UNION ALL
+        SELECT 'meta_native_leads', 'Meta native leads', 'first_party', 'Lead form submissions from Meta (native Instant Form), captured via Meta lead webhook or GHL.', COUNT(DISTINCT client_id) FROM base WHERE meta_lead_id IS NOT NULL OR lower(COALESCE(source_event_type, '')) LIKE 'fb-lead%' OR lower(COALESCE(source_event_type, '')) LIKE '%instant%form%'
+        UNION ALL
+        SELECT 'google_ads_leads', 'Google Ads form submitters', 'first_party', 'Landing-page form submits attributed to Google Ads (gclid or utm_source=google).', COUNT(DISTINCT client_id) FROM base WHERE (gclid IS NOT NULL OR lower(COALESCE(utm_source, '')) = 'google') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL OR ghl_contact_id IS NOT NULL)
+        UNION ALL
+        SELECT 'landing_page_leads', 'Landing page form submitters', 'first_party', 'Contacts who submitted a form on your landing page (not native Meta form).', COUNT(DISTINCT client_id) FROM base WHERE ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%')
+        UNION ALL
+        SELECT 'known_contacts', 'Resolved contacts', 'first_party', 'Visitors matched to an email, phone, GHL contact, or Meta lead ID.', COUNT(DISTINCT client_id) FROM base WHERE email_hash IS NOT NULL OR phone_hash IS NOT NULL OR ghl_contact_id IS NOT NULL OR meta_lead_id IS NOT NULL
+        UNION ALL
+        SELECT 'qualified_contacts', 'Qualified contacts', 'first_party', 'Contacts whose current stage includes qualified.', COUNT(DISTINCT client_id) FROM base WHERE lower(COALESCE(current_stage, '')) LIKE '%qualif%'
+        UNION ALL
+        SELECT 'closed_contacts', 'Closed or revenue contacts', 'first_party', 'Contacts with closed stage language or tracked revenue.', COUNT(DISTINCT client_id) FROM base WHERE lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0
+      ) segments
+      ORDER BY size DESC, name
+    `, [accountId, range.since, range.until]);
+
+    firstParty.push(...rows.map(row => ({
+      key: row.key,
+      name: row.name,
+      source: row.source,
+      description: row.description,
+      size: parseInt(row.size, 10) || 0,
+      retargeting_status: parseInt(row.size, 10) >= 100 ? 'ready_to_build' : parseInt(row.size, 10) > 0 ? 'too_small' : 'waiting_for_data',
+      audience_id: null,
+      usable_in_adset: false,
+    })));
+  }
+
+  const metaAudiences = await getAudienceHealth(context);
+  const metaSegments = metaAudiences.map(audience => ({
+    key: `meta_${audience.id}`,
+    name: audience.name || audience.id,
+    source: 'meta_custom_audience',
+    description: `${audience.subtype || 'Custom'} audience already available in Meta.`,
+    size: audience.approximate_count || 0,
+    lower_bound: audience.approximate_count_lower_bound || 0,
+    upper_bound: audience.approximate_count_upper_bound || audience.approximate_count || 0,
+    retargeting_status: audience.status,
+    audience_id: audience.id,
+    subtype: audience.subtype || null,
+    delivery_status: audience.delivery_status || null,
+    operation_status: audience.operation_status || null,
+    usable_in_adset: true,
+  }));
+
+  return {
+    range,
+    first_party: firstParty,
+    meta: metaSegments,
+    data: [...firstParty, ...metaSegments],
+  };
 }
 
 async function getBreakdowns({ breakdown = 'publisher_platform', since, until, preset } = {}, context = {}) {
@@ -494,8 +657,10 @@ module.exports = {
   getFunnel,
   getFirstPartyFunnel,
   getJourney,
+  getContactDetail,
   getTrueRoas,
   getAudienceHealth,
+  getAudienceSegments,
   getBreakdowns,
   getCreativeLibrary,
 };

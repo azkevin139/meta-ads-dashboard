@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS users (
   name          TEXT,
   role          TEXT DEFAULT 'viewer' CHECK (role IN ('admin', 'operator', 'viewer')),
   is_active     BOOLEAN DEFAULT TRUE,
-  meta_token    TEXT,                          -- optional: user's own Meta token
   last_login    TIMESTAMPTZ,
   login_count   INTEGER DEFAULT 0,
   created_at    TIMESTAMPTZ DEFAULT NOW(),

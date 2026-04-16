@@ -2,6 +2,16 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
+const leadSync = require('../services/metaLeadSyncService');
+const accountService = require('../services/accountService');
+const {
+  ensureEnum,
+  ensureInteger,
+  ensureNonEmptyString,
+  ensureObject,
+  optionalNumber,
+  optionalTrimmedString,
+} = require('../validation');
 
 function withMetaMeta(data) {
   const paging = data && data._paging ? data._paging : null;
@@ -193,8 +203,13 @@ router.get('/ad-detail', async (req, res) => {
 // POST /api/meta/update-ad — edit ad creative text fields
 router.post('/update-ad', adminOrOperator, async (req, res) => {
   try {
-    const { adId, creativeId, headline, primaryText, description, cta, linkUrl } = req.body;
-    if (!adId) return res.status(400).json({ error: 'adId required' });
+    const body = ensureObject(req.body);
+    const adId = ensureNonEmptyString(body.adId, 'adId required');
+    const headline = optionalTrimmedString(body.headline, 500);
+    const primaryText = optionalTrimmedString(body.primaryText, 5000);
+    const description = optionalTrimmedString(body.description, 2000);
+    const cta = optionalTrimmedString(body.cta, 100);
+    const linkUrl = optionalTrimmedString(body.linkUrl, 2000);
 
     // To edit an ad's creative, we need to create a new creative with updated fields
     // and then update the ad to use the new creative
@@ -284,8 +299,14 @@ router.get('/adset-detail', async (req, res) => {
 // POST /api/meta/update-adset — edit ad set targeting, budget, status
 router.post('/update-adset', adminOrOperator, async (req, res) => {
   try {
-    const { adsetId, ageMin, ageMax, genders, dailyBudget, bidStrategy, status } = req.body;
-    if (!adsetId) return res.status(400).json({ error: 'adsetId required' });
+    const body = ensureObject(req.body);
+    const adsetId = ensureNonEmptyString(body.adsetId, 'adsetId required');
+    const ageMin = body.ageMin;
+    const ageMax = body.ageMax;
+    const genders = body.genders;
+    const dailyBudget = body.dailyBudget;
+    const bidStrategy = optionalTrimmedString(body.bidStrategy, 100);
+    const status = optionalTrimmedString(body.status, 50);
 
     // First get current targeting to merge
     const current = await metaApi.metaGet(`/${adsetId}`, { fields: 'targeting' }, req.metaAccount);
@@ -313,6 +334,54 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
 
     const result = await metaApi.metaPost(`/${adsetId}`, update, req.metaAccount);
     res.json({ success: true, result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// GET /api/meta/leads-sync-status — last sync metadata for the active account
+router.get('/leads-sync-status', async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.json({ configured: false });
+    const row = await require('../db').queryOne(
+      'SELECT last_leads_sync_at, last_leads_sync_count, last_leads_sync_error FROM accounts WHERE id = $1',
+      [account.id]
+    );
+    res.json({
+      configured: true,
+      account_id: account.id,
+      last_sync_at: row?.last_leads_sync_at || null,
+      last_sync_count: row?.last_leads_sync_count || 0,
+      last_sync_error: row?.last_leads_sync_error || null,
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/meta/warehouse-sync — refresh the local DB mirror for the active account
+router.post('/warehouse-sync', adminOrOperator, async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.status(400).json({ error: 'No active Meta account' });
+    const warehouseSync = require('../services/warehouseSyncService');
+    const entities = await warehouseSync.syncAccountEntities(account.id);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const insights = await warehouseSync.syncAccountInsights(account.id, { days: ensureInteger(body.days || 3, 'days must be a positive integer') });
+    res.json({ success: true, entities, insights });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+// POST /api/meta/leads-sync — manually trigger lead ingest for the active account
+router.post('/leads-sync', adminOrOperator, async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.status(400).json({ error: 'No active Meta account' });
+    const result = await leadSync.syncAccountLeads(account);
+    res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);
   }
