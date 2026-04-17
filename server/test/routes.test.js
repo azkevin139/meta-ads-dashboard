@@ -271,6 +271,114 @@ test('create bulk-action rejects invalid entity type before Meta calls', async (
   }
 });
 
+test('create campaign validates enums, schedule, and logs against resolved account', async () => {
+  const metaApiPath = require.resolve('../services/metaApi');
+  const metaUsagePath = require.resolve('../services/metaUsageService');
+  const actionServicePath = require.resolve('../services/actionService');
+  const routePath = require.resolve('../routes/create');
+  const originals = new Map([
+    [metaApiPath, require.cache[metaApiPath]],
+    [metaUsagePath, require.cache[metaUsagePath]],
+    [actionServicePath, require.cache[actionServicePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let loggedArgs = null;
+  let metaPayload = null;
+  delete require.cache[routePath];
+  require.cache[metaApiPath] = {
+    exports: {
+      metaPost: async (_path, payload) => {
+        metaPayload = payload;
+        return { id: '12001' };
+      },
+      contextAccountId: () => 'act_1',
+    },
+  };
+  require.cache[metaUsagePath] = { exports: { fetchLiveStatus: async () => ({ safe_to_write: true }) } };
+  require.cache[actionServicePath] = {
+    exports: {
+      logAction: async (...args) => { loggedArgs = args; },
+    },
+  };
+
+  try {
+    const router = require('../routes/create');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 44, meta_account_id: 'act_1' };
+      next();
+    });
+
+    const invalidBudgetRes = await invoke(app, {
+      method: 'POST',
+      url: '/campaign',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        name: 'Test Campaign',
+        objective: 'OUTCOME_SALES',
+        dailyBudget: 50,
+        lifetimeBudget: 500,
+      },
+    });
+    assert.equal(invalidBudgetRes.status, 400);
+    assert.match(invalidBudgetRes.json.error, /dailyBudget or lifetimeBudget/);
+
+    const invalidScheduleRes = await invoke(app, {
+      method: 'POST',
+      url: '/campaign',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        name: 'Test Campaign',
+        objective: 'OUTCOME_SALES',
+        startTime: '2026-04-18T10:00:00.000Z',
+        stopTime: '2026-04-18T09:00:00.000Z',
+      },
+    });
+    assert.equal(invalidScheduleRes.status, 400);
+    assert.match(invalidScheduleRes.json.error, /stopTime must be after startTime/);
+
+    const invalidEnumRes = await invoke(app, {
+      method: 'POST',
+      url: '/campaign',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        name: 'Test Campaign',
+        objective: 'BAD_OBJECTIVE',
+      },
+    });
+    assert.equal(invalidEnumRes.status, 400);
+    assert.match(invalidEnumRes.json.error, /objective is invalid/);
+
+    const validRes = await invoke(app, {
+      method: 'POST',
+      url: '/campaign',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        accountId: 999,
+        name: 'Test Campaign',
+        objective: 'OUTCOME_SALES',
+        status: 'ACTIVE',
+        buyingType: 'AUCTION',
+        specialAdCategories: ['HOUSING'],
+        internalTags: ['launch', 'cbo'],
+        dailyBudget: 50,
+        startTime: '2026-04-18T09:00:00.000Z',
+        stopTime: '2026-04-18T10:00:00.000Z',
+      },
+    });
+    assert.equal(validRes.status, 200);
+    assert.equal(validRes.json.campaign_id, '12001');
+    assert.equal(metaPayload.daily_budget, 5000);
+    assert.equal(metaPayload.start_time, '2026-04-18T09:00:00.000Z');
+    assert.equal(metaPayload.stop_time, '2026-04-18T10:00:00.000Z');
+    assert.equal(loggedArgs[0], 44);
+    assert.deepEqual(loggedArgs[5].internal_tags, ['launch', 'cbo']);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('meta update-ad requires adId', async () => {
   const metaApiPath = require.resolve('../services/metaApi');
   const leadSyncPath = require.resolve('../services/metaLeadSyncService');

@@ -20,6 +20,7 @@ window.getCampaignDateRange = () => campaignFilterState.getState();
 let campaignDrawerSection = 'identity';
 let currentCampaignEditorEntity = null;
 let campaignDrawerBound = false;
+let createCampaignSubmitting = false;
 
 async function loadCampaigns(container) {
   campaignBulkSelection.clear();
@@ -238,6 +239,20 @@ function openCreateCampaign() {
         <input id="cc-lifetime-budget" class="form-input" type="number" step="0.01" placeholder="1000.00" />
       </div>
     </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Start Time</label>
+        <input id="cc-start-time" class="form-input" type="datetime-local" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Stop Time</label>
+        <input id="cc-stop-time" class="form-input" type="datetime-local" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Internal Tags</label>
+      <input id="cc-tags" class="form-input" type="text" placeholder="launch, cbo, canada" />
+    </div>
     <div class="text-muted" style="font-size:0.78rem;">Use daily or lifetime budget for campaign budget optimization. Leave the other empty.</div>
     <div style="display:flex; gap:8px; margin-top:18px;">
       <button class="btn btn-primary" data-campaign-drawer-action="create-submit">Create Campaign</button>
@@ -246,28 +261,44 @@ function openCreateCampaign() {
   `);
 }
 async function submitCreateCampaign() {
+  if (createCampaignSubmitting) return;
   const name = document.getElementById('cc-name').value.trim();
   if (!name) { toast('Campaign name required', 'error'); return; }
   const dailyBudget = campaignEditorUtils.blankToUndefined(document.getElementById('cc-daily-budget').value);
   const lifetimeBudget = campaignEditorUtils.blankToUndefined(document.getElementById('cc-lifetime-budget').value);
-  if (dailyBudget && lifetimeBudget) { toast('Use daily or lifetime budget, not both', 'error'); return; }
+  const startTime = campaignEditorUtils.localDateTimeToIso(document.getElementById('cc-start-time').value);
+  const stopTime = campaignEditorUtils.localDateTimeToIso(document.getElementById('cc-stop-time').value);
+  if (dailyBudget !== undefined && lifetimeBudget !== undefined) { toast('Use daily or lifetime budget, not both', 'error'); return; }
+  if (dailyBudget !== undefined && dailyBudget <= 0) { toast('Daily budget must be greater than 0', 'error'); return; }
+  if (lifetimeBudget !== undefined && lifetimeBudget <= 0) { toast('Lifetime budget must be greater than 0', 'error'); return; }
+  if (startTime && stopTime && new Date(stopTime) <= new Date(startTime)) { toast('Stop time must be after start time', 'error'); return; }
   try {
+    createCampaignSubmitting = true;
+    const submitButton = document.querySelector('[data-campaign-drawer-action="create-submit"]');
+    if (submitButton) submitButton.disabled = true;
     toast('Creating campaign...', 'info');
-    await apiPost('/create/campaign', {
+    const res = await apiPost('/create/campaign', {
       accountId: ACCOUNT_ID,
       name,
       objective: document.getElementById('cc-objective').value,
       status: document.getElementById('cc-status').value,
       buyingType: document.getElementById('cc-buying-type').value,
       specialAdCategories: Array.from(document.querySelectorAll('.cc-cat:checked')).map((c) => c.value),
+      internalTags: campaignEditorUtils.tagsToArray(document.getElementById('cc-tags').value),
       dailyBudget,
       lifetimeBudget,
+      startTime,
+      stopTime,
     });
     toast('Campaign created', 'success');
     closeDrawer();
-    navigateTo('campaigns');
+    navigateTo('adsets', { metaCampaignId: res.campaign_id, campaignName: name, launchCreateAdSet: true });
   } catch (err) {
     toast(`Error: ${err.message}`, 'error');
+    const submitButton = document.querySelector('[data-campaign-drawer-action="create-submit"]');
+    if (submitButton) submitButton.disabled = false;
+  } finally {
+    createCampaignSubmitting = false;
   }
 }
 async function openCampaignEditor(campaignId) { campaignDrawerSection = 'identity'; openDrawer('Edit Campaign', '<div class="loading">Loading campaign…</div>'); try { const res = await apiGet(`/meta/entity/campaign/${campaignId}`); renderCampaignEditor(res.data); } catch (err) { setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`); } }

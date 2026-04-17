@@ -5,6 +5,7 @@ const metaApi = require('../services/metaApi');
 const metaUsage = require('../services/metaUsageService');
 const { logAction } = require('../services/actionService');
 const {
+  badRequest,
   ensureArray,
   ensureEnum,
   ensureNonEmptyString,
@@ -12,6 +13,19 @@ const {
   optionalNumber,
   optionalTrimmedString,
 } = require('../validation');
+
+const CAMPAIGN_OBJECTIVES = [
+  'OUTCOME_SALES',
+  'OUTCOME_LEADS',
+  'OUTCOME_TRAFFIC',
+  'OUTCOME_ENGAGEMENT',
+  'OUTCOME_AWARENESS',
+  'OUTCOME_APP_PROMOTION',
+];
+
+const CAMPAIGN_STATUSES = ['PAUSED', 'ACTIVE'];
+const BUYING_TYPES = ['AUCTION', 'RESERVED'];
+const SPECIAL_AD_CATEGORIES = ['CREDIT', 'EMPLOYMENT', 'HOUSING', 'SOCIAL_ISSUES_ELECTIONS_POLITICS'];
 
 // Role guard
 function adminOrOperator(req, res, next) {
@@ -82,12 +96,37 @@ router.post('/campaign', async (req, res) => {
     if (!(await ensureSafeWrite(req, res))) return;
     const body = ensureObject(req.body);
     const name = ensureNonEmptyString(body.name, 'name required');
-    const objective = ensureNonEmptyString(body.objective, 'objective required');
-    const status = optionalTrimmedString(body.status, 50);
+    const objective = ensureEnum(body.objective, CAMPAIGN_OBJECTIVES, 'objective is invalid');
+    const status = body.status === undefined ? undefined : ensureEnum(body.status, CAMPAIGN_STATUSES, 'status must be PAUSED or ACTIVE');
     const dailyBudget = optionalNumber(body.dailyBudget, 'dailyBudget must be numeric');
     const lifetimeBudget = optionalNumber(body.lifetimeBudget, 'lifetimeBudget must be numeric');
-    const specialAdCategories = Array.isArray(body.specialAdCategories) ? body.specialAdCategories : [];
-    const buyingType = optionalTrimmedString(body.buyingType, 50);
+    const specialAdCategories = Array.isArray(body.specialAdCategories)
+      ? body.specialAdCategories.map((value) => ensureEnum(value, SPECIAL_AD_CATEGORIES, 'specialAdCategories contains invalid value'))
+      : [];
+    const internalTags = Array.isArray(body.internalTags)
+      ? body.internalTags.map((value) => ensureNonEmptyString(value, 'internalTags must contain strings'))
+      : [];
+    const buyingType = body.buyingType === undefined ? undefined : ensureEnum(body.buyingType, BUYING_TYPES, 'buyingType must be AUCTION or RESERVED');
+    const startTime = optionalTrimmedString(body.startTime, 100);
+    const stopTime = optionalTrimmedString(body.stopTime, 100);
+
+    if (dailyBudget !== undefined && dailyBudget <= 0) throw badRequest('dailyBudget must be greater than 0');
+    if (lifetimeBudget !== undefined && lifetimeBudget <= 0) throw badRequest('lifetimeBudget must be greater than 0');
+    if (dailyBudget !== undefined && lifetimeBudget !== undefined) throw badRequest('Use dailyBudget or lifetimeBudget, not both');
+
+    let parsedStartTime;
+    let parsedStopTime;
+    if (startTime) {
+      parsedStartTime = new Date(startTime);
+      if (Number.isNaN(parsedStartTime.getTime())) throw badRequest('startTime must be a valid date');
+    }
+    if (stopTime) {
+      parsedStopTime = new Date(stopTime);
+      if (Number.isNaN(parsedStopTime.getTime())) throw badRequest('stopTime must be a valid date');
+    }
+    if (parsedStartTime && parsedStopTime && parsedStopTime <= parsedStartTime) {
+      throw badRequest('stopTime must be after startTime');
+    }
 
     const payload = {
       name,
@@ -98,12 +137,15 @@ router.post('/campaign', async (req, res) => {
     };
 
     // Budget at campaign level (CBO) — optional
-    if (dailyBudget) payload.daily_budget = Math.round(dailyBudget * 100);
-    if (lifetimeBudget) payload.lifetime_budget = Math.round(lifetimeBudget * 100);
+    if (dailyBudget !== undefined) payload.daily_budget = Math.round(dailyBudget * 100);
+    if (lifetimeBudget !== undefined) payload.lifetime_budget = Math.round(lifetimeBudget * 100);
+    if (startTime) payload.start_time = parsedStartTime.toISOString();
+    if (stopTime) payload.stop_time = parsedStopTime.toISOString();
 
     const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/campaigns`, payload, req.metaAccount);
-    await logAction(req.body.accountId || 1, 'campaign', result.id, name, 'create', {
+    await logAction(req.metaAccount?.id || 1, 'campaign', result.id, name, 'create', {
       payload,
+      internal_tags: internalTags,
       performed_by: req.user?.email || req.user?.name || null,
     });
     res.json({ success: true, campaign_id: result.id, result });

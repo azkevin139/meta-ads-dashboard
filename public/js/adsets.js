@@ -18,6 +18,7 @@ let adsetDrawerBound = false;
 async function loadAdSets(container) {
   const metaCampaignId = pageState.metaCampaignId || pageState.campaignId;
   const campaignName = pageState.campaignName || 'Campaign';
+  const launchCreateAdSet = Boolean(pageState.launchCreateAdSet);
   adsetBulkSelection.clear();
 
   if (!metaCampaignId) {
@@ -95,6 +96,10 @@ async function loadAdSets(container) {
         }).join('')}
       </tbody></table></div>
     `;
+    if (launchCreateAdSet) {
+      pageState.launchCreateAdSet = false;
+      setTimeout(() => openCreateAdSet(metaCampaignId), 0);
+    }
   } catch (err) {
     document.getElementById('adsets-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
   }
