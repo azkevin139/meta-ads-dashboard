@@ -22,6 +22,13 @@ async function loadIntelligence(container) {
     <div id="intel-freshness" class="mb-md"></div>
     <div id="intel-rules" class="mb-md"><div class="loading">Loading decision queues</div></div>
     <div class="table-container mb-md">
+      <div class="table-header">
+        <span class="table-title">Touch Sequences</span>
+        <button class="btn btn-sm" onclick="runTouchSequenceMonitor()">Run Monitor</button>
+      </div>
+      <div id="intel-touch-sequences"><div class="loading">Loading touch sequences</div></div>
+    </div>
+    <div class="table-container mb-md">
       <div class="table-header"><span class="table-title">Audience Segments</span><span class="badge badge-active">RETARGETING</span></div>
       <div id="intel-audience-segments"><div class="loading">Loading audience segments</div></div>
     </div>
@@ -62,6 +69,7 @@ async function loadIntelligence(container) {
 
   await Promise.all([
     loadDecisionQueues(),
+    loadTouchSequences(),
     loadAudienceSegments(),
     loadFunnel(),
     loadBreakdowns(),
@@ -70,6 +78,74 @@ async function loadIntelligence(container) {
     loadAudienceHealth(),
     loadJourneys(),
   ]);
+}
+
+async function loadTouchSequences() {
+  const el = document.getElementById('intel-touch-sequences');
+  try {
+    const res = await apiGet('/intelligence/touch-sequences');
+    const sequences = res.data || [];
+    if (!sequences.length) {
+      const defaults = (res.defaults || []).map((step) => `<li>${step.step_number}. ${escapeHtml(step.name)} <span class="text-muted">(${escapeHtml(step.audience_source_type.replace(/_/g, ' '))})</span></li>`).join('');
+      el.innerHTML = `<div class="empty-state">
+        <div class="empty-state-text">No touch sequences configured yet</div>
+        <div class="text-muted" style="font-size:0.78rem; margin-top:8px;">Phase 1 is live in the backend. Configure a sequence through the API first, then this panel will monitor threshold triggers.</div>
+        <ol style="margin-top:10px; padding-left:18px; font-size:0.78rem; color:var(--text-secondary);">${defaults}</ol>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = sequences.map((sequence) => `
+      <div class="reco-card" style="margin-bottom:12px;">
+        <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
+          <div>
+            <div class="reco-entity">${escapeHtml(sequence.name)}</div>
+            <div class="text-muted" style="font-size:0.74rem;">Threshold default: ${fmt(sequence.threshold_default, 'integer')} · ${sequence.n8n_webhook_url ? 'n8n webhook configured' : 'no webhook'}</div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span class="badge badge-${sequence.enabled ? 'active' : 'low'}">${sequence.enabled ? 'enabled' : 'disabled'}</span>
+            <button class="btn btn-sm" onclick="runTouchSequenceMonitor(${sequence.id})">Run</button>
+          </div>
+        </div>
+        <div style="overflow:auto; margin-top:12px;">
+          <table>
+            <thead><tr><th>#</th><th>Step</th><th>Source</th><th class="right">Size</th><th class="right">Threshold</th><th>Status</th><th>Target Ad Set</th></tr></thead>
+            <tbody>
+              ${(sequence.steps || []).map((step) => `
+                <tr>
+                  <td>${step.step_number}</td>
+                  <td class="name-cell">
+                    ${escapeHtml(step.name)}
+                    <div class="text-muted" style="font-size:0.72rem;">${escapeHtml(step.source_audience_name || step.source_audience_id || step.segment_key || 'unconfigured')}</div>
+                    ${step.last_error ? `<div class="text-red" style="font-size:0.72rem;">${escapeHtml(step.last_error)}</div>` : ''}
+                  </td>
+                  <td>${escapeHtml((step.audience_source_type || '').replace(/_/g, ' '))}</td>
+                  <td class="right">${fmt(step.current_size || step.last_size || 0, 'integer')}</td>
+                  <td class="right">${fmt(step.threshold_count || 0, 'integer')}</td>
+                  <td><span class="badge badge-${step.status === 'triggered' ? 'active' : step.status === 'error' ? 'critical' : step.status === 'ready' ? 'warning' : 'low'}">${escapeHtml((step.status || 'waiting').replace(/_/g, ' '))}</span></td>
+                  <td>${step.target_adset_id ? `<span class="mono">${escapeHtml(step.target_adset_id)}</span>` : '<span class="text-muted">—</span>'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+  }
+}
+
+async function runTouchSequenceMonitor(sequenceId) {
+  try {
+    toast('Running sequence monitor…', 'info');
+    const path = sequenceId ? `/intelligence/touch-sequences/${sequenceId}/run-monitor` : '/intelligence/touch-sequences/run-monitor';
+    await apiPost(path, {});
+    toast('Sequence monitor complete', 'success');
+    loadTouchSequences();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
 }
 
 function intelRangeQuery() {

@@ -4,7 +4,9 @@ const router = express.Router();
 const intelligence = require('../services/intelligenceService');
 const tracking = require('../services/trackingService');
 const audiencePush = require('../services/audiencePushService');
+const touchSequences = require('../services/touchSequenceService');
 const {
+  ensureArray,
   ensureBoolean,
   ensureInteger,
   ensureNonEmptyString,
@@ -130,6 +132,71 @@ router.get('/audience-pushes', async (req, res) => {
     if (!accountId) return res.json({ data: [] });
     const rows = await audiencePush.listPushes(accountId);
     res.json({ data: rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/touch-sequences', async (req, res) => {
+  try {
+    const accountId = req.metaAccount?.id;
+    if (!accountId) return res.json({ data: [], defaults: touchSequences.DEFAULT_SEVEN_TOUCH_TEMPLATE });
+    const data = await touchSequences.listSequences(accountId);
+    res.json({ data, defaults: touchSequences.DEFAULT_SEVEN_TOUCH_TEMPLATE });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/touch-sequences', adminOrOperator, async (req, res) => {
+  try {
+    const accountId = req.metaAccount?.id;
+    if (!accountId) return res.status(400).json({ error: 'No active account' });
+    const body = ensureObject(req.body);
+    const steps = ensureArray(body.steps, 'steps required');
+    const result = await touchSequences.saveSequence(accountId, {
+      id: body.id,
+      name: ensureNonEmptyString(body.name, 'name required'),
+      description: optionalTrimmedString(body.description, 1000),
+      threshold_default: body.threshold_default,
+      n8n_webhook_url: optionalTrimmedString(body.n8n_webhook_url, 2000),
+      enabled: body.enabled,
+      steps,
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.delete('/touch-sequences/:id', adminOrOperator, async (req, res) => {
+  try {
+    const accountId = req.metaAccount?.id;
+    if (!accountId) return res.status(400).json({ error: 'No active account' });
+    await touchSequences.deleteSequence(accountId, ensureInteger(req.params.id, 'id must be a positive integer'));
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/touch-sequences/run-monitor', adminOrOperator, async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.status(400).json({ error: 'No active account' });
+    const result = await touchSequences.runMonitorForAccount(account);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/touch-sequences/:id/run-monitor', adminOrOperator, async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.status(400).json({ error: 'No active account' });
+    const result = await touchSequences.runMonitorForSequence(account, ensureInteger(req.params.id, 'id must be a positive integer'));
+    res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
   }

@@ -17,6 +17,7 @@ const SEGMENT_SQL = {
   meta_native_leads: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR lower(COALESCE(source_event_type, '')) LIKE 'fb-lead%' OR lower(COALESCE(source_event_type, '')) LIKE '%instant%form%') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   google_ads_leads: `WHERE account_id = $1 AND (gclid IS NOT NULL OR lower(COALESCE(utm_source, '')) = 'google') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   landing_page_leads: `WHERE account_id = $1 AND ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  converted_contacts: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   known_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   qualified_contacts: `WHERE account_id = $1 AND lower(COALESCE(current_stage, '')) LIKE '%qualif%' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   closed_contacts: `WHERE account_id = $1 AND (lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,

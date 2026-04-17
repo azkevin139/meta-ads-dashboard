@@ -67,6 +67,11 @@ module.exports = {
     model: 'gpt-4o',
   },
 
+  touchSequences: {
+    monitorIntervalMs: parseInt(process.env.TOUCH_SEQUENCE_MONITOR_INTERVAL_MS || '', 10) || 30 * 60 * 1000,
+    webhookSigningSecret: process.env.TOUCH_SEQUENCE_WEBHOOK_SIGNING_SECRET || '',
+  },
+
   authSecret: sessionSecret,
   sessionSecret,
   accountTokenSecret,

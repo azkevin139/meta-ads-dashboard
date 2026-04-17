@@ -30,7 +30,8 @@ for migration in \
   v7_ghl_integration.sql \
   v8_audience_push.sql \
   v9_attribution_fields.sql \
-  v10_role_grants.sql
+  v10_role_grants.sql \
+  v11_touch_sequences.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

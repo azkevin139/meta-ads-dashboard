@@ -3,6 +3,7 @@ const tokenHealth = require('./services/tokenHealthService');
 const ghlSync = require('./services/ghlService');
 const audiencePush = require('./services/audiencePushService');
 const warehouseSync = require('./services/warehouseSyncService');
+const touchSequences = require('./services/touchSequenceService');
 
 const JOB_DEFINITIONS = [
   {
@@ -29,6 +30,11 @@ const JOB_DEFINITIONS = [
     name: 'warehouse-sync',
     disabledEnv: 'DISABLE_WAREHOUSE_SYNC',
     start: () => warehouseSync.startBackgroundSync({ intervalMs: 6 * 60 * 60 * 1000 }),
+  },
+  {
+    name: 'touch-sequence-monitor',
+    disabledEnv: 'DISABLE_TOUCH_SEQUENCE_MONITOR',
+    start: () => touchSequences.startBackgroundMonitor(),
   },
 ];
 

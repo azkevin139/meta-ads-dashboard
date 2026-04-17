@@ -517,6 +517,8 @@ async function getAudienceSegments({ since, until, preset } = {}, context = {}) 
         UNION ALL
         SELECT 'landing_page_leads', 'Landing page form submitters', 'first_party', 'Contacts who submitted a form on your landing page (not native Meta form).', COUNT(DISTINCT client_id) FROM base WHERE ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%')
         UNION ALL
+        SELECT 'converted_contacts', 'Converted / excluded contacts', 'first_party', 'Contacts who already converted, submitted a lead, booked, or reached a closed/revenue stage. Use as a global exclusion audience.', COUNT(DISTINCT client_id) FROM base WHERE meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0
+        UNION ALL
         SELECT 'known_contacts', 'Resolved contacts', 'first_party', 'Visitors matched to an email, phone, GHL contact, or Meta lead ID.', COUNT(DISTINCT client_id) FROM base WHERE email_hash IS NOT NULL OR phone_hash IS NOT NULL OR ghl_contact_id IS NOT NULL OR meta_lead_id IS NOT NULL
         UNION ALL
         SELECT 'qualified_contacts', 'Qualified contacts', 'first_party', 'Contacts whose current stage includes qualified.', COUNT(DISTINCT client_id) FROM base WHERE lower(COALESCE(current_stage, '')) LIKE '%qualif%'

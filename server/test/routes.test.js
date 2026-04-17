@@ -549,6 +549,65 @@ test('intelligence auto-refresh requires boolean enabled', async () => {
   }
 });
 
+test('touch sequence save requires steps and monitor route returns data', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [{ step_number: 1, name: 'Discovery Engagers', audience_source_type: 'meta_engagement' }],
+      listSequences: async () => [],
+      saveSequence: async () => ({ id: 7, name: 'Seven Touch', steps: [{ step_number: 1 }] }),
+      deleteSequence: async () => ({ success: true }),
+      runMonitorForAccount: async () => ([{ id: 7, steps: [{ status: 'waiting' }] }]),
+      runMonitorForSequence: async () => ({ id: 7, steps: [{ status: 'triggered' }] }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 1, meta_account_id: 'act_1' };
+      next();
+    });
+
+    const invalidRes = await invoke(app, {
+      method: 'POST',
+      url: '/touch-sequences',
+      headers: { 'content-type': 'application/json' },
+      body: { name: 'Seven Touch' },
+    });
+    assert.equal(invalidRes.status, 400);
+    assert.match(invalidRes.json.error, /steps required/);
+
+    const runRes = await invoke(app, {
+      method: 'POST',
+      url: '/touch-sequences/run-monitor',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(runRes.status, 200);
+    assert.equal(runRes.json.data[0].id, 7);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('admin update rejects invalid role', async () => {
   const authServicePath = require.resolve('../services/authService');
   const routePath = require.resolve('../routes/admin');
