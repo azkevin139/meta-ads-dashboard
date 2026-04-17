@@ -79,7 +79,7 @@
       <!-- User / Logout -->
       <div style="padding: 14px 16px; border-top: 1px solid var(--border); margin-top: auto;">
         <div style="font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 8px;" id="user-info"></div>
-        <button class="btn btn-sm" style="width: 100%;" onclick="handleLogout()">Sign Out</button>
+        <button class="btn btn-sm" style="width: 100%;" data-app-action="logout">Sign Out</button>
       </div>
     </aside>
 
@@ -120,7 +120,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
         <span>Admin</span>
       </a>
-      <a href="#" class="mobile-nav-item" onclick="toggleMobileMenu(); return false;">
+      <a href="#" class="mobile-nav-item" data-app-action="toggle-mobile-menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
         <span>More</span>
       </a>
@@ -128,11 +128,11 @@
 
     <!-- Mobile "More" menu -->
     <div id="mobile-more-menu" class="mobile-more-menu" style="display:none;">
-      <a href="#" onclick="navigateTo('adsets'); closeMobileMenu(); return false;">Ad Sets</a>
-      <a href="#" onclick="navigateTo('ads'); closeMobileMenu(); return false;">Ads</a>
-      <a href="#" onclick="navigateTo('logs'); closeMobileMenu(); return false;">Action Log</a>
-      <a href="#" onclick="navigateTo('settings'); closeMobileMenu(); return false;">Settings</a>
-      <a href="#" onclick="handleLogout(); return false;" style="color: var(--red);">Sign Out</a>
+      <a href="#" data-app-nav="adsets">Ad Sets</a>
+      <a href="#" data-app-nav="ads">Ads</a>
+      <a href="#" data-app-nav="logs">Action Log</a>
+      <a href="#" data-app-nav="settings">Settings</a>
+      <a href="#" data-app-action="logout" style="color: var(--red);">Sign Out</a>
     </div>
   </div>
 
@@ -172,19 +172,5 @@
   <script src="/js/admin.js"></script>
   <script src="/js/settings.js"></script>
 
-  <script>
-    function toggleMobileMenu() {
-      const menu = document.getElementById('mobile-more-menu');
-      menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
-    }
-    function closeMobileMenu() {
-      document.getElementById('mobile-more-menu').style.display = 'none';
-    }
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.mobile-more-menu') && !e.target.closest('.mobile-nav-item')) {
-        closeMobileMenu();
-      }
-    });
-  </script>
 </body>
 </html>

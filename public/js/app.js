@@ -164,6 +164,43 @@ function handleLogout() {
   showLogin();
 }
 
+function toggleMobileMenu() {
+  const menu = document.getElementById('mobile-more-menu');
+  if (!menu) return;
+  menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+}
+
+function closeMobileMenu() {
+  const menu = document.getElementById('mobile-more-menu');
+  if (!menu) return;
+  menu.style.display = 'none';
+}
+
+function bindShellControls() {
+  if (document.body.__shellControlsBound) return;
+  document.body.__shellControlsBound = true;
+
+  document.addEventListener('click', (event) => {
+    const action = event.target.closest('[data-app-action]');
+    if (action) {
+      event.preventDefault();
+      if (action.dataset.appAction === 'logout') return handleLogout();
+      if (action.dataset.appAction === 'toggle-mobile-menu') return toggleMobileMenu();
+    }
+
+    const nav = event.target.closest('[data-app-nav]');
+    if (nav) {
+      event.preventDefault();
+      closeMobileMenu();
+      return navigateTo(nav.dataset.appNav);
+    }
+
+    if (!event.target.closest('.mobile-more-menu') && !event.target.closest('.mobile-nav-item')) {
+      closeMobileMenu();
+    }
+  });
+}
+
 async function showDashboard() {
   // Verify token
   try {
@@ -192,6 +229,7 @@ async function showDashboard() {
 
 document.addEventListener('DOMContentLoaded', () => {
   renderMetaCooldown();
+  bindShellControls();
   navigation.bindNavHandlers();
   headerStatus.start();
 
