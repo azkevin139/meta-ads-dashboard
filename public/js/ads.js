@@ -6,6 +6,14 @@ const adsBulk = window.AdsBulkHelpers.createAdsBulk({
   getPageState: () => pageState,
 });
 const adsCreative = window.AdsCreativeHelpers.createAdsCreative();
+const adsActions = window.AdsActionHelpers.createAdsActions({
+  getPageState: () => pageState,
+});
+const adsEditor = window.AdsEditorHelpers.createAdsEditor({
+  getPageState: () => pageState,
+  loadCreative: (adId) => adsCreative.loadAdCreative(adId),
+});
+const adsRowActions = window.RowActionHelpers;
 const adsBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
   checkboxSelector: '.ad-check',
   barId: 'ad-bulk-bar',
@@ -21,7 +29,8 @@ async function loadAds(container) {
   adsBulk.init(adsBulkSelection);
 
   if (!metaAdsetId) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎨</div><div class="empty-state-text">Select an ad set first</div><button class="btn mt-md" onclick="navigateTo(\'campaigns\')">← Go to Campaigns</button></div>';
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎨</div><div class="empty-state-text">Select an ad set first</div><button class="btn mt-md" data-ads-nav="campaigns">← Go to Campaigns</button></div>';
+    bindAdsControls(container);
     return;
   }
 
@@ -30,18 +39,19 @@ async function loadAds(container) {
   container.innerHTML = `
     <div class="flex-between mb-md">
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-sm" onclick="navigateTo('adsets', {metaCampaignId:'${metaCampaignId}', campaignName:'${(campaignName||'').replace(/'/g,"\\'")}'})">← Back</button>
-        <button class="btn btn-primary btn-sm" onclick="openCreateAd('${metaAdsetId}')">+ New Ad</button>
+        <button class="btn btn-sm" data-ads-nav="adsets" data-campaign-id="${metaCampaignId || ''}" data-campaign-name="${escapeHtml(campaignName || '')}">← Back</button>
+        <button class="btn btn-primary btn-sm" data-ad-create="${metaAdsetId}">+ New Ad</button>
       </div>
     </div>
     <div id="ad-bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px;">
       <span id="ad-bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
-      <button class="btn btn-sm btn-danger" onclick="bulkAdAction('pause')">Pause</button>
-      <button class="btn btn-sm" onclick="bulkAdAction('resume')">Resume</button>
-      <button class="btn btn-sm" onclick="clearAdSelection()">Clear</button>
+      <button class="btn btn-sm btn-danger" data-ad-bulk="pause">Pause</button>
+      <button class="btn btn-sm" data-ad-bulk="resume">Resume</button>
+      <button class="btn btn-sm" data-ad-bulk="clear">Clear</button>
     </div>
     <div id="ads-grid"><div class="loading">Loading ads</div></div>
   `;
+  bindAdsControls(container);
 
   try {
     const res = await apiGet(`/meta/ads?adSetId=${metaAdsetId}`);
@@ -64,8 +74,6 @@ async function loadAds(container) {
         ${ads.map(ad => adCard(ad, insightsMap[ad.id])).join('')}
       </div>
     `;
-
-    bindAdsControls(container);
     for (const ad of ads) { adsCreative.loadAdCreative(ad.id); }
   } catch (err) {
     document.getElementById('ads-grid').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
@@ -74,15 +82,9 @@ async function loadAds(container) {
 
 // ─── BULK ─────────────────────────────────────────────────
 
-function updateAdSelection() {
-  adsBulkSelection.sync();
-}
-function clearAdSelection() {
-  adsBulkSelection.clear();
-}
-async function bulkAdAction(action) {
-  return adsBulk.bulkAdAction(action);
-}
+function updateAdSelection() { adsBulkSelection.sync(); }
+function clearAdSelection() { adsBulkSelection.clear(); }
+async function bulkAdAction(action) { return adsBulk.bulkAdAction(action); }
 
 // ─── AD CARD ──────────────────────────────────────────────
 
@@ -97,7 +99,7 @@ function adCard(ad, ins) {
     <div class="reco-card" style="border-left: 3px solid ${ad.effective_status === 'ACTIVE' ? 'var(--green)' : 'var(--yellow)'};">
       <div class="reco-header" style="margin-bottom: 14px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <input type="checkbox" class="ad-check" value="${ad.id}" onchange="updateAdSelection()" />
+          <input type="checkbox" class="ad-check" value="${ad.id}" />
           <div class="reco-entity" style="font-size: 0.85rem;">${ad.name}</div>
         </div>
         ${statusBadge(ad.effective_status)}
@@ -126,11 +128,11 @@ function adCard(ad, ins) {
       </div>
 
       <div style="display: flex; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-light);">
-        <button class="btn btn-sm btn-primary" onclick="openEditAd('${ad.id}','${(ad.name||'').replace(/'/g,"\\'")}')">Edit</button>
+        <button class="btn btn-sm btn-primary" data-ad-edit="${ad.id}" data-ad-name="${escapeHtml(ad.name || '')}">Edit</button>
         ${ad.effective_status === 'ACTIVE'
-          ? `<button class="btn btn-sm btn-danger" onclick="pauseAd('${ad.id}','${(ad.name||'').replace(/'/g,"\\'")}')">Pause</button>`
-          : `<button class="btn btn-sm" onclick="resumeAd('${ad.id}','${(ad.name||'').replace(/'/g,"\\'")}')">Resume</button>`}
-        <button class="btn btn-sm" onclick="dupAd('${ad.id}','${(ad.name||'').replace(/'/g,"\\'")}')">Duplicate</button>
+          ? `<button class="btn btn-sm btn-danger" data-ad-status="pause" data-ad-id="${ad.id}" data-ad-name="${escapeHtml(ad.name || '')}">Pause</button>`
+          : `<button class="btn btn-sm" data-ad-status="resume" data-ad-id="${ad.id}" data-ad-name="${escapeHtml(ad.name || '')}">Resume</button>`}
+        <button class="btn btn-sm" data-ad-duplicate="${ad.id}" data-ad-name="${escapeHtml(ad.name || '')}">Duplicate</button>
       </div>
     </div>
   `;
@@ -139,168 +141,27 @@ function adCard(ad, ins) {
 function truncate(str, len) { return str && str.length > len ? str.substring(0, len) + '...' : str || ''; }
 function escapeHtml(str) { return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function bindAdsControls(container) {
-  container.addEventListener('change', (event) => {
-    if (event.target.matches('.ad-check')) updateAdSelection();
+  if (container.__adsControlsBound) return;
+  container.__adsControlsBound = true;
+  adsRowActions.bind(container, {
+    change: [
+      { selector: '.ad-check', closest: false, handle: () => updateAdSelection() },
+    ],
+    click: [
+      { selector: '[data-ads-nav]', handle: (event, match) => {
+        if (match.dataset.adsNav === 'adsets') {
+          return navigateTo('adsets', {
+            metaCampaignId: match.dataset.campaignId || '',
+            campaignName: match.dataset.campaignName || '',
+          });
+        }
+        return navigateTo(match.dataset.adsNav);
+      } },
+      { selector: '[data-ad-create]', handle: (event, match) => adsEditor.openCreateAd(match.dataset.adCreate) },
+      { selector: '[data-ad-bulk]', handle: (event, match) => match.dataset.adBulk === 'clear' ? clearAdSelection() : bulkAdAction(match.dataset.adBulk) },
+      { selector: '[data-ad-edit]', handle: (event, match) => adsEditor.openEditAd(match.dataset.adEdit, match.dataset.adName || '') },
+      { selector: '[data-ad-status]', handle: (event, match) => match.dataset.adStatus === 'pause' ? adsActions.pauseAd(match.dataset.adId, match.dataset.adName || '') : adsActions.resumeAd(match.dataset.adId, match.dataset.adName || '') },
+      { selector: '[data-ad-duplicate]', handle: (event, match) => adsActions.duplicateAd(match.dataset.adDuplicate, match.dataset.adName || '') },
+    ],
   });
-}
-
-// ─── CREATE AD DRAWER ─────────────────────────────────────
-
-async function openCreateAd(adsetId) {
-  openDrawer('Create Ad', '<div class="loading">Loading pages...</div>');
-
-  let pages = [];
-  try {
-    const pgRes = await apiGet('/create/pages');
-    pages = pgRes.data || [];
-  } catch (e) {}
-
-  const ctaOptions = ['SIGN_UP','LEARN_MORE','SHOP_NOW','BOOK_NOW','DOWNLOAD','GET_OFFER','BET_NOW','PLAY_GAME','APPLY_NOW','CONTACT_US','SUBSCRIBE'];
-
-  setDrawerBody(`
-    <div class="form-group">
-      <label class="form-label">Ad Name</label>
-      <input id="ca-name" class="form-input" type="text" placeholder="e.g. Slots — Jackpot Visual — V1" />
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Facebook Page</label>
-      <select id="ca-page" class="form-select">
-        <option value="">Select page</option>
-        ${pages.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
-      </select>
-    </div>
-
-    <div style="font-weight:600; font-size:0.82rem; color:var(--accent); margin:16px 0 10px; text-transform:uppercase; letter-spacing:0.06em;">Creative</div>
-
-    <div class="form-group">
-      <label class="form-label">Image URL</label>
-      <input id="ca-image" class="form-input" type="url" placeholder="https://example.com/ad-image.jpg" />
-      <div class="text-muted" style="font-size:0.7rem; margin-top:4px;">Direct URL to image. Will be uploaded to Meta.</div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Primary Text</label>
-      <textarea id="ca-primary" class="form-textarea" rows="4" placeholder="The main body text of your ad"></textarea>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Headline</label>
-      <input id="ca-headline" class="form-input" type="text" placeholder="e.g. Bet NHL with $500 Bonus" />
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Description</label>
-      <input id="ca-description" class="form-input" type="text" placeholder="Optional description line" />
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">CTA Button</label>
-        <select id="ca-cta" class="form-select">
-          ${ctaOptions.map(c => `<option value="${c}" ${c === 'SIGN_UP' ? 'selected' : ''}>${c.replace(/_/g,' ')}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Destination URL</label>
-        <input id="ca-link" class="form-input" type="url" placeholder="https://yoursite.com/landing" />
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Initial Status</label>
-      <select id="ca-status" class="form-select">
-        <option value="PAUSED">Paused</option>
-        <option value="ACTIVE">Active</option>
-      </select>
-    </div>
-
-    <div style="display: flex; gap: 8px; margin-top: 20px;">
-      <button class="btn btn-primary" onclick="submitCreateAd('${adsetId}')">Create Ad</button>
-      <button class="btn" onclick="closeDrawer()">Cancel</button>
-    </div>
-  `);
-}
-
-async function submitCreateAd(adsetId) {
-  const name = document.getElementById('ca-name').value;
-  const pageId = document.getElementById('ca-page').value;
-  const imageUrl = document.getElementById('ca-image').value;
-  const primaryText = document.getElementById('ca-primary').value;
-  const headline = document.getElementById('ca-headline').value;
-  const description = document.getElementById('ca-description').value;
-  const cta = document.getElementById('ca-cta').value;
-  const linkUrl = document.getElementById('ca-link').value;
-  const status = document.getElementById('ca-status').value;
-
-  if (!name) { toast('Ad name required', 'error'); return; }
-  if (!pageId) { toast('Select a Facebook page', 'error'); return; }
-  if (!linkUrl) { toast('Destination URL required', 'error'); return; }
-
-  try {
-    toast('Creating ad...', 'info');
-    await apiPost('/create/ad', {
-      name, adsetId, status, pageId,
-      imageUrl, primaryText, headline, description, cta, linkUrl,
-    });
-    toast(`Ad created: ${name}`, 'success');
-    closeDrawer();
-    navigateTo('ads', pageState);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
-}
-
-// ─── EDIT AD DRAWER ───────────────────────────────────────
-
-async function openEditAd(metaAdId, name) {
-  openDrawer('Edit Ad', '<div class="loading">Loading...</div>');
-  try {
-    const res = await apiGet(`/meta/ad-detail?adId=${metaAdId}`);
-    const ctaOptions = ['SIGN_UP','LEARN_MORE','SHOP_NOW','BOOK_NOW','DOWNLOAD','GET_OFFER','BET_NOW','PLAY_GAME','APPLY_NOW','CONTACT_US','SUBSCRIBE','GET_QUOTE','NO_BUTTON'];
-    setDrawerBody(`
-      <div style="margin-bottom:16px;"><div style="font-weight:600; font-size:0.9rem;">${name}</div><div class="text-muted" style="font-size:0.75rem;">ID: ${metaAdId}</div></div>
-      <div class="form-group"><label class="form-label">Primary Text</label><textarea id="edit-primary-text" class="form-textarea" rows="5">${escapeHtml(res.primary_text||'')}</textarea></div>
-      <div class="form-group"><label class="form-label">Headline</label><input id="edit-headline" class="form-input" type="text" value="${escapeHtml(res.headline||'')}" /></div>
-      <div class="form-group"><label class="form-label">Description</label><input id="edit-description" class="form-input" type="text" value="${escapeHtml(res.description||'')}" /></div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">CTA</label><select id="edit-cta" class="form-select">${ctaOptions.map(c => `<option value="${c}" ${res.cta===c?'selected':''}>${c.replace(/_/g,' ')}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Link URL</label><input id="edit-link" class="form-input" type="url" value="${escapeHtml(res.link_url||'')}" /></div>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:20px;">
-        <button class="btn btn-primary" onclick="saveAdEdit('${metaAdId}','${res.creative_id||''}')">Save Changes</button>
-        <button class="btn" onclick="closeDrawer()">Cancel</button>
-      </div>
-      <div style="font-size:0.72rem; color:var(--text-muted); margin-top:12px;">Editing creates a new creative. Ad may re-enter review.</div>
-    `);
-  } catch (err) { setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`); }
-}
-
-async function saveAdEdit(metaAdId, creativeId) {
-  const headline = document.getElementById('edit-headline').value;
-  const primaryText = document.getElementById('edit-primary-text').value;
-  const description = document.getElementById('edit-description').value;
-  const cta = document.getElementById('edit-cta').value;
-  const linkUrl = document.getElementById('edit-link').value;
-  if (!confirmAction('Save changes? Ad may re-enter review.')) return;
-  try {
-    toast('Saving...', 'info');
-    await apiPost('/meta/update-ad', { adId: metaAdId, creativeId, headline, primaryText, description, cta, linkUrl });
-    toast('Ad updated', 'success');
-    closeDrawer();
-    adsCreative.loadAdCreative(metaAdId);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
-}
-
-// ─── ACTIONS ──────────────────────────────────────────────
-
-async function pauseAd(metaId, name) {
-  if (!confirmAction(`Pause "${name}"?`)) return;
-  try { await apiPost('/actions/pause', { accountId: ACCOUNT_ID, entityType: 'ad', metaEntityId: metaId }); toast(`Paused: ${name}`, 'success'); navigateTo('ads', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
-}
-async function resumeAd(metaId, name) {
-  if (!confirmAction(`Resume "${name}"?`)) return;
-  try { await apiPost('/actions/resume', { accountId: ACCOUNT_ID, entityType: 'ad', metaEntityId: metaId }); toast(`Resumed: ${name}`, 'success'); navigateTo('ads', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
-}
-async function dupAd(metaId, name) {
-  if (!confirmAction(`Duplicate "${name}"?`)) return;
-  try { await apiPost('/actions/duplicate', { accountId: ACCOUNT_ID, entityType: 'ad', metaEntityId: metaId }); toast(`Duplicated: ${name}`, 'success'); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }

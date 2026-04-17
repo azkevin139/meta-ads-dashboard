@@ -3,6 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 const adsetEditorUtils = window.EditorUtils;
+const adsetRowActions = window.RowActionHelpers;
 const adsetBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
   checkboxSelector: '.adset-check',
   barId: 'adset-bulk-bar',
@@ -10,6 +11,9 @@ const adsetBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
 });
 
 let adsetDrawerSection = 'identity';
+let currentAdsetEditorEntity = null;
+let currentAdsetEditorPixels = [];
+let adsetDrawerBound = false;
 
 async function loadAdSets(container) {
   const metaCampaignId = pageState.metaCampaignId || pageState.campaignId;
@@ -109,35 +113,23 @@ async function bulkAdSetAction(action) {
   } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 function bindAdSetControls(container) {
-  container.addEventListener('change', (event) => {
-    if (event.target.matches('.adset-check')) updateAdSetSelection();
-    if (event.target.matches('[data-adset-toggle-all]')) {
-      toggleAllAdSets(event.target, JSON.parse(event.target.dataset.adsetToggleAll || '[]'));
-    }
-  });
-  container.addEventListener('click', (event) => {
-    const nav = event.target.closest('[data-adset-nav]');
-    if (nav) return navigateTo(nav.dataset.adsetNav);
-    const create = event.target.closest('[data-adset-create]');
-    if (create) return openCreateAdSet(create.dataset.adsetCreate);
-    const bulk = event.target.closest('[data-adset-bulk]');
-    if (bulk) return bulk.dataset.adsetBulk === 'clear' ? clearAdSetSelection() : bulkAdSetAction(bulk.dataset.adsetBulk);
-    const open = event.target.closest('[data-adset-open]');
-    if (open) {
-      event.preventDefault();
-      return navigateTo('ads', {
-        metaAdsetId: open.dataset.adsetOpen,
-        adsetName: open.dataset.adsetName || '',
-        metaCampaignId: open.dataset.campaignId || '',
-        campaignName: open.dataset.campaignName || '',
-      });
-    }
-    const edit = event.target.closest('[data-adset-edit]');
-    if (edit) return openAdSetEditor(edit.dataset.adsetEdit);
-    const status = event.target.closest('[data-adset-status]');
-    if (status) return adsetStatusAction(status.dataset.adsetStatus, status.dataset.adsetNextStatus);
-    const duplicate = event.target.closest('[data-adset-duplicate]');
-    if (duplicate) return adsetDuplicate(duplicate.dataset.adsetDuplicate);
+  if (container.__adsetControlsBound) return;
+  container.__adsetControlsBound = true;
+  bindAdSetDrawerActions();
+  adsetRowActions.bind(container, {
+    change: [
+      { selector: '.adset-check', closest: false, handle: () => updateAdSetSelection() },
+      { selector: '[data-adset-toggle-all]', closest: false, handle: (event, match) => toggleAllAdSets(match, JSON.parse(match.dataset.adsetToggleAll || '[]')) },
+    ],
+    click: [
+      { selector: '[data-adset-nav]', handle: (event, match) => navigateTo(match.dataset.adsetNav) },
+      { selector: '[data-adset-create]', handle: (event, match) => openCreateAdSet(match.dataset.adsetCreate) },
+      { selector: '[data-adset-bulk]', handle: (event, match) => match.dataset.adsetBulk === 'clear' ? clearAdSetSelection() : bulkAdSetAction(match.dataset.adsetBulk) },
+      { selector: '[data-adset-open]', handle: (event, match) => { event.preventDefault(); navigateTo('ads', { metaAdsetId: match.dataset.adsetOpen, adsetName: match.dataset.adsetName || '', metaCampaignId: match.dataset.campaignId || '', campaignName: match.dataset.campaignName || '' }); } },
+      { selector: '[data-adset-edit]', handle: (event, match) => openAdSetEditor(match.dataset.adsetEdit) },
+      { selector: '[data-adset-status]', handle: (event, match) => adsetStatusAction(match.dataset.adsetStatus, match.dataset.adsetNextStatus) },
+      { selector: '[data-adset-duplicate]', handle: (event, match) => adsetDuplicate(match.dataset.adsetDuplicate) },
+    ],
   });
 }
 
@@ -156,6 +148,8 @@ async function openAdSetEditor(adsetId) {
 }
 
 function renderAdSetEditor(entity, pixels) {
+  currentAdsetEditorEntity = entity;
+  currentAdsetEditorPixels = pixels;
   const t = entity.targeting || {};
   const po = entity.promoted_object || {};
   setDrawerBody(`
@@ -220,10 +214,10 @@ function renderAdSetEditor(entity, pixels) {
     </div>
 
     <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px;">
-      <button class="btn btn-primary" onclick="saveAdSetEditor('${entity.id}')">Publish</button>
-      <button class="btn" onclick="adsetDuplicate('${entity.id}')">Duplicate</button>
-      <button class="btn" onclick="renderAdSetEditor(${adsetEditorUtils.safeJson(entity)}, ${adsetEditorUtils.safeJson(pixels)})">Revert</button>
-      <button class="btn" onclick="closeDrawer()">Close</button>
+      <button class="btn btn-primary" data-adset-drawer-action="publish" data-adset-id="${entity.id}">Publish</button>
+      <button class="btn" data-adset-drawer-action="duplicate" data-adset-id="${entity.id}">Duplicate</button>
+      <button class="btn" data-adset-drawer-action="revert">Revert</button>
+      <button class="btn" data-adset-drawer-action="close">Close</button>
     </div>
   `);
 }
@@ -286,6 +280,24 @@ async function adsetDuplicate(adsetId) {
   try { await apiPost(`/meta/entity/adset/${adsetId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Ad set duplicated', 'success'); closeDrawer(); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
 }
 
+function bindAdSetDrawerActions() {
+  if (adsetDrawerBound) return;
+  adsetDrawerBound = true;
+  document.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-entity-kind="adset"][data-entity-tab]');
+    if (tab) return switchAdsetDrawerSection(tab.dataset.entityTab);
+    const drawerAction = event.target.closest('[data-adset-drawer-action]');
+    if (drawerAction) {
+      if (drawerAction.dataset.adsetDrawerAction === 'publish') return saveAdSetEditor(drawerAction.dataset.adsetId);
+      if (drawerAction.dataset.adsetDrawerAction === 'duplicate') return adsetDuplicate(drawerAction.dataset.adsetId);
+      if (drawerAction.dataset.adsetDrawerAction === 'revert' && currentAdsetEditorEntity) return renderAdSetEditor(currentAdsetEditorEntity, currentAdsetEditorPixels);
+      if (drawerAction.dataset.adsetDrawerAction === 'close') return closeDrawer();
+    }
+    const createAction = event.target.closest('[data-create-adset-submit]');
+    if (createAction) return submitCreateAdSet(createAction.dataset.createAdsetSubmit);
+  });
+}
+
 async function openCreateAdSet(campaignId) {
   openDrawer('Create Ad Set', '<div class="loading">Loading conversion assets…</div>');
   let pixels = [];
@@ -321,7 +333,7 @@ async function openCreateAdSet(campaignId) {
     ${pendingAudienceIds ? `<div class="alert-banner alert-info">Using audience: ${escapeHtml(pendingAudienceName || pendingAudienceIds)}</div>` : ''}
     <div class="form-group"><label class="form-label">Custom Audience IDs</label><input id="cas-custom-audiences" class="form-input" value="${escapeHtml(pendingAudienceIds)}" placeholder="123, 456" /></div>
     <div class="form-group"><label class="form-label">Excluded Audience IDs</label><input id="cas-excluded-audiences" class="form-input" placeholder="789" /></div>
-    <div style="display:flex; gap:8px; margin-top:18px;"><button class="btn btn-primary" onclick="submitCreateAdSet('${campaignId}')">Create Ad Set</button><button class="btn" onclick="closeDrawer()">Cancel</button></div>
+    <div style="display:flex; gap:8px; margin-top:18px;"><button class="btn btn-primary" data-create-adset-submit="${campaignId}">Create Ad Set</button><button class="btn" data-adset-drawer-action="close">Cancel</button></div>
   `);
 }
 

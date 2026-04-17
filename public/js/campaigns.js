@@ -9,6 +9,8 @@ const campaignFilterState = window.PageFilterHelpers.createDateRangeState({
   daysAgoStr,
 });
 const campaignMetrics = window.DashboardMetrics;
+const campaignEditorUtils = window.EditorUtils;
+const rowActions = window.RowActionHelpers;
 const campaignBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
   checkboxSelector: '.camp-check',
   barId: 'bulk-bar',
@@ -16,6 +18,8 @@ const campaignBulkSelection = window.BulkSelectionHelpers.createBulkSelection({
 });
 window.getCampaignDateRange = () => campaignFilterState.getState();
 let campaignDrawerSection = 'identity';
+let currentCampaignEditorEntity = null;
+let campaignDrawerBound = false;
 
 async function loadCampaigns(container) {
   campaignBulkSelection.clear();
@@ -188,43 +192,127 @@ function toggleAllCampaigns(checkbox, ids) { campaignBulkSelection.toggleAll(ids
 function updateCampSelection() { campaignBulkSelection.sync(); }
 function clearSelection() { campaignBulkSelection.clear(); }
 async function bulkAction(action) { if (!campaignBulkSelection.size()) return; const targetStatus = action === 'pause' ? 'PAUSED' : 'ACTIVE'; if (!confirmAction(`${action === 'pause' ? 'Pause' : 'Resume'} ${campaignBulkSelection.size()} campaign(s)?`)) return; try { for (const id of campaignBulkSelection.getSelected()) await apiPost(`/meta/entity/campaign/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus }); toast(`Updated ${campaignBulkSelection.size()} campaign(s)`, 'success'); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
+function openCreateCampaign() {
+  openDrawer('Create Campaign', `
+    <div class="form-group">
+      <label class="form-label">Campaign Name</label>
+      <input id="cc-name" class="form-input" type="text" placeholder="e.g. CA Sportsbook Checkout - CBO - V1" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Objective</label>
+        <select id="cc-objective" class="form-select">
+          ${['OUTCOME_SALES','OUTCOME_LEADS','OUTCOME_TRAFFIC','OUTCOME_ENGAGEMENT','OUTCOME_AWARENESS','OUTCOME_APP_PROMOTION'].map(v => `<option value="${v}">${v.replace(/_/g,' ')}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select id="cc-status" class="form-select">
+          <option value="PAUSED">Paused</option>
+          <option value="ACTIVE">Active</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Buying Type</label>
+        <select id="cc-buying-type" class="form-select">
+          <option value="AUCTION">Auction</option>
+          <option value="RESERVED">Reserved</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Special Ad Categories</label>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+          ${['CREDIT','EMPLOYMENT','HOUSING','SOCIAL_ISSUES_ELECTIONS_POLITICS'].map(v => `<label style="display:flex; align-items:center; gap:6px; font-size:0.82rem;"><input type="checkbox" class="cc-cat" value="${v}" /> ${v.replace(/_/g,' ')}</label>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Daily Budget</label>
+        <input id="cc-daily-budget" class="form-input" type="number" step="0.01" placeholder="50.00" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Lifetime Budget</label>
+        <input id="cc-lifetime-budget" class="form-input" type="number" step="0.01" placeholder="1000.00" />
+      </div>
+    </div>
+    <div class="text-muted" style="font-size:0.78rem;">Use daily or lifetime budget for campaign budget optimization. Leave the other empty.</div>
+    <div style="display:flex; gap:8px; margin-top:18px;">
+      <button class="btn btn-primary" data-campaign-drawer-action="create-submit">Create Campaign</button>
+      <button class="btn" data-campaign-drawer-action="close">Cancel</button>
+    </div>
+  `);
+}
+async function submitCreateCampaign() {
+  const name = document.getElementById('cc-name').value.trim();
+  if (!name) { toast('Campaign name required', 'error'); return; }
+  const dailyBudget = campaignEditorUtils.blankToUndefined(document.getElementById('cc-daily-budget').value);
+  const lifetimeBudget = campaignEditorUtils.blankToUndefined(document.getElementById('cc-lifetime-budget').value);
+  if (dailyBudget && lifetimeBudget) { toast('Use daily or lifetime budget, not both', 'error'); return; }
+  try {
+    toast('Creating campaign...', 'info');
+    await apiPost('/create/campaign', {
+      accountId: ACCOUNT_ID,
+      name,
+      objective: document.getElementById('cc-objective').value,
+      status: document.getElementById('cc-status').value,
+      buyingType: document.getElementById('cc-buying-type').value,
+      specialAdCategories: Array.from(document.querySelectorAll('.cc-cat:checked')).map((c) => c.value),
+      dailyBudget,
+      lifetimeBudget,
+    });
+    toast('Campaign created', 'success');
+    closeDrawer();
+    navigateTo('campaigns');
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
 async function openCampaignEditor(campaignId) { campaignDrawerSection = 'identity'; openDrawer('Edit Campaign', '<div class="loading">Loading campaign…</div>'); try { const res = await apiGet(`/meta/entity/campaign/${campaignId}`); renderCampaignEditor(res.data); } catch (err) { setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`); } }
-function renderCampaignEditor(entity) { const s = entity.special_ad_categories || []; setDrawerBody(`
+function renderCampaignEditor(entity) { currentCampaignEditorEntity = entity; const s = entity.special_ad_categories || []; setDrawerBody(`
   ${entitySectionNav('campaign', campaignDrawerSection, ['identity','budget','schedule'])}
   <div data-entity-section="identity" style="display:${campaignDrawerSection === 'identity' ? 'block' : 'none'};"><div class="form-group"><label class="form-label">Name</label><input id="ce-name" class="form-input" value="${escapeHtml(entity.name || '')}" /></div><div class="form-row"><div class="form-group"><label class="form-label">Status</label><select id="ce-status" class="form-select">${['ACTIVE','PAUSED','ARCHIVED'].map(v => `<option value="${v}" ${entity.status === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div><div class="form-group"><label class="form-label">Buying Type</label><select id="ce-buying-type" class="form-select">${['AUCTION','RESERVED'].map(v => `<option value="${v}" ${entity.buying_type === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div><div class="form-group"><label class="form-label">Objective</label><select id="ce-objective" class="form-select">${['OUTCOME_SALES','OUTCOME_LEADS','OUTCOME_TRAFFIC','OUTCOME_ENGAGEMENT','OUTCOME_AWARENESS','OUTCOME_APP_PROMOTION'].map(v => `<option value="${v}" ${entity.objective === v ? 'selected' : ''}>${v.replace(/_/g,' ')}</option>`).join('')}</select></div><div class="form-group"><label class="form-label">Special Ad Categories</label><div style="display:flex; flex-wrap:wrap; gap:8px;">${['CREDIT','EMPLOYMENT','HOUSING','SOCIAL_ISSUES_ELECTIONS_POLITICS'].map(v => `<label style="display:flex; align-items:center; gap:6px; font-size:0.82rem;"><input type="checkbox" class="ce-cat" value="${v}" ${s.includes(v) ? 'checked' : ''}/> ${v.replace(/_/g,' ')}</label>`).join('')}</div></div><div class="form-group"><label class="form-label">Internal Tags</label><input id="ce-tags" class="form-input" placeholder="launch, cbo, test" /></div></div>
   <div data-entity-section="budget" style="display:${campaignDrawerSection === 'budget' ? 'block' : 'none'};"><div class="form-row"><div class="form-group"><label class="form-label">Daily Budget</label><input id="ce-daily-budget" class="form-input" type="number" step="0.01" value="${entity.daily_budget ? (entity.daily_budget / 100).toFixed(2) : ''}" /></div><div class="form-group"><label class="form-label">Lifetime Budget</label><input id="ce-lifetime-budget" class="form-input" type="number" step="0.01" value="${entity.lifetime_budget ? (entity.lifetime_budget / 100).toFixed(2) : ''}" /></div></div><div class="text-muted" style="font-size:0.78rem;">Use daily or lifetime budget based on campaign setup. Leave the other empty.</div></div>
-  <div data-entity-section="schedule" style="display:${campaignDrawerSection === 'schedule' ? 'block' : 'none'};"><div class="form-row"><div class="form-group"><label class="form-label">Start Time</label><input id="ce-start-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.start_time)}" /></div><div class="form-group"><label class="form-label">Stop Time</label><input id="ce-stop-time" class="form-input" type="datetime-local" value="${toLocalDateTime(entity.stop_time)}" /></div></div><pre style="background:var(--bg-elevated); padding:10px; border-radius:8px; font-size:0.72rem; white-space:pre-wrap;">${escapeHtml(JSON.stringify({ objective: entity.objective, smart_promotion_type: entity.smart_promotion_type }, null, 2))}</pre></div>
-  <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px; flex-wrap:wrap;"><button class="btn btn-primary" onclick="saveCampaignEditor('${entity.id}')">Publish</button><button class="btn" onclick="campaignDuplicate('${entity.id}')">Duplicate</button><button class="btn" onclick="renderCampaignEditor(${safeJson(entity)})">Revert</button><button class="btn" onclick="closeDrawer()">Close</button></div>`); }
+  <div data-entity-section="schedule" style="display:${campaignDrawerSection === 'schedule' ? 'block' : 'none'};"><div class="form-row"><div class="form-group"><label class="form-label">Start Time</label><input id="ce-start-time" class="form-input" type="datetime-local" value="${campaignEditorUtils.toLocalDateTime(entity.start_time)}" /></div><div class="form-group"><label class="form-label">Stop Time</label><input id="ce-stop-time" class="form-input" type="datetime-local" value="${campaignEditorUtils.toLocalDateTime(entity.stop_time)}" /></div></div><pre style="background:var(--bg-elevated); padding:10px; border-radius:8px; font-size:0.72rem; white-space:pre-wrap;">${escapeHtml(JSON.stringify({ objective: entity.objective, smart_promotion_type: entity.smart_promotion_type }, null, 2))}</pre></div>
+  <div style="display:flex; gap:8px; margin-top:18px; position:sticky; bottom:0; background:var(--bg-panel); padding-top:12px; flex-wrap:wrap;"><button class="btn btn-primary" data-campaign-drawer-action="publish" data-campaign-id="${entity.id}">Publish</button><button class="btn" data-campaign-drawer-action="duplicate" data-campaign-id="${entity.id}">Duplicate</button><button class="btn" data-campaign-drawer-action="revert">Revert</button><button class="btn" data-campaign-drawer-action="close">Close</button></div>`); }
 function switchCampaignDrawerSection(section) { campaignDrawerSection = section; document.querySelectorAll('[data-entity-section]').forEach(el => { el.style.display = el.getAttribute('data-entity-section') === section ? 'block' : 'none'; }); document.querySelectorAll('.entity-section-tab').forEach(el => el.classList.toggle('active', el.dataset.section === section)); }
-async function saveCampaignEditor(campaignId) { const payload = { accountId: ACCOUNT_ID, name: document.getElementById('ce-name').value, status: document.getElementById('ce-status').value, buying_type: document.getElementById('ce-buying-type').value, objective: document.getElementById('ce-objective').value, special_ad_categories: Array.from(document.querySelectorAll('.ce-cat:checked')).map(c => c.value), daily_budget: blankToUndefined(document.getElementById('ce-daily-budget').value), lifetime_budget: blankToUndefined(document.getElementById('ce-lifetime-budget').value), start_time: localDateTimeToIso(document.getElementById('ce-start-time').value), stop_time: localDateTimeToIso(document.getElementById('ce-stop-time').value), internal_tags: tagsToArray(document.getElementById('ce-tags').value) }; try { await apiPost(`/meta/entity/campaign/${campaignId}/update`, payload); toast('Campaign updated', 'success'); closeDrawer(); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
+async function saveCampaignEditor(campaignId) { const payload = { accountId: ACCOUNT_ID, name: document.getElementById('ce-name').value, status: document.getElementById('ce-status').value, buying_type: document.getElementById('ce-buying-type').value, objective: document.getElementById('ce-objective').value, special_ad_categories: Array.from(document.querySelectorAll('.ce-cat:checked')).map(c => c.value), daily_budget: campaignEditorUtils.blankToUndefined(document.getElementById('ce-daily-budget').value), lifetime_budget: campaignEditorUtils.blankToUndefined(document.getElementById('ce-lifetime-budget').value), start_time: campaignEditorUtils.localDateTimeToIso(document.getElementById('ce-start-time').value), stop_time: campaignEditorUtils.localDateTimeToIso(document.getElementById('ce-stop-time').value), internal_tags: campaignEditorUtils.tagsToArray(document.getElementById('ce-tags').value) }; try { await apiPost(`/meta/entity/campaign/${campaignId}/update`, payload); toast('Campaign updated', 'success'); closeDrawer(); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
 async function campaignStatusAction(campaignId, status) { try { await apiPost(`/meta/entity/campaign/${campaignId}/status`, { accountId: ACCOUNT_ID, status }); toast(`Campaign ${status === 'ACTIVE' ? 'resumed' : status.toLowerCase()}`, 'success'); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
 async function campaignDuplicate(campaignId) { try { await apiPost(`/meta/entity/campaign/${campaignId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Campaign duplicated', 'success'); closeDrawer(); navigateTo('campaigns'); } catch (err) { toast(`Error: ${err.message}`, 'error'); } }
-function entitySectionNav(prefix, active, sections) { return `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">${sections.map(s => `<button class="btn btn-sm entity-section-tab ${active === s ? 'btn-primary' : ''}" data-section="${s}" onclick="switch${prefix === 'campaign' ? 'Campaign' : 'Adset'}DrawerSection('${s}')">${capitalizeFirst(s)}</button>`).join('')}</div>`; }
+function entitySectionNav(prefix, active, sections) { return `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">${sections.map(s => `<button class="btn btn-sm entity-section-tab ${active === s ? 'btn-primary' : ''}" data-section="${s}" data-entity-kind="${prefix}" data-entity-tab="${s}">${capitalizeFirst(s)}</button>`).join('')}</div>`; }
 function capitalizeFirst(str) { return str.charAt(0).toUpperCase() + str.slice(1); }
-function safeJson(obj) { return JSON.stringify(obj).replace(/</g, '\\u003c'); }
-function blankToUndefined(v) { return v === '' ? undefined : parseFloat(v); }
-function tagsToArray(v) { return (v || '').split(',').map(s => s.trim()).filter(Boolean); }
-function toLocalDateTime(iso) { if (!iso) return ''; const d = new Date(iso); const pad = n => String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-function localDateTimeToIso(v) { return v ? new Date(v).toISOString() : null; }
-function bindCampaignControls(container) {
-  container.addEventListener('change', (event) => {
-    if (event.target.matches('.camp-check')) updateCampSelection();
-    if (event.target.matches('[data-campaign-toggle-all]')) {
-      toggleAllCampaigns(event.target, JSON.parse(event.target.dataset.campaignToggleAll || '[]'));
-    }
+function bindCampaignDrawerActions() {
+  if (campaignDrawerBound) return;
+  campaignDrawerBound = true;
+  document.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-entity-kind="campaign"][data-entity-tab]');
+    if (tab) return switchCampaignDrawerSection(tab.dataset.entityTab);
+    const action = event.target.closest('[data-campaign-drawer-action]');
+    if (!action) return;
+    if (action.dataset.campaignDrawerAction === 'create-submit') return submitCreateCampaign();
+    if (action.dataset.campaignDrawerAction === 'publish') return saveCampaignEditor(action.dataset.campaignId);
+    if (action.dataset.campaignDrawerAction === 'duplicate') return campaignDuplicate(action.dataset.campaignId);
+    if (action.dataset.campaignDrawerAction === 'revert' && currentCampaignEditorEntity) return renderCampaignEditor(currentCampaignEditorEntity);
+    if (action.dataset.campaignDrawerAction === 'close') return closeDrawer();
   });
-  container.addEventListener('click', (event) => {
-    const open = event.target.closest('[data-campaign-open]');
-    if (open) {
-      event.preventDefault();
-      return navigateTo('adsets', { metaCampaignId: open.dataset.campaignOpen, campaignName: open.dataset.campaignName || '' });
-    }
-    const edit = event.target.closest('[data-campaign-edit]');
-    if (edit) return openCampaignEditor(edit.dataset.campaignEdit);
-    const duplicate = event.target.closest('[data-campaign-duplicate]');
-    if (duplicate) return campaignDuplicate(duplicate.dataset.campaignDuplicate);
-    const status = event.target.closest('[data-campaign-status]');
-    if (status) return campaignStatusAction(status.dataset.campaignStatus, status.dataset.campaignNextStatus);
+}
+function bindCampaignControls(container) {
+  if (container.__campaignControlsBound) return;
+  container.__campaignControlsBound = true;
+  bindCampaignDrawerActions();
+  rowActions.bind(container, {
+    change: [
+      { selector: '.camp-check', closest: false, handle: () => updateCampSelection() },
+      { selector: '[data-campaign-toggle-all]', closest: false, handle: (event, match) => toggleAllCampaigns(match, JSON.parse(match.dataset.campaignToggleAll || '[]')) },
+    ],
+    click: [
+      { selector: '[data-campaign-open]', handle: (event, match) => { event.preventDefault(); navigateTo('adsets', { metaCampaignId: match.dataset.campaignOpen, campaignName: match.dataset.campaignName || '' }); } },
+      { selector: '[data-campaign-edit]', handle: (event, match) => openCampaignEditor(match.dataset.campaignEdit) },
+      { selector: '[data-campaign-duplicate]', handle: (event, match) => campaignDuplicate(match.dataset.campaignDuplicate) },
+      { selector: '[data-campaign-status]', handle: (event, match) => campaignStatusAction(match.dataset.campaignStatus, match.dataset.campaignNextStatus) },
+    ],
   });
   container.querySelectorAll('[data-campaign-preset]').forEach((el) => {
     el.addEventListener('click', () => setCampPreset(el.dataset.campaignPreset));
