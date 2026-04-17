@@ -4,6 +4,7 @@ const { query, queryAll, queryOne } = require('../db');
 const config = require('../config');
 const metaApi = require('./metaApi');
 const audiencePush = require('./audiencePushService');
+const { logAction } = require('./actionService');
 
 const SOURCE_TYPES = ['meta_engagement', 'meta_website', 'first_party_push'];
 
@@ -14,7 +15,7 @@ const DEFAULT_SEVEN_TOUCH_TEMPLATE = [
   { step_number: 4, name: 'IG/Profile + Page Engagers', audience_source_type: 'meta_engagement' },
   { step_number: 5, name: 'Lead Form Openers', audience_source_type: 'meta_engagement' },
   { step_number: 6, name: 'GHL Website Visitors', audience_source_type: 'first_party_push', segment_key: 'all_visitors' },
-  { step_number: 7, name: 'Non-Converters (All Previous)', audience_source_type: 'first_party_push', segment_key: 'converted_contacts' },
+  { step_number: 7, name: 'Non-Converters (All Previous)', audience_source_type: 'first_party_push', segment_key: 'non_converted_contacts' },
 ];
 
 function nowIso() {
@@ -227,6 +228,53 @@ async function emitSequenceWebhook(sequence, payload) {
   return { delivered: true };
 }
 
+async function executeStepTransition(account, sequence, currentStep, nextStep) {
+  if (!nextStep || !nextStep.target_adset_id) {
+    return { skipped: true, reason: 'No next step target ad set configured' };
+  }
+
+  const result = {
+    activated_adset_id: nextStep.target_adset_id,
+    paused_previous: false,
+    reduced_previous_budget: null,
+  };
+
+  await metaApi.updateStatus(nextStep.target_adset_id, 'ACTIVE', account);
+  await logAction(account.id, 'adset', nextStep.target_adset_id, nextStep.name, 'touch_sequence_activate', {
+    sequence_id: sequence.id,
+    sequence_name: sequence.name,
+    step_id: nextStep.id,
+    step_number: nextStep.step_number,
+  });
+
+  if (currentStep?.target_adset_id && nextStep.pause_previous_adset) {
+    await metaApi.updateStatus(currentStep.target_adset_id, 'PAUSED', account);
+    await logAction(account.id, 'adset', currentStep.target_adset_id, currentStep.name, 'touch_sequence_pause_previous', {
+      sequence_id: sequence.id,
+      sequence_name: sequence.name,
+      previous_step_id: currentStep.id,
+      previous_step_number: currentStep.step_number,
+      triggered_by_step_id: nextStep.id,
+      triggered_by_step_number: nextStep.step_number,
+    });
+    result.paused_previous = true;
+  } else if (currentStep?.target_adset_id && nextStep.reduce_previous_budget_to !== null && nextStep.reduce_previous_budget_to !== undefined) {
+    await metaApi.updateBudget(currentStep.target_adset_id, Math.round(Number(nextStep.reduce_previous_budget_to) * 100), account);
+    await logAction(account.id, 'adset', currentStep.target_adset_id, currentStep.name, 'touch_sequence_reduce_previous_budget', {
+      sequence_id: sequence.id,
+      sequence_name: sequence.name,
+      previous_step_id: currentStep.id,
+      previous_step_number: currentStep.step_number,
+      triggered_by_step_id: nextStep.id,
+      triggered_by_step_number: nextStep.step_number,
+      new_budget: nextStep.reduce_previous_budget_to,
+    });
+    result.reduced_previous_budget = nextStep.reduce_previous_budget_to;
+  }
+
+  return result;
+}
+
 async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
   const steps = sequence.steps || [];
   const results = [];
@@ -248,6 +296,7 @@ async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
 
       let status = current.size >= step.threshold_count ? 'ready' : 'waiting';
       let triggerResult = null;
+      const nextStep = steps.find((candidate) => candidate.enabled && candidate.step_number === step.step_number + 1) || null;
 
       if (current.size >= step.threshold_count && !step.last_triggered_at) {
         const payload = {
@@ -262,13 +311,18 @@ async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
           source_audience_id: current.audience_id || step.source_audience_id || null,
           current_size: current.size,
           threshold_count: step.threshold_count,
-          target_adset_id: step.target_adset_id || null,
-          pause_previous_adset: step.pause_previous_adset,
-          reduce_previous_budget_to: step.reduce_previous_budget_to,
+          current_step_target_adset_id: step.target_adset_id || null,
+          next_step_id: nextStep?.id || null,
+          next_step_number: nextStep?.step_number || null,
+          next_step_name: nextStep?.name || null,
+          target_adset_id: nextStep?.target_adset_id || null,
+          pause_previous_adset: nextStep?.pause_previous_adset || false,
+          reduce_previous_budget_to: nextStep?.reduce_previous_budget_to ?? null,
           triggered_at: nowIso(),
         };
-        triggerResult = await emitSequenceWebhook(sequence, payload);
-        await logEvent(account.id, sequence.id, step.id, 'threshold_crossed', { ...payload, webhook: triggerResult });
+        const execution = await executeStepTransition(account, sequence, step, nextStep).catch((err) => ({ error: err.message }));
+        triggerResult = await emitSequenceWebhook(sequence, payload).catch((err) => ({ delivered: false, error: err.message }));
+        await logEvent(account.id, sequence.id, step.id, 'threshold_crossed', { ...payload, execution, webhook: triggerResult });
         await query(`
           UPDATE touch_sequence_steps
           SET status = 'triggered',
@@ -276,10 +330,10 @@ async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
               last_checked_at = NOW(),
               last_triggered_at = NOW(),
               last_triggered_count = $3,
-              last_error = NULL,
+              last_error = $4,
               updated_at = NOW()
           WHERE id = $1
-        `, [step.id, current.size, current.size]);
+        `, [step.id, current.size, current.size, execution?.error || triggerResult?.error || null]);
         status = 'triggered';
       } else {
         await query(`
@@ -303,6 +357,9 @@ async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
         source_audience_name: current.audience_name || step.name,
         meta: current.meta,
         triggered: triggerResult,
+        next_step_id: nextStep?.id || null,
+        next_step_number: nextStep?.step_number || null,
+        next_step_name: nextStep?.name || null,
       });
     } catch (err) {
       await query(`

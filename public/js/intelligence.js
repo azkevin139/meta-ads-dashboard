@@ -6,6 +6,9 @@ let intelPreset = 'yesterday';
 let intelDateFrom = daysAgoStr(1);
 let intelDateTo = daysAgoStr(1);
 let intelBreakdown = 'publisher_platform';
+let touchSequenceDefaults = [];
+let touchSequenceCache = [];
+let touchSequenceEditingId = null;
 
 async function loadIntelligence(container) {
   container.innerHTML = `
@@ -24,7 +27,10 @@ async function loadIntelligence(container) {
     <div class="table-container mb-md">
       <div class="table-header">
         <span class="table-title">Touch Sequences</span>
-        <button class="btn btn-sm" onclick="runTouchSequenceMonitor()">Run Monitor</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="openTouchSequenceEditor()">Create Sequence</button>
+          <button class="btn btn-sm" onclick="runTouchSequenceMonitor()">Run Monitor</button>
+        </div>
       </div>
       <div id="intel-touch-sequences"><div class="loading">Loading touch sequences</div></div>
     </div>
@@ -84,12 +90,15 @@ async function loadTouchSequences() {
   const el = document.getElementById('intel-touch-sequences');
   try {
     const res = await apiGet('/intelligence/touch-sequences');
+    touchSequenceDefaults = res.defaults || [];
     const sequences = res.data || [];
+    touchSequenceCache = sequences;
     if (!sequences.length) {
-      const defaults = (res.defaults || []).map((step) => `<li>${step.step_number}. ${escapeHtml(step.name)} <span class="text-muted">(${escapeHtml(step.audience_source_type.replace(/_/g, ' '))})</span></li>`).join('');
+      const defaults = touchSequenceDefaults.map((step) => `<li>${step.step_number}. ${escapeHtml(step.name)} <span class="text-muted">(${escapeHtml(step.audience_source_type.replace(/_/g, ' '))})</span></li>`).join('');
       el.innerHTML = `<div class="empty-state">
         <div class="empty-state-text">No touch sequences configured yet</div>
-        <div class="text-muted" style="font-size:0.78rem; margin-top:8px;">Phase 1 is live in the backend. Configure a sequence through the API first, then this panel will monitor threshold triggers.</div>
+        <div class="text-muted" style="font-size:0.78rem; margin-top:8px;">Configure the sequence here, then the worker will monitor thresholds, activate the next ad set, and emit the signed n8n webhook.</div>
+        <div style="margin-top:10px;"><button class="btn btn-sm btn-primary" onclick="openTouchSequenceEditor()">Create 7-touch sequence</button></div>
         <ol style="margin-top:10px; padding-left:18px; font-size:0.78rem; color:var(--text-secondary);">${defaults}</ol>
       </div>`;
       return;
@@ -104,12 +113,14 @@ async function loadTouchSequences() {
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <span class="badge badge-${sequence.enabled ? 'active' : 'low'}">${sequence.enabled ? 'enabled' : 'disabled'}</span>
+            <button class="btn btn-sm" onclick="openTouchSequenceEditor(${sequence.id})">Edit</button>
             <button class="btn btn-sm" onclick="runTouchSequenceMonitor(${sequence.id})">Run</button>
+            <button class="btn btn-sm" onclick="deleteTouchSequence(${sequence.id})">Delete</button>
           </div>
         </div>
         <div style="overflow:auto; margin-top:12px;">
           <table>
-            <thead><tr><th>#</th><th>Step</th><th>Source</th><th class="right">Size</th><th class="right">Threshold</th><th>Status</th><th>Target Ad Set</th></tr></thead>
+            <thead><tr><th>#</th><th>Step</th><th>Source</th><th class="right">Size</th><th class="right">Threshold</th><th>Status</th><th>Next</th><th>Target Ad Set</th></tr></thead>
             <tbody>
               ${(sequence.steps || []).map((step) => `
                 <tr>
@@ -123,12 +134,19 @@ async function loadTouchSequences() {
                   <td class="right">${fmt(step.current_size || step.last_size || 0, 'integer')}</td>
                   <td class="right">${fmt(step.threshold_count || 0, 'integer')}</td>
                   <td><span class="badge badge-${step.status === 'triggered' ? 'active' : step.status === 'error' ? 'critical' : step.status === 'ready' ? 'warning' : 'low'}">${escapeHtml((step.status || 'waiting').replace(/_/g, ' '))}</span></td>
+                  <td>${step.next_step_name ? `${step.next_step_number}. ${escapeHtml(step.next_step_name)}` : '<span class="text-muted">—</span>'}</td>
                   <td>${step.target_adset_id ? `<span class="mono">${escapeHtml(step.target_adset_id)}</span>` : '<span class="text-muted">—</span>'}</td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
+        ${(sequence.events || []).length ? `<div style="margin-top:12px;">
+          <div class="text-muted" style="font-size:0.74rem; margin-bottom:6px;">Recent events</div>
+          <div style="display:grid; gap:8px;">
+            ${(sequence.events || []).slice(0, 5).map(renderTouchSequenceEvent).join('')}
+          </div>
+        </div>` : ''}
       </div>
     `).join('');
   } catch (err) {
@@ -143,6 +161,236 @@ async function runTouchSequenceMonitor(sequenceId) {
     await apiPost(path, {});
     toast('Sequence monitor complete', 'success');
     loadTouchSequences();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
+
+function renderTouchSequenceEvent(event) {
+  const payload = event.payload || {};
+  const execution = payload.execution || {};
+  const webhook = payload.webhook || {};
+  const outcome = execution.error
+    ? `<span class="badge badge-critical">execution failed</span>`
+    : execution.skipped
+      ? `<span class="badge badge-low">${escapeHtml(execution.reason || 'skipped')}</span>`
+      : execution.activated_adset_id
+        ? `<span class="badge badge-active">activated ${escapeHtml(execution.activated_adset_id)}</span>`
+        : `<span class="badge badge-low">${escapeHtml(event.event_type)}</span>`;
+  const webhookBadge = webhook.error
+    ? `<span class="badge badge-warning">webhook error</span>`
+    : webhook.delivered
+      ? '<span class="badge badge-active">webhook sent</span>'
+      : webhook.skipped
+        ? '<span class="badge badge-low">webhook skipped</span>'
+        : '';
+  return `<div class="reco-card" style="padding:10px 12px;">
+    <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
+      <div>
+        <div style="font-size:0.8rem; font-weight:600;">${escapeHtml(event.event_type)} · ${escapeHtml(payload.step_name || 'step')}</div>
+        <div class="text-muted" style="font-size:0.72rem;">${fmtDateTime(event.created_at)}${payload.current_size ? ` · size ${fmt(payload.current_size, 'integer')}` : ''}${payload.threshold_count ? ` / ${fmt(payload.threshold_count, 'integer')}` : ''}</div>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">${outcome}${webhookBadge}</div>
+    </div>
+    ${execution.error ? `<div class="text-red" style="font-size:0.72rem; margin-top:6px;">${escapeHtml(execution.error)}</div>` : ''}
+    ${webhook.error ? `<div class="text-orange" style="font-size:0.72rem; margin-top:6px;">${escapeHtml(webhook.error)}</div>` : ''}
+  </div>`;
+}
+
+function touchSequenceFormBody(sequence) {
+  return `
+    <div class="form-group">
+      <label class="form-label">Sequence name</label>
+      <input id="touch-sequence-name" class="form-input" value="${escapeHtml(sequence.name || '')}" placeholder="7-touch lead-gen sequence">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description</label>
+      <textarea id="touch-sequence-description" class="form-textarea" rows="2" placeholder="Optional operator note">${escapeHtml(sequence.description || '')}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Default threshold</label>
+        <input id="touch-sequence-threshold" class="form-input" type="number" min="1" value="${escapeHtml(sequence.threshold_default || 3000)}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Signed n8n webhook URL</label>
+        <input id="touch-sequence-webhook" class="form-input" value="${escapeHtml(sequence.n8n_webhook_url || '')}" placeholder="https://n8n.example/webhook/...">
+      </div>
+    </div>
+    <label style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+      <input id="touch-sequence-enabled" type="checkbox" ${sequence.enabled !== false ? 'checked' : ''}>
+      <span>Sequence enabled</span>
+    </label>
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
+      <div style="font-weight:600;">Steps</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" onclick="loadDefaultTouchSequenceSteps()">Load 7-touch template</button>
+        <button class="btn btn-sm" onclick="addTouchSequenceStep()">Add Step</button>
+      </div>
+    </div>
+    <div id="touch-sequence-steps">${renderTouchSequenceSteps(sequence.steps || [])}</div>
+  `;
+}
+
+function renderTouchSequenceSteps(steps) {
+  return steps.map((step, index) => `
+    <div class="reco-card" style="margin-bottom:10px;" data-touch-sequence-step="${index}">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Step #</label>
+          <input class="form-input" data-ts-field="step_number" type="number" min="1" value="${escapeHtml(step.step_number || (index + 1))}">
+        </div>
+        <div class="form-group" style="flex:2;">
+          <label class="form-label">Step name</label>
+          <input class="form-input" data-ts-field="name" value="${escapeHtml(step.name || '')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Source type</label>
+          <select class="form-select" data-ts-field="audience_source_type">
+            ${['meta_engagement', 'meta_website', 'first_party_push'].map((value) => `<option value="${value}" ${step.audience_source_type === value ? 'selected' : ''}>${value.replace(/_/g, ' ')}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Meta audience ID</label>
+          <input class="form-input" data-ts-field="source_audience_id" value="${escapeHtml(step.source_audience_id || '')}" placeholder="Needed for Meta-native steps">
+        </div>
+        <div class="form-group">
+          <label class="form-label">First-party segment key</label>
+          <input class="form-input" data-ts-field="segment_key" value="${escapeHtml(step.segment_key || '')}" placeholder="Needed for first_party_push">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Target ad set ID</label>
+          <input class="form-input" data-ts-field="target_adset_id" value="${escapeHtml(step.target_adset_id || '')}" placeholder="Ad set to activate for this step">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Threshold</label>
+          <input class="form-input" data-ts-field="threshold_count" type="number" min="1" value="${escapeHtml(step.threshold_count || '')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Reduce previous budget to</label>
+          <input class="form-input" data-ts-field="reduce_previous_budget_to" type="number" min="0" step="0.01" value="${escapeHtml(step.reduce_previous_budget_to ?? '')}" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
+        <label style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" data-ts-field="enabled" ${step.enabled !== false ? 'checked' : ''}>
+          <span>Enabled</span>
+        </label>
+        <label style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" data-ts-field="pause_previous_adset" ${step.pause_previous_adset ? 'checked' : ''}>
+          <span>Pause previous ad set on trigger</span>
+        </label>
+        <button class="btn btn-sm" onclick="removeTouchSequenceStep(${index})">Remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function getTouchSequenceDraft() {
+  const sequence = touchSequenceEditingId
+    ? (touchSequenceCache.find((row) => row.id === touchSequenceEditingId) || {})
+    : {};
+  const baseSteps = sequence.steps && sequence.steps.length
+    ? sequence.steps
+    : touchSequenceDefaults.length
+      ? touchSequenceDefaults
+      : [{ step_number: 1, name: 'Touch 1', audience_source_type: 'meta_engagement', enabled: true }];
+  const steps = baseSteps.map((step) => ({ ...step }));
+  return {
+    ...sequence,
+    name: sequence.name || '7-touch lead-gen sequence',
+    description: sequence.description || '',
+    threshold_default: sequence.threshold_default || 3000,
+    n8n_webhook_url: sequence.n8n_webhook_url || '',
+    enabled: sequence.enabled !== false,
+    steps,
+  };
+}
+
+function openTouchSequenceEditor(sequenceId = null) {
+  touchSequenceEditingId = sequenceId;
+  const draft = getTouchSequenceDraft();
+  openDrawer(sequenceId ? 'Edit Touch Sequence' : 'Create Touch Sequence', touchSequenceFormBody(draft), `
+    <button class="btn btn-primary" onclick="saveTouchSequence()">Save Sequence</button>
+    <button class="btn" onclick="closeDrawer()">Cancel</button>
+  `);
+}
+
+function loadDefaultTouchSequenceSteps() {
+  document.getElementById('touch-sequence-steps').innerHTML = renderTouchSequenceSteps(touchSequenceDefaults.map((step) => ({ ...step })));
+}
+
+function addTouchSequenceStep() {
+  const container = document.getElementById('touch-sequence-steps');
+  const current = Array.from(container.querySelectorAll('[data-touch-sequence-step]')).length;
+  const next = {
+    step_number: current + 1,
+    name: `Touch ${current + 1}`,
+    audience_source_type: 'meta_engagement',
+    enabled: true,
+  };
+  container.insertAdjacentHTML('beforeend', renderTouchSequenceSteps([next]).replace('data-touch-sequence-step="0"', `data-touch-sequence-step="${current}"`));
+}
+
+function removeTouchSequenceStep(index) {
+  const row = document.querySelector(`[data-touch-sequence-step="${index}"]`);
+  row?.remove();
+}
+
+function collectTouchSequenceSteps() {
+  return Array.from(document.querySelectorAll('[data-touch-sequence-step]')).map((row) => ({
+    step_number: parseInt(row.querySelector('[data-ts-field="step_number"]').value, 10),
+    name: row.querySelector('[data-ts-field="name"]').value.trim(),
+    audience_source_type: row.querySelector('[data-ts-field="audience_source_type"]').value,
+    source_audience_id: row.querySelector('[data-ts-field="source_audience_id"]').value.trim(),
+    segment_key: row.querySelector('[data-ts-field="segment_key"]').value.trim(),
+    target_adset_id: row.querySelector('[data-ts-field="target_adset_id"]').value.trim(),
+    threshold_count: row.querySelector('[data-ts-field="threshold_count"]').value.trim(),
+    reduce_previous_budget_to: row.querySelector('[data-ts-field="reduce_previous_budget_to"]').value.trim(),
+    enabled: row.querySelector('[data-ts-field="enabled"]').checked,
+    pause_previous_adset: row.querySelector('[data-ts-field="pause_previous_adset"]').checked,
+  }));
+}
+
+async function saveTouchSequence() {
+  const name = document.getElementById('touch-sequence-name').value.trim();
+  const steps = collectTouchSequenceSteps();
+  if (!name) {
+    toast('Sequence name is required', 'error');
+    return;
+  }
+  if (!steps.length) {
+    toast('Add at least one step', 'error');
+    return;
+  }
+  try {
+    await apiPost('/intelligence/touch-sequences', {
+      id: touchSequenceEditingId || undefined,
+      name,
+      description: document.getElementById('touch-sequence-description').value.trim(),
+      threshold_default: parseInt(document.getElementById('touch-sequence-threshold').value, 10) || 3000,
+      n8n_webhook_url: document.getElementById('touch-sequence-webhook').value.trim(),
+      enabled: document.getElementById('touch-sequence-enabled').checked,
+      steps,
+    });
+    toast('Touch sequence saved', 'success');
+    closeDrawer();
+    await loadTouchSequences();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteTouchSequence(sequenceId) {
+  if (!confirmAction('Delete this touch sequence?')) return;
+  try {
+    await apiDelete(`/intelligence/touch-sequences/${sequenceId}`);
+    toast('Touch sequence deleted', 'success');
+    await loadTouchSequences();
   } catch (err) {
     toast(`Error: ${err.message}`, 'error');
   }
