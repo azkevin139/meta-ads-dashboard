@@ -428,6 +428,85 @@ test('meta update-ad requires adId', async () => {
   }
 });
 
+test('meta leads sync route validates mode and forwards manual options', async () => {
+  const metaApiPath = require.resolve('../services/metaApi');
+  const leadSyncPath = require.resolve('../services/metaLeadSyncService');
+  const accountServicePath = require.resolve('../services/accountService');
+  const routePath = require.resolve('../routes/meta');
+  const originals = new Map([
+    [metaApiPath, require.cache[metaApiPath]],
+    [leadSyncPath, require.cache[leadSyncPath]],
+    [accountServicePath, require.cache[accountServicePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let syncArgs = null;
+  delete require.cache[routePath];
+  require.cache[metaApiPath] = {
+    exports: {
+      metaGet: async () => ({}),
+      metaPost: async () => ({}),
+      contextAccountId: () => 'act_1',
+      getAdAccounts: async () => [],
+      getCampaigns: async () => [],
+      getAdSets: async () => [],
+      getAds: async () => [],
+      getInsightsRange: async () => [],
+      getInsights: async () => [],
+    },
+  };
+  require.cache[leadSyncPath] = {
+    exports: {
+      syncAccountLeads: async (account, options) => {
+        syncArgs = { account, options };
+        return { imported: 10, scanned: 50, ad_count: 12 };
+      },
+    },
+  };
+  require.cache[accountServicePath] = { exports: {} };
+
+  try {
+    const router = require('../routes/meta');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 1, meta_account_id: 'act_1' };
+      next();
+    });
+
+    const invalidRes = await invoke(app, {
+      method: 'POST',
+      url: '/leads-sync',
+      headers: { 'content-type': 'application/json' },
+      body: { mode: 'bad' },
+    });
+    assert.equal(invalidRes.status, 400);
+    assert.match(invalidRes.json.error, /mode must be incremental, full, or range/);
+
+    const validRes = await invoke(app, {
+      method: 'POST',
+      url: '/leads-sync',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        mode: 'range',
+        since: '2026-04-01T00:00:00.000Z',
+        until: '2026-04-10T00:00:00.000Z',
+        includeArchived: true,
+        maxAds: 200,
+      },
+    });
+    assert.equal(validRes.status, 200);
+    assert.deepEqual(syncArgs.options, {
+      mode: 'range',
+      sinceOverride: '2026-04-01T00:00:00.000Z',
+      untilOverride: '2026-04-10T00:00:00.000Z',
+      includeArchived: true,
+      maxAds: 200,
+    });
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('metaEntity rejects invalid entity level', async () => {
   const metaUsagePath = require.resolve('../services/metaUsageService');
   const entityServicePath = require.resolve('../services/metaEntityService');

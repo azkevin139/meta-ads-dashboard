@@ -9,6 +9,7 @@ const {
   ensureInteger,
   ensureNonEmptyString,
   ensureObject,
+  ensureBoolean,
   optionalNumber,
   optionalTrimmedString,
 } = require('../validation');
@@ -345,7 +346,9 @@ router.get('/leads-sync-status', async (req, res) => {
     const account = req.metaAccount;
     if (!account?.id) return res.json({ configured: false });
     const row = await require('../db').queryOne(
-      'SELECT last_leads_sync_at, last_leads_sync_count, last_leads_sync_error FROM accounts WHERE id = $1',
+      `SELECT last_leads_sync_at, last_leads_sync_count, last_leads_sync_scan_count, last_leads_sync_ad_count,
+              last_leads_sync_mode, last_leads_sync_since, last_leads_sync_until, last_leads_sync_error
+       FROM accounts WHERE id = $1`,
       [account.id]
     );
     res.json({
@@ -353,6 +356,11 @@ router.get('/leads-sync-status', async (req, res) => {
       account_id: account.id,
       last_sync_at: row?.last_leads_sync_at || null,
       last_sync_count: row?.last_leads_sync_count || 0,
+      last_scan_count: row?.last_leads_sync_scan_count || 0,
+      last_ad_count: row?.last_leads_sync_ad_count || 0,
+      last_sync_mode: row?.last_leads_sync_mode || 'incremental',
+      last_sync_since: row?.last_leads_sync_since || null,
+      last_sync_until: row?.last_leads_sync_until || null,
       last_sync_error: row?.last_leads_sync_error || null,
     });
   } catch (err) {
@@ -380,7 +388,14 @@ router.post('/leads-sync', adminOrOperator, async (req, res) => {
   try {
     const account = req.metaAccount;
     if (!account?.id) return res.status(400).json({ error: 'No active Meta account' });
-    const result = await leadSync.syncAccountLeads(account);
+    const body = ensureObject(req.body || {});
+    const result = await leadSync.syncAccountLeads(account, {
+      mode: body.mode ? ensureEnum(body.mode, ['incremental', 'full', 'range'], 'mode must be incremental, full, or range') : 'incremental',
+      sinceOverride: body.since ? ensureNonEmptyString(body.since, 'since must be a non-empty string') : undefined,
+      untilOverride: body.until ? ensureNonEmptyString(body.until, 'until must be a non-empty string') : undefined,
+      includeArchived: body.includeArchived === undefined ? undefined : ensureBoolean(body.includeArchived, 'includeArchived must be true or false'),
+      maxAds: body.maxAds ? ensureInteger(body.maxAds, 'maxAds must be a positive integer') : undefined,
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);

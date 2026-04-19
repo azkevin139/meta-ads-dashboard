@@ -445,23 +445,95 @@ function renderLeadSyncStatus(status, section = null) {
       <div style="font-size:0.82rem;">
         <div><span class="text-muted">Last sync:</span> ${lastSync}</div>
         <div><span class="text-muted">Leads last run:</span> ${imported}</div>
+        <div><span class="text-muted">Ads scanned:</span> ${fmt(status.last_ad_count || 0, 'integer')} · <span class="text-muted">Lead rows scanned:</span> ${fmt(status.last_scan_count || 0, 'integer')}</div>
+        <div><span class="text-muted">Mode:</span> ${escapeHtml(status.last_sync_mode || 'incremental')}${status.last_sync_since ? ` · since ${fmtDateTime(status.last_sync_since)}` : ''}${status.last_sync_until ? ` → ${fmtDateTime(status.last_sync_until)}` : ''}</div>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         ${sourceBadge('imported_meta')}
         <button class="btn btn-sm btn-primary" onclick="triggerLeadSync(this)">Sync Leads Now</button>
       </div>
     </div>
+    <div class="reco-card" style="padding:10px 12px; margin-top:10px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; align-items:end;">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label">Mode</label>
+          <select id="meta-lead-sync-mode" class="form-select">
+            <option value="incremental">Incremental</option>
+            <option value="range">Custom range</option>
+            <option value="full">Full historical</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label">Since</label>
+          <input id="meta-lead-sync-since" type="datetime-local" class="form-input" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label">Until</label>
+          <input id="meta-lead-sync-until" type="datetime-local" class="form-input" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label">Max ads</label>
+          <input id="meta-lead-sync-max-ads" type="number" min="1" max="1000" class="form-input" placeholder="250" />
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px;">
+        <button class="btn btn-sm" onclick="presetLeadSyncRange(7)">Last 7d</button>
+        <button class="btn btn-sm" onclick="presetLeadSyncRange(30)">Last 30d</button>
+        <button class="btn btn-sm" onclick="presetLeadSyncFull()">All historical</button>
+        <button class="btn btn-sm btn-primary" onclick="triggerLeadSync(this, true)">Run Manual Backfill</button>
+      </div>
+    </div>
     ${err ? `<div class="alert-banner alert-warning" style="margin-top:10px;">Last sync error: ${escapeHtml(err)}</div>` : ''}
-    <div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Native Meta Lead Form submissions are automatically pulled every 15 minutes.</div>
+    <div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Incremental lead sync runs every 15 minutes. Use manual range/full sync for historical recovery from older ads and archived delivery.</div>
   `;
   section ? section.setData(html) : (el.innerHTML = html);
 }
 
-async function triggerLeadSync(btn) {
+function toLocalInputValue(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function presetLeadSyncRange(days) {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const until = new Date();
+  const mode = document.getElementById('meta-lead-sync-mode');
+  const sinceEl = document.getElementById('meta-lead-sync-since');
+  const untilEl = document.getElementById('meta-lead-sync-until');
+  if (mode) mode.value = 'range';
+  if (sinceEl) sinceEl.value = toLocalInputValue(since.toISOString());
+  if (untilEl) untilEl.value = toLocalInputValue(until.toISOString());
+}
+
+function presetLeadSyncFull() {
+  const mode = document.getElementById('meta-lead-sync-mode');
+  const sinceEl = document.getElementById('meta-lead-sync-since');
+  const untilEl = document.getElementById('meta-lead-sync-until');
+  if (mode) mode.value = 'full';
+  if (sinceEl) sinceEl.value = '';
+  if (untilEl) untilEl.value = '';
+}
+
+async function triggerLeadSync(btn, useManualOptions = false) {
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
   try {
-    const result = await apiPost('/meta/leads-sync', {});
-    toast(`${result.imported || 0} lead(s) imported${result.skipped ? `, ${result.skipped} skipped` : ''}`, 'success');
+    const payload = {};
+    if (useManualOptions) {
+      const mode = document.getElementById('meta-lead-sync-mode')?.value || 'incremental';
+      const since = document.getElementById('meta-lead-sync-since')?.value;
+      const until = document.getElementById('meta-lead-sync-until')?.value;
+      const maxAds = document.getElementById('meta-lead-sync-max-ads')?.value;
+      payload.mode = mode;
+      if (since) payload.since = new Date(since).toISOString();
+      if (until) payload.until = new Date(until).toISOString();
+      if (maxAds) payload.maxAds = parseInt(maxAds, 10);
+      payload.includeArchived = mode !== 'incremental';
+    }
+    const result = await apiPost('/meta/leads-sync', payload);
+    toast(`${result.imported || 0} lead(s) imported${result.skipped ? `, ${result.skipped} skipped` : ''}${result.scanned ? `, ${result.scanned} scanned` : ''}`, 'success');
     const status = await apiGet('/meta/leads-sync-status');
     renderLeadSyncStatus(status);
   } catch (err) {

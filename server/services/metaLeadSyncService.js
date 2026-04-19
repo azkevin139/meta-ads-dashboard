@@ -7,6 +7,8 @@ const accountService = require('./accountService');
 const LEAD_CAMPAIGN_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
 const MAX_ADS_PER_ACCOUNT = parseInt(process.env.META_LEAD_SYNC_MAX_ADS_PER_ACCOUNT, 10) || 20;
 const MAX_ACCOUNTS_PER_RUN = parseInt(process.env.META_LEAD_SYNC_MAX_ACCOUNTS_PER_RUN, 10) || 3;
+const DEFAULT_MANUAL_MAX_ADS = parseInt(process.env.META_LEAD_SYNC_MANUAL_MAX_ADS, 10) || 250;
+const ARCHIVED_AD_STATUSES = ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'PENDING_REVIEW', 'DISAPPROVED', 'PREAPPROVED', 'PENDING_BILLING_INFO', 'ARCHIVED'];
 
 function findFieldValue(fieldData = [], candidates) {
   const wanted = candidates.map(c => String(c).toLowerCase());
@@ -50,20 +52,35 @@ function buildLeadPayload(lead, { accountId, metaAccountId }) {
   };
 }
 
-async function listLeadAds(context) {
+function normalizeSyncOptions(options = {}) {
+  const mode = ['incremental', 'full', 'range'].includes(options.mode) ? options.mode : 'incremental';
+  const sinceOverride = options.sinceOverride ? new Date(options.sinceOverride) : null;
+  const untilOverride = options.untilOverride ? new Date(options.untilOverride) : null;
+  if (sinceOverride && Number.isNaN(sinceOverride.getTime())) throw new Error('Invalid leads sync sinceOverride');
+  if (untilOverride && Number.isNaN(untilOverride.getTime())) throw new Error('Invalid leads sync untilOverride');
+  if (mode === 'range' && !sinceOverride) throw new Error('range sync requires sinceOverride');
+  if (sinceOverride && untilOverride && untilOverride < sinceOverride) throw new Error('leads sync untilOverride must be on or after sinceOverride');
+  const includeArchived = options.includeArchived === true || mode !== 'incremental';
+  const maxAds = Math.max(1, Math.min(parseInt(options.maxAds, 10) || (mode === 'incremental' ? MAX_ADS_PER_ACCOUNT : DEFAULT_MANUAL_MAX_ADS), 1000));
+  return { mode, sinceOverride, untilOverride, includeArchived, maxAds };
+}
+
+async function listLeadAds(context, options = {}) {
   const adAccountId = metaApi.contextAccountId(context);
   // Single account-wide ads query filtered by the lead-gen objective — this is one call instead of N+1.
   try {
-    const ads = await metaApi.metaGetAll(`/${adAccountId}/ads`, {
+    const params = {
       fields: 'id,name,adset_id,campaign_id,effective_status,campaign{id,objective,effective_status}',
-      effective_status: JSON.stringify(['ACTIVE', 'PAUSED']),
       limit: '200',
-    }, { maxPages: 10 }, context);
+    };
+    if (options.includeArchived) params.effective_status = JSON.stringify(ARCHIVED_AD_STATUSES);
+    else params.effective_status = JSON.stringify(['ACTIVE', 'PAUSED']);
+    const ads = await metaApi.metaGetAll(`/${adAccountId}/ads`, params, { maxPages: 10 }, context);
     return ads.filter(ad => {
       const c = ad.campaign || {};
       return LEAD_CAMPAIGN_OBJECTIVES.has(String(c.objective || '').toUpperCase())
         && String(c.effective_status || '').toUpperCase() !== 'DELETED';
-    }).slice(0, MAX_ADS_PER_ACCOUNT);
+    }).slice(0, options.maxAds || MAX_ADS_PER_ACCOUNT);
   } catch (err) {
     if (metaApi.isUserRateLimitError(err) || err.httpStatus === 429) throw err;
     console.warn(`[leadSync] could not list ads for account ${adAccountId}: ${err.message}`);
@@ -71,9 +88,12 @@ async function listLeadAds(context) {
   }
 }
 
-async function fetchLeadsForAd(adId, sinceUnix, context) {
+async function fetchLeadsForAd(adId, sinceUnix, untilUnix, context) {
   const params = { fields: 'id,created_time,ad_id,adset_id,campaign_id,form_id,platform,field_data', limit: '200' };
-  if (sinceUnix) params.filtering = JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: sinceUnix }]);
+  const filtering = [];
+  if (sinceUnix) filtering.push({ field: 'time_created', operator: 'GREATER_THAN', value: sinceUnix });
+  if (untilUnix) filtering.push({ field: 'time_created', operator: 'LESS_THAN', value: untilUnix });
+  if (filtering.length) params.filtering = JSON.stringify(filtering);
   try {
     return await metaApi.metaGetAll(`/${adId}/leads`, params, { maxPages: 10 }, context);
   } catch (err) {
@@ -82,8 +102,9 @@ async function fetchLeadsForAd(adId, sinceUnix, context) {
   }
 }
 
-async function syncAccountLeads(account, { sinceOverride } = {}) {
+async function syncAccountLeads(account, options = {}) {
   if (!account || !account.id) throw new Error('Account required');
+  options = normalizeSyncOptions(options);
 
   const cooldownRemaining = metaApi.getCooldownRemainingSeconds();
   if (cooldownRemaining > 0) {
@@ -108,19 +129,24 @@ async function syncAccountLeads(account, { sinceOverride } = {}) {
   }
 
   const sinceRow = await queryOne('SELECT last_leads_sync_at FROM accounts WHERE id = $1', [account.id]);
-  const sinceTs = sinceOverride ? new Date(sinceOverride) : (sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_at) : null);
+  const sinceTs = options.sinceOverride || (options.mode === 'incremental' ? (sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_at) : null) : null);
+  const untilTs = options.untilOverride || null;
   const sinceUnix = sinceTs ? Math.floor(sinceTs.getTime() / 1000) : null;
+  const untilUnix = untilTs ? Math.floor(untilTs.getTime() / 1000) : null;
 
   let imported = 0;
   let skipped = 0;
+  let scanned = 0;
+  let adCount = 0;
   let errorMessage = null;
 
   try {
-    const ads = await listLeadAds(account);
+    const ads = await listLeadAds(account, options);
+    adCount = ads.length;
     for (const ad of ads) {
       let leads;
       try {
-        leads = await fetchLeadsForAd(ad.id, sinceUnix, account);
+        leads = await fetchLeadsForAd(ad.id, sinceUnix, untilUnix, account);
       } catch (err) {
         // If we hit the user rate limit mid-sync, bail early and try again next cycle.
         if (metaApi.isUserRateLimitError(err) || err.httpStatus === 429) {
@@ -131,6 +157,7 @@ async function syncAccountLeads(account, { sinceOverride } = {}) {
         console.warn(`[leadSync] ad ${ad.id} failed: ${err.message}`);
         continue;
       }
+      scanned += leads.length;
       for (const lead of leads) {
         const payload = buildLeadPayload(lead, {
           accountId: account.id,
@@ -153,12 +180,29 @@ async function syncAccountLeads(account, { sinceOverride } = {}) {
     UPDATE accounts
     SET last_leads_sync_at = NOW(),
         last_leads_sync_count = $2,
-        last_leads_sync_error = $3,
+        last_leads_sync_scan_count = $3,
+        last_leads_sync_ad_count = $4,
+        last_leads_sync_mode = $5,
+        last_leads_sync_since = $6,
+        last_leads_sync_until = $7,
+        last_leads_sync_error = $8,
         updated_at = NOW()
     WHERE id = $1
-  `, [account.id, imported, errorMessage]);
+  `, [account.id, imported, scanned, adCount, options.mode, sinceTs ? sinceTs.toISOString() : null, untilTs ? untilTs.toISOString() : null, errorMessage]);
 
-  return { account_id: account.id, meta_account_id: account.meta_account_id, imported, skipped, error: errorMessage };
+  return {
+    account_id: account.id,
+    meta_account_id: account.meta_account_id,
+    mode: options.mode,
+    since: sinceTs ? sinceTs.toISOString() : null,
+    until: untilTs ? untilTs.toISOString() : null,
+    include_archived: options.includeArchived,
+    scanned,
+    ad_count: adCount,
+    imported,
+    skipped,
+    error: errorMessage,
+  };
 }
 
 async function syncAccountById(accountId, options = {}) {
