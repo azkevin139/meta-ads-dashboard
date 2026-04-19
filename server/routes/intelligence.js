@@ -252,6 +252,18 @@ router.get('/tracking-recovery', async (req, res) => {
   }
 });
 
+router.get('/tracking-alerts', async (req, res) => {
+  try {
+    const accountId = req.query.accountId || req.metaAccount?.id || null;
+    if (!accountId) return res.json({ alerts: [], summary: {}, note: 'No active account' });
+    const hours = req.query.hours ? ensureInteger(req.query.hours, 'hours must be a positive integer') : 24;
+    const alerts = await trackingRecovery.getAlerts(parseInt(accountId, 10), { hours });
+    res.json(alerts);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 router.post('/tracking-recovery', adminOrOperator, async (req, res) => {
   try {
     const body = ensureObject(req.body);

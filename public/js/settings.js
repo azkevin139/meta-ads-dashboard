@@ -163,12 +163,16 @@ async function loadSettings(container) {
   }
 
   try {
-    const health = await apiGet(`/intelligence/tracking-health?accountId=${ACCOUNT_ID}`);
+    const [health, trackingAlertRes] = await Promise.all([
+      apiGet(`/intelligence/tracking-health?accountId=${ACCOUNT_ID}`),
+      apiGet(`/intelligence/tracking-alerts?accountId=${ACCOUNT_ID}&hours=24`).catch(() => ({ alerts: [] })),
+    ]);
     const v = health.visitors || {};
     const e = health.events || {};
     const d = health.diagnostics || {};
     const selectedDiag = d.selected || {};
     const latestDiag = d.latest || {};
+    const trackingAlerts = trackingAlertRes.alerts || [];
     const badge = health.status === 'live'
       ? '<span class="badge badge-active">● Live</span>'
       : health.status === 'stale'
@@ -195,6 +199,7 @@ async function loadSettings(container) {
       ${health.status !== 'live' ? `<div class="alert-banner alert-warning" style="margin-top:12px;">No pageviews recorded in the last 24 hours for this account. Confirm the snippet is on your landing page and the page is served over HTTPS to the same origin as this dashboard.</div>` : ''}
       ${selectedDiag.last_error ? `<div class="alert-banner alert-warning" style="margin-top:12px;">Last ingest error: ${escapeHtml(selectedDiag.last_error)}</div>` : ''}
       ${d.account_mismatch && latestDiag.meta_account_id ? `<div class="alert-banner alert-warning" style="margin-top:12px;">Selected account is <span class="mono">${escapeHtml(health.meta_account_id || '')}</span>, but the latest tracker payload hit <span class="mono">${escapeHtml(latestDiag.meta_account_id)}</span>. Switch the dashboard account or fix the snippet account ID.</div>` : ''}
+      ${trackingAlerts.map((alert) => `<div class="alert-banner ${alert.severity === 'critical' ? 'alert-critical' : 'alert-warning'}" style="margin-top:12px;">${escapeHtml(alert.title)} — ${escapeHtml(alert.message)}${alert.action ? ` <span class="text-muted">${escapeHtml(alert.action)}</span>` : ''}</div>`).join('')}
     `);
   } catch (err) {
     trackingSection?.setError(err);

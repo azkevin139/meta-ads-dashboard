@@ -57,11 +57,12 @@ async function loadOverview(container) {
   });
 
   try {
-    const [liveRes, listRes, recoRes, rateRes] = await Promise.all([
+    const [liveRes, listRes, recoRes, rateRes, trackingAlertRes] = await Promise.all([
       apiGet(`/meta/live?level=campaign&since=${dateFrom}&until=${dateTo}`),
       apiGet('/meta/campaigns'),
       apiGet(`/ai/recommendations?accountId=${ACCOUNT_ID}&status=pending`),
       apiGet('/meta/rate-limit-status'),
+      apiGet(`/intelligence/tracking-alerts?accountId=${ACCOUNT_ID}&hours=24`).catch(() => ({ alerts: [] })),
     ]);
     renderMetaPulse(rateRes);
     startMetaPulseAutoRefresh();
@@ -99,7 +100,7 @@ async function loadOverview(container) {
     const avgCpc = totalClicks > 0 ? (totalSpend / totalClicks) : 0;
     const avgCpa = totalResults > 0 ? (totalSpend / totalResults) : 0;
 
-    renderAlerts(recoRes.data || []);
+    renderAlerts(recoRes.data || [], trackingAlertRes.alerts || []);
     kpiSection?.setData(`
       ${overviewMetrics.kpiCard('Spend', fmt(totalSpend, 'currency'))}
       ${overviewMetrics.kpiCard('Impressions', fmt(totalImpressions, 'compact'))}
@@ -220,4 +221,32 @@ function getDateLabel() {
     yesterdayLabel: (dateFrom) => `Yesterday (${dateFrom})`,
   });
 }
-function renderAlerts(pendingRecos) { const alertArea = document.getElementById('alert-area'); if (!alertArea) return; const criticalCount = pendingRecos.filter(r => r.urgency === 'critical').length; const highCount = pendingRecos.filter(r => r.urgency === 'high').length; if (criticalCount > 0) { alertArea.innerHTML = `<div class="alert-banner alert-critical" onclick="navigateTo('ai')" style="cursor:pointer">⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review</div>`; } else if (highCount > 0) { alertArea.innerHTML = `<div class="alert-banner alert-warning" onclick="navigateTo('ai')" style="cursor:pointer">${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending</div>`; } else { alertArea.innerHTML = ''; } }
+function renderAlerts(pendingRecos, trackingAlerts) {
+  const alertArea = document.getElementById('alert-area');
+  if (!alertArea) return;
+  const parts = [];
+  const criticalTracking = (trackingAlerts || []).filter(a => a.severity === 'critical');
+  const warningTracking = (trackingAlerts || []).filter(a => a.severity === 'warning');
+  if (criticalTracking.length) {
+    parts.push(...criticalTracking.map((alert) => `
+      <div class="alert-banner alert-critical" onclick="navigateTo('settings')" style="cursor:pointer; margin-bottom:8px;">
+        Tracking alert: ${escapeHtml(alert.title)} — ${escapeHtml(alert.message)}
+      </div>
+    `));
+  }
+  if (warningTracking.length) {
+    parts.push(...warningTracking.map((alert) => `
+      <div class="alert-banner alert-warning" onclick="navigateTo('settings')" style="cursor:pointer; margin-bottom:8px;">
+        Tracking alert: ${escapeHtml(alert.title)} — ${escapeHtml(alert.message)}
+      </div>
+    `));
+  }
+  const criticalCount = pendingRecos.filter(r => r.urgency === 'critical').length;
+  const highCount = pendingRecos.filter(r => r.urgency === 'high').length;
+  if (criticalCount > 0) {
+    parts.push(`<div class="alert-banner alert-critical" onclick="navigateTo('ai')" style="cursor:pointer">⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review</div>`);
+  } else if (highCount > 0) {
+    parts.push(`<div class="alert-banner alert-warning" onclick="navigateTo('ai')" style="cursor:pointer">${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending</div>`);
+  }
+  alertArea.innerHTML = parts.join('');
+}

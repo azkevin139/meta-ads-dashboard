@@ -676,6 +676,68 @@ test('tracking recovery routes save window and run backfill', async () => {
   }
 });
 
+test('tracking alerts route returns alert payload', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: null, buckets: [] }),
+      saveWindow: async (_accountId, body) => body,
+      runBackfill: async () => ({}),
+      getAlerts: async (_accountId, opts) => ({
+        window_hours: opts.hours,
+        alerts: [{ code: 'tracking_outage', severity: 'critical', title: 'Tracker down', message: 'No native pageviews' }],
+      }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const res = await invoke(app, {
+      method: 'GET',
+      url: '/tracking-alerts?hours=12',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.window_hours, 12);
+    assert.equal(res.json.alerts[0].severity, 'critical');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('admin update rejects invalid role', async () => {
   const authServicePath = require.resolve('../services/authService');
   const routePath = require.resolve('../routes/admin');

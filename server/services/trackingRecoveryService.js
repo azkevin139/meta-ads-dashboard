@@ -4,6 +4,7 @@ const { queryOne, queryAll } = require('../db');
 const metaLeadSync = require('./metaLeadSyncService');
 const ghl = require('./ghlService');
 const warehouse = require('./warehouseSyncService');
+const diagnostics = require('./trackingDiagnosticsService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const OUTAGE_FILE = path.join(DATA_DIR, 'tracking-outages.json');
@@ -298,9 +299,102 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
   };
 }
 
+async function getAlerts(accountId, { hours = 24 } = {}) {
+  const account = await queryOne('SELECT id, meta_account_id, name, label FROM accounts WHERE id = $1', [accountId]);
+  if (!account) {
+    return {
+      account_id: accountId,
+      window_hours: hours,
+      alerts: [],
+      summary: {
+        native_pageviews: 0,
+        native_visitors: 0,
+        imported_meta_leads: 0,
+        imported_ghl_contacts: 0,
+      },
+    };
+  }
+
+  const params = [accountId, hours];
+  const recent = await queryOne(`
+    SELECT
+      COUNT(*) FILTER (WHERE event_name = 'PageView') AS native_pageviews,
+      COUNT(DISTINCT client_id) FILTER (WHERE event_name = 'PageView') AS native_visitors
+    FROM visitor_events
+    WHERE account_id = $1
+      AND fired_at > NOW() - ($2::int * INTERVAL '1 hour')
+  `, params);
+
+  const recoverable = await queryOne(`
+    SELECT
+      COUNT(DISTINCT CASE WHEN meta_lead_id IS NOT NULL OR lower(COALESCE(source_event_type, '')) LIKE 'fb-lead%' OR lower(COALESCE(source_event_type, '')) LIKE '%instant%form%' THEN client_id END) AS imported_meta_leads,
+      COUNT(DISTINCT CASE WHEN ghl_contact_id IS NOT NULL THEN client_id END) AS imported_ghl_contacts
+    FROM visitors
+    WHERE account_id = $1
+      AND last_seen_at > NOW() - ($2::int * INTERVAL '1 hour')
+  `, params);
+
+  const nativePageviews = parseInt(recent.native_pageviews, 10) || 0;
+  const nativeVisitors = parseInt(recent.native_visitors, 10) || 0;
+  const importedMetaLeads = parseInt(recoverable.imported_meta_leads, 10) || 0;
+  const importedGhlContacts = parseInt(recoverable.imported_ghl_contacts, 10) || 0;
+  const recoverableKnown = importedMetaLeads + importedGhlContacts;
+  const diag = diagnostics.get(account.meta_account_id);
+
+  const alerts = [];
+  if (recoverableKnown > 0 && nativePageviews === 0) {
+    alerts.push({
+      code: 'tracking_outage_known_activity_without_pageviews',
+      severity: 'critical',
+      source: 'native_tracked',
+      title: 'Known lead activity with zero native pageviews',
+      message: `Imported activity exists in the last ${hours}h (${importedMetaLeads} Meta leads, ${importedGhlContacts} GHL contacts) but native tracked pageviews are zero.`,
+      action: 'Check the website snippet, selected account, and browser network requests for /api/track/pageview.',
+    });
+  } else if (recoverableKnown >= 3 && nativePageviews > 0 && nativePageviews <= 2) {
+    alerts.push({
+      code: 'tracking_low_native_volume_vs_known_activity',
+      severity: 'warning',
+      source: 'outage_affected',
+      title: 'Native tracking volume is abnormally low',
+      message: `The last ${hours}h shows ${recoverableKnown} recoverable lead/contact records but only ${nativePageviews} native pageviews.`,
+      action: 'Confirm the tracker is firing on every landing page and SPA route.',
+    });
+  }
+
+  if (diag?.failure_count && diag.last_failure_at) {
+    const lastFailureAgeMs = Date.now() - new Date(diag.last_failure_at).getTime();
+    if (Number.isFinite(lastFailureAgeMs) && lastFailureAgeMs <= hours * 60 * 60 * 1000) {
+      alerts.push({
+        code: 'tracking_ingest_failures_recent',
+        severity: 'warning',
+        source: 'native_tracked',
+        title: 'Recent tracking ingest failures',
+        message: `The tracker recorded ${diag.failure_count} failed ingest attempts recently for ${account.meta_account_id}.`,
+        action: diag.last_error ? `Last error: ${diag.last_error}` : 'Check browser console logs and network requests.',
+      });
+    }
+  }
+
+  return {
+    account_id: accountId,
+    meta_account_id: account.meta_account_id,
+    account_name: account.label || account.name || null,
+    window_hours: hours,
+    alerts,
+    summary: {
+      native_pageviews: nativePageviews,
+      native_visitors: nativeVisitors,
+      imported_meta_leads: importedMetaLeads,
+      imported_ghl_contacts: importedGhlContacts,
+    },
+  };
+}
+
 module.exports = {
   getWindow,
   saveWindow,
   getSummary,
   runBackfill,
+  getAlerts,
 };
