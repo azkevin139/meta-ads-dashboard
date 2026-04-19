@@ -28,6 +28,11 @@ async function loadSettings(container) {
       </div>
 
       <div class="reco-card mb-md">
+        <div class="reco-entity mb-sm">Tracking Reconciliation</div>
+        <div id="tracking-reconciliation-info"><div class="loading">Loading reconciliation</div></div>
+      </div>
+
+      <div class="reco-card mb-md">
         <div class="reco-entity mb-sm">Meta Lead Forms</div>
         <div id="meta-leads-info"><div class="loading">Loading lead sync status</div></div>
       </div>
@@ -108,6 +113,12 @@ async function loadSettings(container) {
     render: (html) => html,
     onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
   });
+  const reconciliationSection = settingsAsyncSection.createAsyncSection({
+    targetId: 'tracking-reconciliation-info',
+    loadingText: 'Loading reconciliation',
+    render: (html) => html,
+    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+  });
   const accountSection = settingsAsyncSection.createAsyncSection({
     targetId: 'account-info',
     loadingText: 'Loading',
@@ -166,7 +177,7 @@ async function loadSettings(container) {
     const lastSeen = v.last_seen_at ? fmtDateTime(v.last_seen_at) : 'never';
     trackingSection?.setData(`
       <div class="flex-between mb-sm" style="gap:10px; flex-wrap:wrap;">
-        <div>${badge}</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">${badge}${sourceBadge('native_tracked')}${health.status !== 'live' ? sourceBadge('outage_affected') : ''}</div>
         <div class="text-muted" style="font-size:0.72rem;">Last visitor: ${lastSeen}</div>
       </div>
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:10px; font-size:0.82rem;">
@@ -197,9 +208,11 @@ async function loadSettings(container) {
   }
 
   try {
-    await renderTrackingRecovery(recoverySection);
+    const recoveryData = await renderTrackingRecovery(recoverySection);
+    reconciliationSection?.setData(renderTrackingReconciliation(recoveryData));
   } catch (err) {
     recoverySection?.setError(err);
+    reconciliationSection?.setError(err);
   }
 
   try {
@@ -215,8 +228,8 @@ async function loadSettings(container) {
         <div><span class="text-muted">Account ID:</span> Internal #${ACCOUNT_ID}</div>
         <div><span class="text-muted">Meta Account:</span> ${metaAccountId || '—'}</div>
         <div><span class="text-muted">Name:</span> ${account.name || '—'}</div>
-        <div><span class="text-muted">30-day data:</span> ${overview.overview?.days_with_data || 0} days</div>
-        <div><span class="text-muted">30-day spend:</span> ${fmt(overview.overview?.total_spend, 'currency')}</div>
+        <div><span class="text-muted">30-day data:</span> ${overview.overview?.days_with_data || 0} days ${sourceBadge('warehouse_aggregate')}</div>
+        <div><span class="text-muted">30-day spend:</span> ${fmt(overview.overview?.total_spend, 'currency')} ${sourceBadge('warehouse_aggregate')}</div>
       </div>
       <div class="mt-md">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px;">
@@ -269,13 +282,13 @@ async function renderTrackingRecovery(section = null) {
       <button class="btn btn-sm" onclick="saveTrackingRecoveryWindow()">Save Window</button>
       <button class="btn btn-sm btn-primary" onclick="runTrackingRecoveryBackfill(this)">Run Partial Backfill</button>
     </div>
-    ${window.outage_start ? `<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Configured outage window: ${escapeHtml(window.outage_start)} to ${escapeHtml(window.outage_end)}${window.updated_at ? ` · updated ${fmtDateTime(window.updated_at)}` : ''}</div>` : '<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Set the outage window first. Backfill stays source-labeled and does not fabricate native visitor rows.</div>'}
+    ${window.outage_start ? `<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Configured outage window: ${escapeHtml(window.outage_start)} to ${escapeHtml(window.outage_end)}${window.updated_at ? ` · updated ${fmtDateTime(window.updated_at)}` : ''}${window.last_backfill_at ? ` · last backfill ${fmtDateTime(window.last_backfill_at)}` : ''}</div>` : '<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Set the outage window first. Backfill stays source-labeled and does not fabricate native visitor rows.</div>'}
     ${buckets.length ? `<div style="display:grid; gap:10px;">
       ${buckets.map((bucket) => `
         <div class="reco-card" style="padding:10px 12px;">
           <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
             <div>
-              <div style="font-weight:600; font-size:0.82rem;">${escapeHtml(bucket.label)}</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-weight:600; font-size:0.82rem;">${escapeHtml(bucket.label)}${sourceBadge(bucket.source)}${bucket.status === 'lost' ? sourceBadge('outage_affected') : ''}</div>
               <div class="text-muted" style="font-size:0.72rem;">${escapeHtml(bucket.detail || '')}</div>
             </div>
             <div style="text-align:right;">
@@ -289,6 +302,7 @@ async function renderTrackingRecovery(section = null) {
     </div>` : `<div class="text-muted" style="font-size:0.82rem;">${escapeHtml(data.note || 'No recovery data yet')}</div>`}
   `;
   section ? section.setData(html) : (document.getElementById('tracking-recovery-info').innerHTML = html);
+  return data;
 }
 
 async function saveTrackingRecoveryWindow() {
@@ -300,7 +314,9 @@ async function saveTrackingRecoveryWindow() {
       notes: document.getElementById('tracking-outage-notes').value,
     });
     toast('Outage window saved', 'success');
-    await renderTrackingRecovery();
+    const data = await renderTrackingRecovery();
+    const recon = document.getElementById('tracking-reconciliation-info');
+    if (recon) recon.innerHTML = renderTrackingReconciliation(data);
   } catch (err) {
     toast(`Error: ${err.message}`, 'error');
   }
@@ -321,7 +337,9 @@ async function runTrackingRecoveryBackfill(btn) {
     const metaImported = result.data?.meta_leads?.imported || 0;
     const ghlImported = result.data?.ghl_contacts?.imported || 0;
     toast(`Backfill finished: ${metaImported} Meta leads, ${ghlImported} GHL contacts`, 'success');
-    await renderTrackingRecovery();
+    const data = await renderTrackingRecovery();
+    const recon = document.getElementById('tracking-reconciliation-info');
+    if (recon) recon.innerHTML = renderTrackingReconciliation(data);
   } catch (err) {
     toast(`Error: ${err.message}`, 'error');
   } finally {
@@ -330,6 +348,81 @@ async function runTrackingRecoveryBackfill(btn) {
       btn.textContent = 'Run Partial Backfill';
     }
   }
+}
+
+function sourceBadge(source) {
+  const map = {
+    native_tracked: ['active', 'Native tracked', 'First-party events that reached the Ad Command tracking endpoint.'],
+    imported_meta: ['warning', 'Imported from Meta', 'Known leads recovered from Meta native lead forms.'],
+    imported_ghl: ['warning', 'Imported from GHL', 'Known contacts or lifecycle states synced from GHL.'],
+    warehouse_aggregate: ['low', 'Warehouse aggregate', 'Account-level mirrored Meta reporting, not reconstructed visitor identity.'],
+    unavailable: ['critical', 'Unavailable', 'Source not connected for this outage window.'],
+    outage_affected: ['warning', 'Outage affected', 'Metric is impacted by the native tracking outage window.'],
+  };
+  const entry = map[source] || ['low', source || 'Source', 'Source label'];
+  return `<span class="badge badge-${entry[0]}" title="${escapeHtml(entry[2])}">${escapeHtml(entry[1])}</span>`;
+}
+
+function formatReconValue(value, format, source) {
+  if (value === null || value === undefined) return '<span class="text-muted">—</span>';
+  const rendered = format === 'currency' ? fmt(value, 'currency') : fmt(value, 'integer');
+  return `${rendered} ${sourceBadge(source)}`;
+}
+
+function renderTrackingReconciliation(data = {}) {
+  const window = data.outage_window || {};
+  const rows = data.reconciliation || [];
+  const warnings = data.warnings || [];
+  if (!window.outage_start) {
+    return '<div class="text-muted" style="font-size:0.82rem;">Configure an outage window first to compare native, imported, and aggregate recovery sources.</div>';
+  }
+  return `
+    <div class="flex-between mb-sm" style="gap:10px; flex-wrap:wrap;">
+      <div style="font-size:0.82rem;">
+        <div><span class="text-muted">Selected account:</span> #${ACCOUNT_ID}</div>
+        <div><span class="text-muted">Outage window:</span> ${escapeHtml(window.outage_start)} to ${escapeHtml(window.outage_end)}</div>
+        <div><span class="text-muted">Backfill last run:</span> ${window.last_backfill_at ? fmtDateTime(window.last_backfill_at) : 'never'}</div>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:flex-start;">
+        ${sourceBadge('native_tracked')}
+        ${sourceBadge('imported_meta')}
+        ${sourceBadge('imported_ghl')}
+        ${sourceBadge('warehouse_aggregate')}
+        ${sourceBadge('outage_affected')}
+      </div>
+    </div>
+    <div style="overflow:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th class="right">Native</th>
+            <th class="right">Meta</th>
+            <th class="right">GHL</th>
+            <th class="right">Warehouse</th>
+            <th class="right">Delta</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td class="name-cell">${escapeHtml(row.metric)}</td>
+              <td class="right">${formatReconValue(row.native, row.format, 'native_tracked')}</td>
+              <td class="right">${formatReconValue(row.meta, row.format, 'imported_meta')}</td>
+              <td class="right">${formatReconValue(row.ghl, row.format, 'imported_ghl')}</td>
+              <td class="right">${formatReconValue(row.warehouse, row.format, 'warehouse_aggregate')}</td>
+              <td class="right">${row.delta === null || row.delta === undefined ? '—' : (row.format === 'currency' ? fmt(row.delta, 'currency') : fmt(row.delta, 'integer'))}</td>
+              <td>${escapeHtml(row.notes || '')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div style="display:grid; gap:8px; margin-top:12px;">
+      ${warnings.map((warning) => `<div class="alert-banner alert-warning">${escapeHtml(warning)}</div>`).join('')}
+    </div>
+  `;
 }
 
 function renderLeadSyncStatus(status, section = null) {
@@ -348,7 +441,10 @@ function renderLeadSyncStatus(status, section = null) {
         <div><span class="text-muted">Last sync:</span> ${lastSync}</div>
         <div><span class="text-muted">Leads last run:</span> ${imported}</div>
       </div>
-      <button class="btn btn-sm btn-primary" onclick="triggerLeadSync(this)">Sync Leads Now</button>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        ${sourceBadge('imported_meta')}
+        <button class="btn btn-sm btn-primary" onclick="triggerLeadSync(this)">Sync Leads Now</button>
+      </div>
     </div>
     ${err ? `<div class="alert-banner alert-warning" style="margin-top:10px;">Last sync error: ${escapeHtml(err)}</div>` : ''}
     <div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Native Meta Lead Form submissions are automatically pulled every 15 minutes.</div>

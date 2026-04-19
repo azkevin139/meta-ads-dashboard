@@ -68,6 +68,8 @@ async function getSummary(accountId) {
     return {
       outage_window: null,
       buckets: [],
+      reconciliation: [],
+      warnings: [],
       note: 'No outage window configured',
     };
   }
@@ -115,6 +117,87 @@ async function getSummary(accountId) {
   const metaClicks = parseInt(aggregateRows[0]?.clicks, 10) || 0;
   const metaSpend = parseFloat(aggregateRows[0]?.spend) || 0;
   const metaLandingPageViews = actionsJsonRows.reduce((sum, row) => sum + parseActionCount(row.actions_json || {}, ['landing_page_view']), 0);
+  const nativeVisitors = parseInt(native.visitors, 10) || 0;
+  const nativePageviews = parseInt(native.pageviews, 10) || 0;
+  const importedMetaLeads = parseInt(recoverable.imported_meta_leads, 10) || 0;
+  const ghlContacts = parseInt(recoverable.ghl_contacts, 10) || 0;
+  const bookings = parseInt(recoverable.bookings, 10) || 0;
+  const conversions = parseInt(recoverable.conversions, 10) || 0;
+
+  const warnings = [
+    'Imported leads are not anonymous visitors.',
+    'Warehouse aggregate traffic is account-level Meta reporting, not reconstructed identity.',
+    'Bookings are inferred from CRM stage values.',
+  ];
+  if (!window.last_backfill_at) warnings.push('No partial backfill has been run for this outage window yet.');
+  if (metaLandingPageViews > 0 && nativeVisitors === 0) warnings.push('Meta aggregate landing page views exist while native tracked visits are near zero.');
+
+  const reconciliation = [
+    {
+      metric: 'Visits',
+      native: nativeVisitors,
+      meta: null,
+      ghl: null,
+      warehouse: metaLandingPageViews,
+      delta: metaLandingPageViews - nativeVisitors,
+      notes: 'Native tracked visitors vs Meta aggregate landing page views during outage window.',
+    },
+    {
+      metric: 'Pageviews',
+      native: nativePageviews,
+      meta: null,
+      ghl: null,
+      warehouse: metaLandingPageViews,
+      delta: metaLandingPageViews - nativePageviews,
+      notes: 'Native pageview events vs Meta aggregate LPVs.',
+    },
+    {
+      metric: 'Leads',
+      native: 0,
+      meta: importedMetaLeads,
+      ghl: null,
+      warehouse: null,
+      delta: importedMetaLeads,
+      notes: 'Known leads recovered from Meta native lead forms.',
+    },
+    {
+      metric: 'Contacts',
+      native: null,
+      meta: null,
+      ghl: ghlContacts,
+      warehouse: null,
+      delta: ghlContacts,
+      notes: 'CRM contacts imported from GHL during the outage window.',
+    },
+    {
+      metric: 'Bookings',
+      native: null,
+      meta: null,
+      ghl: bookings,
+      warehouse: null,
+      delta: bookings,
+      notes: 'Bookings inferred from CRM stage.',
+    },
+    {
+      metric: 'Conversions',
+      native: null,
+      meta: null,
+      ghl: conversions,
+      warehouse: null,
+      delta: conversions,
+      notes: 'Closed/revenue contacts inferred from CRM state.',
+    },
+    {
+      metric: 'Spend',
+      native: null,
+      meta: null,
+      ghl: null,
+      warehouse: metaSpend,
+      delta: null,
+      notes: 'Warehouse aggregate spend for context only.',
+      format: 'currency',
+    },
+  ];
 
   return {
     outage_window: window,
@@ -123,15 +206,17 @@ async function getSummary(accountId) {
         key: 'native_tracked_visits',
         label: 'Native tracked visits',
         status: 'lost',
-        count: parseInt(native.visitors, 10) || 0,
-        detail: `${parseInt(native.pageviews, 10) || 0} pageviews reached the tracker during the outage window.`,
+        source: 'native_tracked',
+        count: nativeVisitors,
+        detail: `${nativePageviews} pageviews reached the tracker during the outage window.`,
         confidence: 'high',
       },
       {
         key: 'imported_meta_leads',
         label: 'Imported Meta leads',
         status: 'recoverable',
-        count: parseInt(recoverable.imported_meta_leads, 10) || 0,
+        source: 'imported_meta',
+        count: importedMetaLeads,
         detail: 'Recoverable known contacts from Meta native lead forms.',
         confidence: 'high',
       },
@@ -139,7 +224,8 @@ async function getSummary(accountId) {
         key: 'ghl_contacts',
         label: 'GHL contacts',
         status: 'recoverable',
-        count: parseInt(recoverable.ghl_contacts, 10) || 0,
+        source: 'imported_ghl',
+        count: ghlContacts,
         detail: 'Recoverable known contacts synced from GHL.',
         confidence: 'medium',
       },
@@ -147,7 +233,8 @@ async function getSummary(accountId) {
         key: 'bookings',
         label: 'Bookings / appointments',
         status: 'recoverable',
-        count: parseInt(recoverable.bookings, 10) || 0,
+        source: 'imported_ghl',
+        count: bookings,
         detail: 'Recoverable booked-call contacts inferred from CRM stage.',
         confidence: 'medium',
       },
@@ -155,6 +242,7 @@ async function getSummary(accountId) {
         key: 'meta_aggregate_traffic',
         label: 'Meta aggregate traffic',
         status: 'recoverable',
+        source: 'warehouse_aggregate',
         count: metaLandingPageViews,
         clicks: metaClicks,
         spend: metaSpend,
@@ -165,11 +253,14 @@ async function getSummary(accountId) {
         key: 'server_log_page_hits',
         label: 'Server / CDN page hits',
         status: 'unavailable',
+        source: 'unavailable',
         count: 0,
         detail: 'Not connected in this app. Optional future import from external logs.',
         confidence: 'unknown',
       },
     ],
+    reconciliation,
+    warnings,
   };
 }
 
@@ -183,6 +274,20 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
     ghl.syncAccountById(accountId, { sinceOverride: start }).catch((err) => ({ error: err.message })),
     warehouse.syncAccountInsightsRange(accountId, { since: start, until: end, levels: ['account'] }).catch((err) => ({ error: err.message })),
   ]);
+
+  const data = readOutages();
+  data[String(accountId)] = {
+    ...(data[String(accountId)] || {}),
+    outage_start: start,
+    outage_end: end,
+    last_backfill_at: new Date().toISOString(),
+    last_backfill: {
+      meta_leads: meta,
+      ghl_contacts: ghlResult,
+      meta_aggregate: warehouseResult,
+    },
+  };
+  writeOutages(data);
 
   return {
     outage_start: start,
