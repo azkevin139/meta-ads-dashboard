@@ -17,11 +17,11 @@ const SEGMENT_SQL = {
   meta_native_leads: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR lower(COALESCE(source_event_type, '')) LIKE 'fb-lead%' OR lower(COALESCE(source_event_type, '')) LIKE '%instant%form%') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   google_ads_leads: `WHERE account_id = $1 AND (gclid IS NOT NULL OR lower(COALESCE(utm_source, '')) = 'google') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   landing_page_leads: `WHERE account_id = $1 AND ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%') AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
-  non_converted_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0)`,
-  converted_contacts: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  non_converted_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0)`,
+  converted_contacts: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   known_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
-  qualified_contacts: `WHERE account_id = $1 AND lower(COALESCE(current_stage, '')) LIKE '%qualif%' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
-  closed_contacts: `WHERE account_id = $1 AND (lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  qualified_contacts: `WHERE account_id = $1 AND normalized_stage = 'qualified' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  closed_contacts: `WHERE account_id = $1 AND (normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
 };
 
 async function buildSegmentData(accountId, segmentKey) {

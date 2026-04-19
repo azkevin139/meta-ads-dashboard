@@ -90,8 +90,8 @@ async function getSummary(accountId) {
     SELECT
       COUNT(DISTINCT CASE WHEN meta_lead_id IS NOT NULL OR lower(COALESCE(source_event_type, '')) LIKE 'fb-lead%' OR lower(COALESCE(source_event_type, '')) LIKE '%instant%form%' THEN client_id END) AS imported_meta_leads,
       COUNT(DISTINCT CASE WHEN ghl_contact_id IS NOT NULL THEN client_id END) AS ghl_contacts,
-      COUNT(DISTINCT CASE WHEN lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' THEN client_id END) AS bookings,
-      COUNT(DISTINCT CASE WHEN lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0 THEN client_id END) AS conversions
+      COUNT(DISTINCT CASE WHEN normalized_stage IN ('booked', 'showed') THEN client_id END) AS bookings,
+      COUNT(DISTINCT CASE WHEN normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0 THEN client_id END) AS conversions
     FROM visitors
     WHERE account_id = $1
       AND last_seen_at::date BETWEEN $2::date AND $3::date

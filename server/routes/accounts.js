@@ -5,8 +5,10 @@ const tokenHealth = require('../services/tokenHealthService');
 const ghl = require('../services/ghlService');
 const {
   ensureInteger,
+  ensureEnum,
   ensureNonEmptyString,
   ensureObject,
+  optionalInteger,
   optionalTrimmedString,
 } = require('../validation');
 
@@ -153,7 +155,13 @@ router.delete('/:id/ghl', adminOnly, async (req, res) => {
 
 router.post('/:id/ghl/sync', adminOnly, async (req, res) => {
   try {
-    const result = await ghl.syncAccountById(parseInt(req.params.id, 10));
+    const body = ensureObject(req.body || {});
+    const result = await ghl.syncAccountById(parseInt(req.params.id, 10), {
+      mode: body.mode ? ensureEnum(body.mode, ['incremental', 'full', 'range'], 'mode must be incremental, full, or range') : 'incremental',
+      sinceOverride: body.since ? ensureNonEmptyString(body.since, 'since must be a non-empty string') : undefined,
+      untilOverride: body.until ? ensureNonEmptyString(body.until, 'until must be a non-empty string') : undefined,
+      maxPages: optionalInteger(body.maxPages, 'maxPages must be a positive integer'),
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);

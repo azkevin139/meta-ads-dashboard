@@ -31,7 +31,9 @@ for migration in \
   v8_audience_push.sql \
   v9_attribution_fields.sql \
   v10_role_grants.sql \
-  v11_touch_sequences.sql
+  v11_touch_sequences.sql \
+  v12_ghl_sync_state.sql \
+  v13_normalized_stage.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

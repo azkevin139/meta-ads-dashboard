@@ -241,9 +241,9 @@ async function getFirstPartyFunnel({ since, until, preset } = {}, context = {}) 
       v.campaign_id,
       COUNT(DISTINCT v.client_id) AS page_visits,
       COUNT(DISTINCT CASE WHEN v.ghl_contact_id IS NOT NULL OR v.meta_lead_id IS NOT NULL OR v.email_hash IS NOT NULL THEN v.client_id END) AS leads,
-      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%contact%' THEN v.client_id END) AS ghl_contacted,
-      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%qualif%' THEN v.client_id END) AS qualified,
-      COUNT(DISTINCT CASE WHEN lower(COALESCE(v.current_stage, '')) LIKE '%closed%' OR COALESCE(v.revenue, 0) > 0 THEN v.client_id END) AS closed,
+      COUNT(DISTINCT CASE WHEN v.normalized_stage = 'contacted' THEN v.client_id END) AS ghl_contacted,
+      COUNT(DISTINCT CASE WHEN v.normalized_stage = 'qualified' THEN v.client_id END) AS qualified,
+      COUNT(DISTINCT CASE WHEN v.normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(v.revenue, 0) > 0 THEN v.client_id END) AS closed,
       COALESCE(SUM(v.revenue), 0) AS revenue
     FROM visitors v
     WHERE v.account_id = $1
@@ -517,15 +517,15 @@ async function getAudienceSegments({ since, until, preset } = {}, context = {}) 
         UNION ALL
         SELECT 'landing_page_leads', 'Landing page form submitters', 'first_party', 'Contacts who submitted a form on your landing page (not native Meta form).', COUNT(DISTINCT client_id) FROM base WHERE ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%')
         UNION ALL
-        SELECT 'non_converted_contacts', 'Non-converted contacts', 'first_party', 'Known first-party contacts who have not yet converted. Useful for later-step suppression-safe retargeting.', COUNT(DISTINCT client_id) FROM base WHERE (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0)
+        SELECT 'non_converted_contacts', 'Non-converted contacts', 'first_party', 'Known first-party contacts who have not yet converted. Useful for later-step suppression-safe retargeting.', COUNT(DISTINCT client_id) FROM base WHERE (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0)
         UNION ALL
-        SELECT 'converted_contacts', 'Converted / excluded contacts', 'first_party', 'Contacts who already converted, submitted a lead, booked, or reached a closed/revenue stage. Use as a global exclusion audience.', COUNT(DISTINCT client_id) FROM base WHERE meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR lower(COALESCE(current_stage, '')) LIKE '%book%' OR lower(COALESCE(current_stage, '')) LIKE '%appoint%' OR lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0
+        SELECT 'converted_contacts', 'Converted / excluded contacts', 'first_party', 'Contacts who already converted, submitted a lead, booked, or reached a closed/revenue stage. Use as a global exclusion audience.', COUNT(DISTINCT client_id) FROM base WHERE meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0
         UNION ALL
         SELECT 'known_contacts', 'Resolved contacts', 'first_party', 'Visitors matched to an email, phone, GHL contact, or Meta lead ID.', COUNT(DISTINCT client_id) FROM base WHERE email_hash IS NOT NULL OR phone_hash IS NOT NULL OR ghl_contact_id IS NOT NULL OR meta_lead_id IS NOT NULL
         UNION ALL
-        SELECT 'qualified_contacts', 'Qualified contacts', 'first_party', 'Contacts whose current stage includes qualified.', COUNT(DISTINCT client_id) FROM base WHERE lower(COALESCE(current_stage, '')) LIKE '%qualif%'
+        SELECT 'qualified_contacts', 'Qualified contacts', 'first_party', 'Contacts whose normalized stage is qualified.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'qualified'
         UNION ALL
-        SELECT 'closed_contacts', 'Closed or revenue contacts', 'first_party', 'Contacts with closed stage language or tracked revenue.', COUNT(DISTINCT client_id) FROM base WHERE lower(COALESCE(current_stage, '')) LIKE '%closed%' OR COALESCE(revenue, 0) > 0
+        SELECT 'closed_contacts', 'Closed or revenue contacts', 'first_party', 'Contacts with normalized closed stage or tracked revenue.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0
       ) segments
       ORDER BY size DESC, name
     `, [accountId, range.since, range.until]);

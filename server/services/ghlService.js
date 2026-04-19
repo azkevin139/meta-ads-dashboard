@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { query, queryAll, queryOne } = require('../db');
 const accountService = require('./accountService');
 const config = require('../config');
+const { normalizeStage } = require('./lifecycleStageService');
 
 // GHL has two API flavors:
 //   v1: https://rest.gohighlevel.com/v1/  (Location API keys, "Bearer <key>")
@@ -139,6 +140,61 @@ async function listContacts(account, { since, limit = 100 } = {}) {
   return data.contacts || data.data || [];
 }
 
+function contactUpdatedAt(contact) {
+  const raw = pickFirst(
+    contact.dateUpdated,
+    contact.date_updated,
+    contact.updatedAt,
+    contact.updated_at,
+    contact.lastUpdated,
+    contact.last_updated,
+    contact.dateAdded,
+    contact.createdAt,
+    contact.created_at
+  );
+  if (!raw) return null;
+  const value = new Date(raw);
+  return Number.isNaN(value.getTime()) ? null : value;
+}
+
+function parseNextCursor(data, contacts, limit) {
+  const meta = data?.meta || data?.metadata || {};
+  const nextUrl = meta.nextPageUrl || meta.next_page_url || data?.nextPageUrl || data?.next_page_url;
+  if (nextUrl) {
+    try {
+      const url = new URL(nextUrl);
+      const startAfter = url.searchParams.get('startAfter');
+      const startAfterId = url.searchParams.get('startAfterId');
+      if (startAfter) return { type: 'startAfter', value: startAfter };
+      if (startAfterId) return { type: 'startAfterId', value: startAfterId };
+    } catch (_err) {}
+  }
+  const nextStartAfter = meta.startAfter || meta.nextStartAfter || data?.startAfter || data?.nextStartAfter;
+  if (nextStartAfter) return { type: 'startAfter', value: nextStartAfter };
+  const nextStartAfterId = meta.startAfterId || meta.nextStartAfterId || data?.startAfterId || data?.nextStartAfterId;
+  if (nextStartAfterId) return { type: 'startAfterId', value: nextStartAfterId };
+  if (contacts.length === limit) {
+    const last = contacts[contacts.length - 1];
+    const lastId = last?.id || last?.contact_id || last?.contactId || null;
+    if (lastId) return { type: 'startAfterId', value: lastId };
+  }
+  return null;
+}
+
+async function listContactsPage(account, { limit = 100, cursor, since } = {}) {
+  const params = { limit };
+  if (cursor?.type === 'startAfter' && cursor.value) params.startAfter = cursor.value;
+  else if (cursor?.type === 'startAfterId' && cursor.value) params.startAfterId = cursor.value;
+  else if (since) params.startAfter = new Date(since).toISOString();
+  const data = await ghlRequest(account, '/contacts/', { query: params });
+  const contacts = data.contacts || data.data || [];
+  return {
+    contacts,
+    nextCursor: parseNextCursor(data, contacts, limit),
+    raw: data,
+  };
+}
+
 function pickCustomField(contact, wantedKeys) {
   const candidates = [];
   if (Array.isArray(contact.customFields)) candidates.push(...contact.customFields);
@@ -217,11 +273,91 @@ function normaliseContact(contact) {
     first_name: contact.firstName || contact.first_name || null,
     last_name: contact.lastName || contact.last_name || null,
     stage,
+    normalized_stage: normalizeStage(stage, { revenue }),
     revenue,
     tags: contact.tags || [],
     attribution,
     raw: contact,
   };
+}
+
+async function emitLifecycleEvents(account, clientId, previousVisitor, normalised, eventTime) {
+  const firedAt = eventTime || new Date().toISOString();
+  const prevStage = previousVisitor?.current_stage || null;
+  const prevNormalized = previousVisitor?.normalized_stage || null;
+  const prevRevenue = Number(previousVisitor?.revenue) || 0;
+  const nextStage = normalised.stage || null;
+  const nextNormalized = normalised.normalized_stage || null;
+  const nextRevenue = Number(normalised.revenue) || 0;
+  const events = [];
+
+  if (!previousVisitor?.ghl_contact_id) {
+    events.push({
+      event_name: 'GHLContactImported',
+      metadata: {
+        ghl_contact_id: normalised.ghl_contact_id,
+        current_stage: nextStage,
+        normalized_stage: nextNormalized,
+      },
+    });
+  }
+  if (nextStage && nextStage !== prevStage) {
+    events.push({
+      event_name: 'GHLStageChanged',
+      metadata: {
+        ghl_contact_id: normalised.ghl_contact_id,
+        previous_stage: prevStage,
+        current_stage: nextStage,
+        previous_normalized_stage: prevNormalized,
+        normalized_stage: nextNormalized,
+      },
+    });
+  }
+  if (nextNormalized === 'booked' && prevNormalized !== 'booked') {
+    events.push({
+      event_name: 'GHLBooked',
+      metadata: {
+        ghl_contact_id: normalised.ghl_contact_id,
+        previous_stage: prevStage,
+        current_stage: nextStage,
+        normalized_stage: nextNormalized,
+      },
+    });
+  }
+  if (nextRevenue > prevRevenue) {
+    events.push({
+      event_name: 'GHLRevenueUpdated',
+      value: nextRevenue,
+      metadata: {
+        ghl_contact_id: normalised.ghl_contact_id,
+        previous_revenue: prevRevenue,
+        revenue: nextRevenue,
+        normalized_stage: nextNormalized,
+      },
+    });
+  }
+  if (!events.length) return;
+
+  for (const event of events) {
+    await query(`
+      INSERT INTO visitor_events (client_id, account_id, event_name, campaign_id, adset_id, ad_id, value, currency, metadata, fired_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `, [
+      clientId,
+      account.id,
+      event.event_name,
+      normalised.attribution?.campaign_id || null,
+      normalised.attribution?.adset_id || null,
+      normalised.attribution?.ad_id || null,
+      event.value === undefined ? null : event.value,
+      'USD',
+      JSON.stringify({
+        source: 'ghl',
+        ...(event.metadata || {}),
+      }),
+      firedAt,
+    ]);
+  }
 }
 
 async function upsertContactAttribution(account, normalised) {
@@ -232,34 +368,35 @@ async function upsertContactAttribution(account, normalised) {
   // Find by client_id first (most precise), then by email hash, then phone hash.
   let existing = null;
   if (normalised.client_id) {
-    existing = await queryOne('SELECT client_id FROM visitors WHERE client_id = $1', [normalised.client_id]);
+    existing = await queryOne('SELECT client_id, ghl_contact_id, current_stage, normalized_stage, revenue FROM visitors WHERE client_id = $1', [normalised.client_id]);
   }
   if (!existing && emailHash) {
-    existing = await queryOne('SELECT client_id FROM visitors WHERE email_hash = $1 ORDER BY last_seen_at DESC LIMIT 1', [emailHash]);
+    existing = await queryOne('SELECT client_id, ghl_contact_id, current_stage, normalized_stage, revenue FROM visitors WHERE email_hash = $1 ORDER BY last_seen_at DESC LIMIT 1', [emailHash]);
   }
   if (!existing && phoneHash) {
-    existing = await queryOne('SELECT client_id FROM visitors WHERE phone_hash = $1 ORDER BY last_seen_at DESC LIMIT 1', [phoneHash]);
+    existing = await queryOne('SELECT client_id, ghl_contact_id, current_stage, normalized_stage, revenue FROM visitors WHERE phone_hash = $1 ORDER BY last_seen_at DESC LIMIT 1', [phoneHash]);
   }
 
   const clientId = existing?.client_id || normalised.client_id || `ghl_${normalised.ghl_contact_id}`;
 
-  await query(`
+  const visitor = await queryOne(`
     INSERT INTO visitors (
       client_id, account_id, meta_account_id,
       email_hash, phone_hash, ghl_contact_id,
-      current_stage, revenue, currency,
+      current_stage, normalized_stage, revenue, currency,
       campaign_id, adset_id, ad_id,
       utm_source, utm_medium, utm_campaign, utm_content, utm_term,
       fbclid, gclid, source, source_event_type,
       lead_form_id, lead_form_name, referrer, landing_page,
       raw, first_seen_at, last_seen_at, resolved_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW(), NOW())
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW(), NOW())
     ON CONFLICT (client_id) DO UPDATE SET
       account_id = COALESCE(EXCLUDED.account_id, visitors.account_id),
       email_hash = COALESCE(EXCLUDED.email_hash, visitors.email_hash),
       phone_hash = COALESCE(EXCLUDED.phone_hash, visitors.phone_hash),
       ghl_contact_id = COALESCE(EXCLUDED.ghl_contact_id, visitors.ghl_contact_id),
       current_stage = COALESCE(EXCLUDED.current_stage, visitors.current_stage),
+      normalized_stage = COALESCE(EXCLUDED.normalized_stage, visitors.normalized_stage),
       revenue = GREATEST(COALESCE(EXCLUDED.revenue, 0), COALESCE(visitors.revenue, 0)),
       campaign_id = COALESCE(visitors.campaign_id, EXCLUDED.campaign_id),
       adset_id = COALESCE(visitors.adset_id, EXCLUDED.adset_id),
@@ -280,6 +417,7 @@ async function upsertContactAttribution(account, normalised) {
       raw = COALESCE(visitors.raw, '{}'::jsonb) || COALESCE(EXCLUDED.raw, '{}'::jsonb),
       last_seen_at = NOW(),
       resolved_at = COALESCE(visitors.resolved_at, NOW())
+    RETURNING client_id, ghl_contact_id, current_stage, normalized_stage, revenue
   `, [
     clientId,
     account.id,
@@ -288,6 +426,7 @@ async function upsertContactAttribution(account, normalised) {
     phoneHash,
     normalised.ghl_contact_id,
     normalised.stage,
+    normalised.normalized_stage,
     normalised.revenue || 0,
     'USD',
     attr.campaign_id || null,
@@ -309,27 +448,62 @@ async function upsertContactAttribution(account, normalised) {
     JSON.stringify({ ghl: normalised.raw || {} }),
   ]);
 
-  return { client_id: clientId, resolved: Boolean(existing), attribution: attr };
+  return { client_id: clientId, resolved: Boolean(existing), attribution: attr, previous: existing, visitor };
 }
 
-async function syncAccount(account, { sinceOverride } = {}) {
+function normaliseSyncOptions(account, options = {}) {
+  const mode = ['incremental', 'full', 'range'].includes(options.mode) ? options.mode : 'incremental';
+  const since = options.sinceOverride
+    ? new Date(options.sinceOverride).getTime()
+    : (mode === 'incremental'
+      ? (account.ghl_last_sync_at ? new Date(account.ghl_last_sync_at).getTime() - 3600 * 1000 : null)
+      : null);
+  const until = options.untilOverride ? new Date(options.untilOverride).getTime() : null;
+  if (mode === 'range' && !since) throw new Error('range sync requires sinceOverride');
+  if (since && Number.isNaN(since)) throw new Error('Invalid GHL sync sinceOverride');
+  if (until && Number.isNaN(until)) throw new Error('Invalid GHL sync untilOverride');
+  if (since && until && until < since) throw new Error('GHL sync untilOverride must be on or after sinceOverride');
+  const limit = Math.max(1, Math.min(parseInt(options.limit, 10) || 100, 200));
+  const maxPages = Math.max(1, Math.min(parseInt(options.maxPages, 10) || (mode === 'incremental' ? 25 : 500), 1000));
+  return { mode, since, until, limit, maxPages };
+}
+
+async function syncAccount(account, options = {}) {
   if (!account?.ghl_api_key_encrypted) {
     throw new Error('GHL not configured for this account');
   }
   let imported = 0;
   let matched = 0;
+  let scanned = 0;
+  let pages = 0;
   let errorMessage = null;
-  const since = sinceOverride
-    ? new Date(sinceOverride).getTime()
-    : (account.ghl_last_sync_at ? new Date(account.ghl_last_sync_at).getTime() - 3600 * 1000 : null); // 1h overlap
+  let lastCursor = null;
+  let oldestSyncedAt = account.ghl_oldest_synced_at || null;
+  const { mode, since, until, limit, maxPages } = normaliseSyncOptions(account, options);
   try {
-    const contacts = await listContacts(account, { since, limit: 200 });
-    for (const contact of contacts) {
-      const normalised = normaliseContact(contact);
-      if (!normalised.ghl_contact_id) continue;
-      const result = await upsertContactAttribution(account, normalised);
-      imported += 1;
-      if (result.resolved) matched += 1;
+    let cursor = null;
+    for (let page = 0; page < maxPages; page += 1) {
+      const pageResult = await listContactsPage(account, { since, limit, cursor });
+      const contacts = pageResult.contacts || [];
+      pages += 1;
+      scanned += contacts.length;
+      lastCursor = pageResult.nextCursor;
+      for (const contact of contacts) {
+        const updatedAt = contactUpdatedAt(contact);
+        if (since && updatedAt && updatedAt.getTime() < since) continue;
+        if (until && updatedAt && updatedAt.getTime() > until) continue;
+        const normalised = normaliseContact(contact);
+        if (!normalised.ghl_contact_id) continue;
+        const result = await upsertContactAttribution(account, normalised);
+        await emitLifecycleEvents(account, result.client_id, result.previous, normalised, updatedAt ? updatedAt.toISOString() : null);
+        imported += 1;
+        if (result.resolved) matched += 1;
+        if (updatedAt && (!oldestSyncedAt || updatedAt.getTime() < new Date(oldestSyncedAt).getTime())) {
+          oldestSyncedAt = updatedAt.toISOString();
+        }
+      }
+      if (!pageResult.nextCursor || contacts.length < limit) break;
+      cursor = pageResult.nextCursor;
     }
   } catch (err) {
     errorMessage = err.message || String(err);
@@ -339,12 +513,38 @@ async function syncAccount(account, { sinceOverride } = {}) {
     UPDATE accounts
     SET ghl_last_sync_at = NOW(),
         ghl_last_sync_count = $2,
-        ghl_last_sync_error = $3,
+        ghl_last_scan_count = $3,
+        ghl_last_match_count = $4,
+        ghl_last_sync_mode = $5,
+        ghl_last_cursor = $6,
+        ghl_last_bootstrap_at = CASE WHEN $5 = 'full' AND $7 IS NULL THEN NOW() ELSE ghl_last_bootstrap_at END,
+        ghl_oldest_synced_at = COALESCE($7, ghl_oldest_synced_at),
+        ghl_last_sync_error = $8,
         updated_at = NOW()
     WHERE id = $1
-  `, [account.id, imported, errorMessage]);
+  `, [
+    account.id,
+    imported,
+    scanned,
+    matched,
+    mode,
+    lastCursor ? JSON.stringify(lastCursor) : null,
+    oldestSyncedAt,
+    errorMessage,
+  ]);
 
-  return { account_id: account.id, imported, matched, error: errorMessage };
+  return {
+    account_id: account.id,
+    mode,
+    since: since ? new Date(since).toISOString() : null,
+    until: until ? new Date(until).toISOString() : null,
+    pages,
+    scanned,
+    imported,
+    matched,
+    cursor: lastCursor,
+    error: errorMessage,
+  };
 }
 
 async function syncAccountById(accountId, options = {}) {
@@ -358,7 +558,7 @@ async function syncAllConfigured() {
   const results = [];
   for (const row of rows) {
     try {
-      results.push(await syncAccount(row));
+      results.push(await syncAccount(row, { mode: 'incremental' }));
     } catch (err) {
       results.push({ account_id: row.id, error: err.message });
     }
@@ -390,7 +590,9 @@ function startBackgroundSync({ intervalMs = 6 * 3600 * 1000 } = {}) {
 async function getStatus(accountId) {
   const row = await queryOne(`
     SELECT id, ghl_api_key_encrypted IS NOT NULL AS configured,
-           ghl_location_id, ghl_last_sync_at, ghl_last_sync_count, ghl_last_sync_error
+           ghl_location_id, ghl_last_sync_at, ghl_last_sync_count, ghl_last_scan_count,
+           ghl_last_match_count, ghl_last_sync_mode, ghl_last_cursor, ghl_last_bootstrap_at,
+           ghl_oldest_synced_at, ghl_last_sync_error
     FROM accounts WHERE id = $1
   `, [accountId]);
   if (!row) return null;
@@ -400,6 +602,12 @@ async function getStatus(accountId) {
     location_id: row.ghl_location_id,
     last_sync_at: row.ghl_last_sync_at,
     last_sync_count: row.ghl_last_sync_count || 0,
+    last_scan_count: row.ghl_last_scan_count || 0,
+    last_match_count: row.ghl_last_match_count || 0,
+    last_sync_mode: row.ghl_last_sync_mode || 'incremental',
+    last_cursor: row.ghl_last_cursor || null,
+    last_bootstrap_at: row.ghl_last_bootstrap_at,
+    oldest_synced_at: row.ghl_oldest_synced_at,
     last_sync_error: row.ghl_last_sync_error,
   };
 }

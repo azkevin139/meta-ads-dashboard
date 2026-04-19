@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { query, queryOne } = require('../db');
 const diagnostics = require('./trackingDiagnosticsService');
+const { normalizeStage } = require('./lifecycleStageService');
 
 function clean(value) {
   if (value === undefined || value === null) return null;
@@ -35,6 +36,11 @@ async function upsertVisitor(input = {}) {
   const emailHash = clean(input.email_hash) || hashIdentity(input.email);
   const phoneHash = clean(input.phone_hash) || hashIdentity(input.phone);
   const fbc = clean(input.fbc) || fbcFromFbclid(input.fbclid);
+  const normalizedStage = normalizeStage(input.current_stage || input.stage, {
+    revenue: input.revenue,
+    metaLeadId: input.meta_lead_id,
+    sourceEventType: input.source_event_type,
+  });
 
   return queryOne(`
     INSERT INTO visitors (
@@ -42,9 +48,9 @@ async function upsertVisitor(input = {}) {
       utm_source, utm_medium, utm_campaign, utm_content, utm_term,
       ad_id, adset_id, campaign_id, referrer, landing_page,
       email_hash, phone_hash, ghl_contact_id, meta_lead_id,
-      current_stage, revenue, currency, raw, first_seen_at, last_seen_at, resolved_at
+      current_stage, normalized_stage, revenue, currency, raw, first_seen_at, last_seen_at, resolved_at
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),NOW(),CASE WHEN $17::text IS NOT NULL OR $18::text IS NOT NULL OR $19::text IS NOT NULL OR $20::text IS NOT NULL THEN NOW() ELSE NULL END)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,NOW(),NOW(),CASE WHEN $17::text IS NOT NULL OR $18::text IS NOT NULL OR $19::text IS NOT NULL OR $20::text IS NOT NULL THEN NOW() ELSE NULL END)
     ON CONFLICT (client_id) DO UPDATE SET
       account_id = COALESCE(EXCLUDED.account_id, visitors.account_id),
       meta_account_id = COALESCE(EXCLUDED.meta_account_id, visitors.meta_account_id),
@@ -66,6 +72,7 @@ async function upsertVisitor(input = {}) {
       ghl_contact_id = COALESCE(EXCLUDED.ghl_contact_id, visitors.ghl_contact_id),
       meta_lead_id = COALESCE(EXCLUDED.meta_lead_id, visitors.meta_lead_id),
       current_stage = COALESCE(EXCLUDED.current_stage, visitors.current_stage),
+      normalized_stage = COALESCE(EXCLUDED.normalized_stage, visitors.normalized_stage),
       revenue = GREATEST(COALESCE(EXCLUDED.revenue, 0), COALESCE(visitors.revenue, 0)),
       currency = COALESCE(EXCLUDED.currency, visitors.currency),
       raw = COALESCE(visitors.raw, '{}'::jsonb) || COALESCE(EXCLUDED.raw, '{}'::jsonb),
@@ -94,6 +101,7 @@ async function upsertVisitor(input = {}) {
     clean(input.ghl_contact_id),
     clean(input.meta_lead_id),
     clean(input.current_stage || input.stage),
+    normalizedStage,
     input.revenue === undefined || input.revenue === null ? null : Number(input.revenue) || 0,
     clean(input.currency) || 'USD',
     JSON.stringify(input.raw || input.metadata || {}),

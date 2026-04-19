@@ -738,6 +738,83 @@ test('tracking alerts route returns alert payload', async () => {
   }
 });
 
+test('account GHL sync route validates mode and forwards sync options', async () => {
+  const accountServicePath = require.resolve('../services/accountService');
+  const tokenHealthPath = require.resolve('../services/tokenHealthService');
+  const ghlPath = require.resolve('../services/ghlService');
+  const routePath = require.resolve('../routes/accounts');
+  const originals = new Map([
+    [accountServicePath, require.cache[accountServicePath]],
+    [tokenHealthPath, require.cache[tokenHealthPath]],
+    [ghlPath, require.cache[ghlPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let syncArgs = null;
+  delete require.cache[routePath];
+  require.cache[accountServicePath] = {
+    exports: {
+      listAccounts: async () => [],
+      publicAccount: (row) => row,
+      updateSessionAccount: async () => ({}),
+      createAccount: async () => ({}),
+      discoverAccountsForToken: async () => ([]),
+      importAccountsFromToken: async () => ([]),
+      refreshAccountMetadata: async () => ({}),
+      setDefaultAccount: async () => ({}),
+    },
+  };
+  require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[ghlPath] = {
+    exports: {
+      getStatus: async () => ({ configured: true }),
+      saveGhlCredentials: async () => ({ success: true }),
+      clearGhlCredentials: async () => ({ success: true }),
+      syncAccountById: async (accountId, options) => {
+        syncArgs = { accountId, options };
+        return { account_id: accountId, imported: 12, mode: options.mode };
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/accounts');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', session_token_hash: 'hash' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const invalidRes = await invoke(app, {
+      method: 'POST',
+      url: '/55/ghl/sync',
+      headers: { 'content-type': 'application/json' },
+      body: { mode: 'bad' },
+    });
+    assert.equal(invalidRes.status, 400);
+    assert.match(invalidRes.json.error, /mode must be incremental, full, or range/);
+
+    const validRes = await invoke(app, {
+      method: 'POST',
+      url: '/55/ghl/sync',
+      headers: { 'content-type': 'application/json' },
+      body: { mode: 'range', since: '2026-04-01T00:00:00.000Z', until: '2026-04-10T00:00:00.000Z', maxPages: 20 },
+    });
+    assert.equal(validRes.status, 200);
+    assert.deepEqual(syncArgs, {
+      accountId: 55,
+      options: {
+        mode: 'range',
+        sinceOverride: '2026-04-01T00:00:00.000Z',
+        untilOverride: '2026-04-10T00:00:00.000Z',
+        maxPages: 20,
+      },
+    });
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('admin update rejects invalid role', async () => {
   const authServicePath = require.resolve('../services/authService');
   const routePath = require.resolve('../routes/admin');
