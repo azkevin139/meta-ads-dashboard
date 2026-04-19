@@ -326,6 +326,32 @@ async function syncAccountInsights(accountId, { days = 3 } = {}) {
   return report;
 }
 
+async function syncAccountInsightsRange(accountId, { since, until, levels = ['account'] } = {}) {
+  const account = await accountService.getAccountById(accountId);
+  if (!account || !account.access_token) return { account_id: accountId, skipped: 'no_token' };
+  if (!since || !until) throw new Error('since and until are required');
+
+  const budget = metaCache.budgetStatus(accountId);
+  if (budget.mode !== 'normal') return { account_id: accountId, skipped: `budget_${budget.mode}` };
+
+  const report = { account_id: accountId, inserted: {}, error: null };
+  const adAccountId = metaApi.contextAccountId(account);
+  try {
+    for (const level of levels) {
+      const rows = await metaApi.getInsights(adAccountId, {
+        level,
+        time_range: JSON.stringify({ since, until }),
+        time_increment: 1,
+        fields: 'spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type,date_start,campaign_id,adset_id,ad_id',
+      }, account);
+      report.inserted[level] = await upsertInsightRows(accountId, rows, level);
+    }
+  } catch (err) {
+    report.error = err.message;
+  }
+  return report;
+}
+
 async function syncAll({ days = 3 } = {}) {
   const accounts = await queryAll('SELECT id FROM accounts ORDER BY id');
   const results = [];
@@ -374,6 +400,7 @@ function startBackgroundSync({ intervalMs = 6 * 60 * 60 * 1000 } = {}) {
 module.exports = {
   syncAccountEntities,
   syncAccountInsights,
+  syncAccountInsightsRange,
   syncAll,
   startBackgroundSync,
 };

@@ -23,6 +23,11 @@ async function loadSettings(container) {
       </div>
 
       <div class="reco-card mb-md">
+        <div class="reco-entity mb-sm">Tracking Outage Recovery</div>
+        <div id="tracking-recovery-info"><div class="loading">Loading recovery window</div></div>
+      </div>
+
+      <div class="reco-card mb-md">
         <div class="reco-entity mb-sm">Meta Lead Forms</div>
         <div id="meta-leads-info"><div class="loading">Loading lead sync status</div></div>
       </div>
@@ -54,12 +59,15 @@ async function loadSettings(container) {
       <div class="reco-card mb-md">
         <div class="reco-entity mb-sm">Sync Schedule</div>
         <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.8;">
-          <div>• <strong>Metrics sync:</strong> Every 6 hours via n8n</div>
-          <div>• <strong>AI analysis:</strong> Daily at 07:00 EST via n8n</div>
-          <div>• <strong>Alerts:</strong> Every 2 hours via n8n</div>
+          <div>• <strong>Metrics sync:</strong> Every 6 hours via the Ad Command worker</div>
+          <div>• <strong>Meta lead sync:</strong> Every 15 minutes via the Ad Command worker</div>
+          <div>• <strong>GHL sync:</strong> Every 6 hours via the Ad Command worker</div>
+          <div>• <strong>Audience refresh:</strong> Hourly via the Ad Command worker</div>
+          <div>• <strong>Touch sequence monitor:</strong> Every 30 minutes via the Ad Command worker</div>
+          <div>• <strong>n8n role:</strong> External webhooks, notifications, and optional Meta CAPI</div>
         </div>
         <div class="mt-md text-muted" style="font-size: 0.78rem;">
-          Configure n8n workflows at <a href="https://n8n.emma42.com" target="_blank">n8n.emma42.com</a>
+          Configure the n8n side at <a href="https://n8n.emma42.com" target="_blank">n8n.emma42.com</a> after importing the workflow files from the repo's <code>n8n/</code> folder.
         </div>
       </div>
 
@@ -91,6 +99,12 @@ async function loadSettings(container) {
   const leadSection = settingsAsyncSection.createAsyncSection({
     targetId: 'meta-leads-info',
     loadingText: 'Loading lead sync status',
+    render: (html) => html,
+    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+  });
+  const recoverySection = settingsAsyncSection.createAsyncSection({
+    targetId: 'tracking-recovery-info',
+    loadingText: 'Loading recovery window',
     render: (html) => html,
     onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
   });
@@ -141,6 +155,9 @@ async function loadSettings(container) {
     const health = await apiGet(`/intelligence/tracking-health?accountId=${ACCOUNT_ID}`);
     const v = health.visitors || {};
     const e = health.events || {};
+    const d = health.diagnostics || {};
+    const selectedDiag = d.selected || {};
+    const latestDiag = d.latest || {};
     const badge = health.status === 'live'
       ? '<span class="badge badge-active">● Live</span>'
       : health.status === 'stale'
@@ -159,8 +176,14 @@ async function loadSettings(container) {
         <div><div class="kpi-label">Ad clicks</div><div style="font-weight:600;">${fmt(v.with_fbclid, 'integer')} <span class="text-muted" style="font-weight:400;">(${v.fbclid_rate || 0}%)</span></div></div>
         <div><div class="kpi-label">Resolved contacts</div><div style="font-weight:600;">${fmt(v.resolved, 'integer')}</div></div>
         <div><div class="kpi-label">Total visitors</div><div style="font-weight:600;">${fmt(v.total, 'integer')}</div></div>
+        <div><div class="kpi-label">Requests</div><div style="font-weight:600;">${fmt(selectedDiag.request_count, 'integer')}</div></div>
+        <div><div class="kpi-label">Success</div><div style="font-weight:600;">${fmt(selectedDiag.success_count, 'integer')}</div></div>
+        <div><div class="kpi-label">Failures</div><div style="font-weight:600;">${fmt(selectedDiag.failure_count, 'integer')}</div></div>
+        <div><div class="kpi-label">Last payload</div><div style="font-weight:600;">${selectedDiag.last_payload_at ? fmtDateTime(selectedDiag.last_payload_at) : '—'}</div></div>
       </div>
       ${health.status !== 'live' ? `<div class="alert-banner alert-warning" style="margin-top:12px;">No pageviews recorded in the last 24 hours for this account. Confirm the snippet is on your landing page and the page is served over HTTPS to the same origin as this dashboard.</div>` : ''}
+      ${selectedDiag.last_error ? `<div class="alert-banner alert-warning" style="margin-top:12px;">Last ingest error: ${escapeHtml(selectedDiag.last_error)}</div>` : ''}
+      ${d.account_mismatch && latestDiag.meta_account_id ? `<div class="alert-banner alert-warning" style="margin-top:12px;">Selected account is <span class="mono">${escapeHtml(health.meta_account_id || '')}</span>, but the latest tracker payload hit <span class="mono">${escapeHtml(latestDiag.meta_account_id)}</span>. Switch the dashboard account or fix the snippet account ID.</div>` : ''}
     `);
   } catch (err) {
     trackingSection?.setError(err);
@@ -171,6 +194,12 @@ async function loadSettings(container) {
     renderLeadSyncStatus(status, leadSection);
   } catch (err) {
     leadSection?.setError(err);
+  }
+
+  try {
+    await renderTrackingRecovery(recoverySection);
+  } catch (err) {
+    recoverySection?.setError(err);
   }
 
   try {
@@ -195,7 +224,7 @@ async function loadSettings(container) {
           <button class="btn btn-sm" onclick="copyTrackerSnippet()">Copy Code</button>
         </div>
         <div class="text-muted" style="font-size:0.78rem; line-height:1.6; margin-bottom:8px;">
-          Insert this snippet before the closing body tag on your website. The active Meta ad account is already prefilled.
+          Insert this snippet before the closing body tag on your website. The active Meta ad account is already prefilled. Add <span class="mono">data-debug="true"</span> temporarily when you need browser console logs for failed sends.
         </div>
         <textarea id="tracker-snippet" class="form-textarea mono" rows="6" readonly>${escapeHtml(trackerSnippet)}</textarea>
       </div>
@@ -215,6 +244,92 @@ async function loadSettings(container) {
       <div class="mt-sm text-muted" style="font-size: 0.78rem;">Run <code style="background: var(--bg-elevated); padding: 2px 6px; border-radius: 3px;">psql -U meta_dash -d meta_dashboard</code> to inspect directly.</div>
     </div>
   `;
+}
+
+async function renderTrackingRecovery(section = null) {
+  const data = await apiGet(`/intelligence/tracking-recovery?accountId=${ACCOUNT_ID}`);
+  const window = data.outage_window || {};
+  const buckets = data.buckets || [];
+  const html = `
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Outage start</label>
+        <input id="tracking-outage-start" class="form-input" type="date" value="${escapeHtml(window.outage_start || '')}">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Outage end</label>
+        <input id="tracking-outage-end" class="form-input" type="date" value="${escapeHtml(window.outage_end || '')}">
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label">Notes</label>
+      <textarea id="tracking-outage-notes" class="form-textarea" rows="2" placeholder="Optional outage note">${escapeHtml(window.notes || '')}</textarea>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      <button class="btn btn-sm" onclick="saveTrackingRecoveryWindow()">Save Window</button>
+      <button class="btn btn-sm btn-primary" onclick="runTrackingRecoveryBackfill(this)">Run Partial Backfill</button>
+    </div>
+    ${window.outage_start ? `<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Configured outage window: ${escapeHtml(window.outage_start)} to ${escapeHtml(window.outage_end)}${window.updated_at ? ` · updated ${fmtDateTime(window.updated_at)}` : ''}</div>` : '<div class="text-muted" style="font-size:0.76rem; margin-bottom:12px;">Set the outage window first. Backfill stays source-labeled and does not fabricate native visitor rows.</div>'}
+    ${buckets.length ? `<div style="display:grid; gap:10px;">
+      ${buckets.map((bucket) => `
+        <div class="reco-card" style="padding:10px 12px;">
+          <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:600; font-size:0.82rem;">${escapeHtml(bucket.label)}</div>
+              <div class="text-muted" style="font-size:0.72rem;">${escapeHtml(bucket.detail || '')}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-weight:700;">${fmt(bucket.count, 'integer')}</div>
+              <div class="text-muted" style="font-size:0.72rem;">${escapeHtml(bucket.status || '')} · ${escapeHtml(bucket.confidence || '')}</div>
+            </div>
+          </div>
+          ${bucket.clicks !== undefined || bucket.spend !== undefined ? `<div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Clicks: ${fmt(bucket.clicks, 'integer')} · Spend: ${fmt(bucket.spend, 'currency')}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>` : `<div class="text-muted" style="font-size:0.82rem;">${escapeHtml(data.note || 'No recovery data yet')}</div>`}
+  `;
+  section ? section.setData(html) : (document.getElementById('tracking-recovery-info').innerHTML = html);
+}
+
+async function saveTrackingRecoveryWindow() {
+  try {
+    await apiPost('/intelligence/tracking-recovery', {
+      accountId: ACCOUNT_ID,
+      outage_start: document.getElementById('tracking-outage-start').value,
+      outage_end: document.getElementById('tracking-outage-end').value,
+      notes: document.getElementById('tracking-outage-notes').value,
+    });
+    toast('Outage window saved', 'success');
+    await renderTrackingRecovery();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function runTrackingRecoveryBackfill(btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Backfilling…';
+  }
+  try {
+    const result = await apiPost('/intelligence/tracking-recovery/backfill', {
+      accountId: ACCOUNT_ID,
+      outage_start: document.getElementById('tracking-outage-start').value,
+      outage_end: document.getElementById('tracking-outage-end').value,
+      notes: document.getElementById('tracking-outage-notes').value,
+    });
+    const metaImported = result.data?.meta_leads?.imported || 0;
+    const ghlImported = result.data?.ghl_contacts?.imported || 0;
+    toast(`Backfill finished: ${metaImported} Meta leads, ${ghlImported} GHL contacts`, 'success');
+    await renderTrackingRecovery();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Run Partial Backfill';
+    }
+  }
 }
 
 function renderLeadSyncStatus(status, section = null) {

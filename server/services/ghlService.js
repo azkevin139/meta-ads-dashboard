@@ -312,14 +312,16 @@ async function upsertContactAttribution(account, normalised) {
   return { client_id: clientId, resolved: Boolean(existing), attribution: attr };
 }
 
-async function syncAccount(account) {
+async function syncAccount(account, { sinceOverride } = {}) {
   if (!account?.ghl_api_key_encrypted) {
     throw new Error('GHL not configured for this account');
   }
   let imported = 0;
   let matched = 0;
   let errorMessage = null;
-  const since = account.ghl_last_sync_at ? new Date(account.ghl_last_sync_at).getTime() - 3600 * 1000 : null; // 1h overlap
+  const since = sinceOverride
+    ? new Date(sinceOverride).getTime()
+    : (account.ghl_last_sync_at ? new Date(account.ghl_last_sync_at).getTime() - 3600 * 1000 : null); // 1h overlap
   try {
     const contacts = await listContacts(account, { since, limit: 200 });
     for (const contact of contacts) {
@@ -345,10 +347,10 @@ async function syncAccount(account) {
   return { account_id: account.id, imported, matched, error: errorMessage };
 }
 
-async function syncAccountById(accountId) {
+async function syncAccountById(accountId, options = {}) {
   const account = await queryOne('SELECT * FROM accounts WHERE id = $1', [accountId]);
   if (!account) throw new Error('Account not found');
-  return syncAccount(account);
+  return syncAccount(account, options);
 }
 
 async function syncAllConfigured() {
@@ -406,6 +408,7 @@ module.exports = {
   saveGhlCredentials,
   clearGhlCredentials,
   testConnection,
+  syncAccount,
   syncAccountById,
   syncAllConfigured,
   startBackgroundSync,

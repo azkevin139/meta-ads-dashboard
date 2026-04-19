@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { query, queryOne } = require('../db');
+const diagnostics = require('./trackingDiagnosticsService');
 
 function clean(value) {
   if (value === undefined || value === null) return null;
@@ -160,6 +161,7 @@ async function getHealth(accountId) {
   const whereVisitors = id ? 'WHERE account_id = $1' : '';
   const whereEvents = id ? 'WHERE account_id = $1' : '';
   const params = id ? [id] : [];
+  const account = id ? await queryOne('SELECT id, meta_account_id, label, name FROM accounts WHERE id = $1', [id]) : null;
 
   const visitors = await queryOne(`
     SELECT
@@ -189,9 +191,18 @@ async function getHealth(accountId) {
   if (last24h > 0) status = 'live';
   else if (total > 0) status = 'stale';
 
+  const selectedDiagnostics = diagnostics.get(account?.meta_account_id || null);
+  const latestDiagnostics = diagnostics.latest();
+  const accountMismatch = Boolean(
+    account?.meta_account_id &&
+    latestDiagnostics?.meta_account_id &&
+    latestDiagnostics.meta_account_id !== account.meta_account_id
+  );
+
   return {
     status,
     account_id: id,
+    meta_account_id: account?.meta_account_id || null,
     visitors: {
       total,
       last_24h: last24h,
@@ -206,6 +217,11 @@ async function getHealth(accountId) {
       last_24h: parseInt(events.last_24h, 10) || 0,
       last_1h: parseInt(events.last_1h, 10) || 0,
       last_fired_at: events.last_fired_at,
+    },
+    diagnostics: {
+      selected: selectedDiagnostics,
+      latest: latestDiagnostics,
+      account_mismatch: accountMismatch,
     },
   };
 }

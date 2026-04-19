@@ -82,7 +82,7 @@ async function fetchLeadsForAd(adId, sinceUnix, context) {
   }
 }
 
-async function syncAccountLeads(account) {
+async function syncAccountLeads(account, { sinceOverride } = {}) {
   if (!account || !account.id) throw new Error('Account required');
 
   const cooldownRemaining = metaApi.getCooldownRemainingSeconds();
@@ -108,7 +108,7 @@ async function syncAccountLeads(account) {
   }
 
   const sinceRow = await queryOne('SELECT last_leads_sync_at FROM accounts WHERE id = $1', [account.id]);
-  const sinceTs = sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_at) : null;
+  const sinceTs = sinceOverride ? new Date(sinceOverride) : (sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_at) : null);
   const sinceUnix = sinceTs ? Math.floor(sinceTs.getTime() / 1000) : null;
 
   let imported = 0;
@@ -161,11 +161,11 @@ async function syncAccountLeads(account) {
   return { account_id: account.id, meta_account_id: account.meta_account_id, imported, skipped, error: errorMessage };
 }
 
-async function syncAccountById(accountId) {
+async function syncAccountById(accountId, options = {}) {
   const account = await accountService.getAccountById(accountId);
   if (!account) throw new Error(`Account ${accountId} not found`);
   if (!account.access_token) throw new Error('Account has no stored token');
-  return syncAccountLeads(account);
+  return syncAccountLeads(account, options);
 }
 
 async function syncAllAccounts() {

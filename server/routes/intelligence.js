@@ -3,6 +3,7 @@ const { sendError } = require('../errorResponse');
 const router = express.Router();
 const intelligence = require('../services/intelligenceService');
 const tracking = require('../services/trackingService');
+const trackingRecovery = require('../services/trackingRecoveryService');
 const audiencePush = require('../services/audiencePushService');
 const touchSequences = require('../services/touchSequenceService');
 const {
@@ -235,6 +236,50 @@ router.get('/tracking-health', async (req, res) => {
     const accountId = req.query.accountId || req.metaAccount?.id || null;
     const health = await tracking.getHealth(accountId);
     res.json(health);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/tracking-recovery', async (req, res) => {
+  try {
+    const accountId = req.query.accountId || req.metaAccount?.id || null;
+    if (!accountId) return res.json({ outage_window: null, buckets: [], note: 'No active account' });
+    const summary = await trackingRecovery.getSummary(parseInt(accountId, 10));
+    res.json(summary);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/tracking-recovery', adminOrOperator, async (req, res) => {
+  try {
+    const body = ensureObject(req.body);
+    const accountId = body.accountId ? ensureInteger(body.accountId, 'accountId must be a positive integer') : req.metaAccount?.id;
+    if (!accountId) return res.status(400).json({ error: 'No active account' });
+    const saved = await trackingRecovery.saveWindow(accountId, {
+      outage_start: ensureNonEmptyString(body.outage_start, 'outage_start required'),
+      outage_end: ensureNonEmptyString(body.outage_end, 'outage_end required'),
+      notes: optionalTrimmedString(body.notes, 1000),
+    });
+    res.json({ success: true, data: saved });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/tracking-recovery/backfill', adminOrOperator, async (req, res) => {
+  try {
+    const body = ensureObject(req.body);
+    const accountId = body.accountId ? ensureInteger(body.accountId, 'accountId must be a positive integer') : req.metaAccount?.id;
+    if (!accountId) return res.status(400).json({ error: 'No active account' });
+    const window = await trackingRecovery.saveWindow(accountId, {
+      outage_start: ensureNonEmptyString(body.outage_start, 'outage_start required'),
+      outage_end: ensureNonEmptyString(body.outage_end, 'outage_end required'),
+      notes: optionalTrimmedString(body.notes, 1000),
+    });
+    const result = await trackingRecovery.runBackfill(accountId, window);
+    res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
   }

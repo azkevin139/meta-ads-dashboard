@@ -47,6 +47,11 @@ function createApp(config) {
     limit: '1mb',
     verify: (req, _res, buf) => { req.rawBody = buf; },
   }));
+  app.get('/js/meta-tracker.js', (req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use('/api', authMiddleware);
 

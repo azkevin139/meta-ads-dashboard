@@ -608,6 +608,74 @@ test('touch sequence save requires steps and monitor route returns data', async 
   }
 });
 
+test('tracking recovery routes save window and run backfill', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: { outage_start: '2026-04-01', outage_end: '2026-04-10' }, buckets: [] }),
+      saveWindow: async (_accountId, body) => body,
+      runBackfill: async () => ({ meta_leads: { imported: 3 }, ghl_contacts: { imported: 2 } }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const saveRes = await invoke(app, {
+      method: 'POST',
+      url: '/tracking-recovery',
+      headers: { 'content-type': 'application/json' },
+      body: { outage_start: '2026-04-01', outage_end: '2026-04-10' },
+    });
+    assert.equal(saveRes.status, 200);
+    assert.equal(saveRes.json.success, true);
+
+    const backfillRes = await invoke(app, {
+      method: 'POST',
+      url: '/tracking-recovery/backfill',
+      headers: { 'content-type': 'application/json' },
+      body: { outage_start: '2026-04-01', outage_end: '2026-04-10' },
+    });
+    assert.equal(backfillRes.status, 200);
+    assert.equal(backfillRes.json.data.meta_leads.imported, 3);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('admin update rejects invalid role', async () => {
   const authServicePath = require.resolve('../services/authService');
   const routePath = require.resolve('../routes/admin');
