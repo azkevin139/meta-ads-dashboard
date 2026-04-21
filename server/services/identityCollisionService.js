@@ -29,6 +29,71 @@ function downstreamEffect(group, latestDecision) {
   return 'excluded_from_audience_push_and_revisit_automation';
 }
 
+function ageDays(value) {
+  if (!value) return 0;
+  const t = new Date(value).getTime();
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+}
+
+function priorityForGroup(group, members = []) {
+  if (group.status !== 'open') {
+    return { level: 'normal', score: 0, reasons: ['not_open'] };
+  }
+  const reasons = [];
+  let score = 20;
+  const age = ageDays(group.created_at);
+  const memberCount = parseInt(group.member_count, 10) || members.length || 0;
+  const hasKnownContact = members.some((member) => member.ghl_contact_id);
+  const hasHighConfidenceMember = members.some((member) => member.confidence === 'high');
+  const hasMultipleKnownContacts = new Set(members.map((member) => member.ghl_contact_id).filter(Boolean)).size > 1;
+
+  if (memberCount >= 3) {
+    score += 25;
+    reasons.push('three_or_more_members');
+  }
+  if (hasKnownContact) {
+    score += 20;
+    reasons.push('affects_known_contacts');
+  }
+  if (hasHighConfidenceMember) {
+    score += 15;
+    reasons.push('includes_same_browser_known_contact');
+  }
+  if (hasMultipleKnownContacts) {
+    score += 20;
+    reasons.push('multiple_ghl_contacts');
+  }
+  if (age >= 7) {
+    score += 15;
+    reasons.push('backlog_older_than_7d');
+  } else if (age >= 3) {
+    score += 8;
+    reasons.push('backlog_older_than_3d');
+  }
+
+  const level = score >= 70 ? 'urgent' : score >= 45 ? 'important' : 'normal';
+  return { level, score, reasons: reasons.length ? reasons : ['collision_blocks_sensitive_actions'] };
+}
+
+function evidenceForGroup(group, members = []) {
+  const uniqueClients = new Set(members.map((member) => member.client_id).filter(Boolean)).size;
+  const uniqueContacts = new Set(members.map((member) => member.ghl_contact_id).filter(Boolean)).size;
+  const sources = Array.from(new Set(members.map((member) => member.metadata?.source || member.source || 'visitors')));
+  return {
+    why_collided: `${group.identity_type} maps to ${uniqueClients} browser/client id(s) and ${uniqueContacts} GHL contact id(s).`,
+    sources,
+    restrictions: [
+      'excluded_from_audience_push',
+      'blocked_from_revisit_automation',
+      'treated_as_low_confidence_identity',
+    ],
+    confirm_same_person_effect: 'Clears collision blocking for this hash and allows downstream trust policy to treat it as operator-reviewed.',
+    keep_separate_effect: 'Keeps automatic merge/use blocked and documents that these identities should remain separate.',
+    ignore_effect: 'Hides from active review but keeps safety restrictions in place.',
+  };
+}
+
 async function findCurrentCollisionCandidates(accountId) {
   return queryAll(`
     WITH identity_rows AS (
@@ -166,12 +231,83 @@ async function listCollisionGroups(accountId, { status = 'open', limit = 50 } = 
     });
   }
 
-  return groups.map((group) => ({
-    ...group,
-    identity_hash: group.identity_hash ? `${String(group.identity_hash).slice(0, 10)}...` : null,
-    downstream_effect: downstreamEffect(group, group.latest_decision),
-    members: membersByGroup.get(group.id) || [],
-  }));
+  return groups.map((group) => {
+    const groupMembers = membersByGroup.get(group.id) || [];
+    return {
+      ...group,
+      identity_hash: group.identity_hash ? `${String(group.identity_hash).slice(0, 10)}...` : null,
+      downstream_effect: downstreamEffect(group, group.latest_decision),
+      priority: priorityForGroup(group, groupMembers),
+      evidence: evidenceForGroup(group, groupMembers),
+      members: groupMembers,
+    };
+  });
+}
+
+async function getIntegrityMetrics(accountId) {
+  await syncCollisionGroups(accountId);
+  const allOpen = await listCollisionGroups(accountId, { status: 'open', limit: 200 });
+  const urgentOpen = allOpen.filter((group) => group.priority?.level === 'urgent');
+  const rows = await queryOne(`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'open')::int AS open_groups,
+      COUNT(*) FILTER (WHERE status = 'resolved')::int AS resolved_groups,
+      COUNT(*) FILTER (WHERE status = 'ignored')::int AS ignored_groups,
+      EXTRACT(day FROM NOW() - MIN(created_at) FILTER (WHERE status = 'open'))::int AS oldest_open_age_days,
+      COALESCE(SUM(member_count) FILTER (WHERE status = 'open'), 0)::int AS rows_excluded_from_sensitive_actions
+    FROM identity_collision_groups
+    WHERE account_id = $1
+  `, [accountId]);
+  const recent = await queryOne(`
+    SELECT
+      COUNT(*) FILTER (WHERE r.decision IN ('confirmed_same_person', 'keep_separate') AND r.created_at >= NOW() - INTERVAL '7 days')::int AS resolved_last_7d,
+      COUNT(*) FILTER (WHERE r.decision = 'ignore' AND r.created_at >= NOW() - INTERVAL '7 days')::int AS ignored_last_7d,
+      COUNT(*) FILTER (WHERE r.decision = 'reopen' AND r.created_at >= NOW() - INTERVAL '7 days')::int AS reopened_last_7d
+    FROM identity_collision_resolutions r
+    JOIN identity_collision_groups g ON g.id = r.collision_group_id
+    WHERE g.account_id = $1
+  `, [accountId]);
+  const operatorQuality = await queryAll(`
+    SELECT
+      COALESCE(u.email, 'unknown') AS operator,
+      COUNT(*)::int AS decisions,
+      COUNT(*) FILTER (WHERE r.decision = 'confirmed_same_person')::int AS confirmed_same,
+      COUNT(*) FILTER (WHERE r.decision = 'ignore')::int AS ignored,
+      COUNT(*) FILTER (WHERE r.decision = 'reopen')::int AS reopened
+    FROM identity_collision_resolutions r
+    JOIN identity_collision_groups g ON g.id = r.collision_group_id
+    LEFT JOIN users u ON u.id = r.decided_by_user_id
+    WHERE g.account_id = $1
+      AND r.created_at >= NOW() - INTERVAL '30 days'
+    GROUP BY u.email
+    ORDER BY decisions DESC, operator
+    LIMIT 10
+  `, [accountId]);
+
+  const launchReady = urgentOpen.length === 0 && (parseInt(rows.oldest_open_age_days, 10) || 0) < 14;
+  return {
+    open_groups: parseInt(rows.open_groups, 10) || 0,
+    urgent_open_groups: urgentOpen.length,
+    important_open_groups: allOpen.filter((group) => group.priority?.level === 'important').length,
+    oldest_open_age_days: parseInt(rows.oldest_open_age_days, 10) || 0,
+    resolved_last_7d: parseInt(recent?.resolved_last_7d, 10) || 0,
+    ignored_last_7d: parseInt(recent?.ignored_last_7d, 10) || 0,
+    reopened_last_7d: parseInt(recent?.reopened_last_7d, 10) || 0,
+    rows_excluded_from_sensitive_actions: parseInt(rows.rows_excluded_from_sensitive_actions, 10) || 0,
+    launch_readiness: {
+      ready: launchReady,
+      status: launchReady ? 'ready' : 'blocked',
+      reasons: launchReady ? [] : [
+        urgentOpen.length ? 'urgent_unresolved_collisions' : null,
+        (parseInt(rows.oldest_open_age_days, 10) || 0) >= 14 ? 'collision_backlog_too_old' : null,
+      ].filter(Boolean),
+      thresholds: {
+        urgent_open_groups: 0,
+        oldest_open_age_days_lt: 14,
+      },
+    },
+    operator_quality: operatorQuality,
+  };
 }
 
 async function resolveCollisionGroup(accountId, groupId, { decision, rationale, userId } = {}) {
@@ -230,4 +366,5 @@ module.exports = {
   resolveCollisionGroup,
   syncCollisionGroups,
   getResolvedHashSets,
+  getIntegrityMetrics,
 };

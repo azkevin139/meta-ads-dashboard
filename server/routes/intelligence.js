@@ -196,7 +196,17 @@ router.get('/identity-collisions', async (req, res) => {
       status: optionalTrimmedString(req.query.status, 30) || 'open',
       limit: optionalInteger(req.query.limit, 'limit must be a positive integer') || 50,
     });
-    res.json({ data });
+    const metrics = await identityCollisions.getIntegrityMetrics(account.id);
+    res.json({ data, metrics });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/identity-integrity', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    res.json({ data: await identityCollisions.getIntegrityMetrics(account.id) });
   } catch (err) {
     sendError(res, err);
   }

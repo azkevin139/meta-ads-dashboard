@@ -193,23 +193,47 @@ async function loadIdentityCollisions(status = 'open') {
   try {
     const res = await apiGet(`/intelligence/identity-collisions?status=${encodeURIComponent(status)}`);
     const rows = res.data || [];
+    const metrics = res.metrics || {};
+    const readiness = metrics.launch_readiness || {};
+    const metricHtml = `
+      <div class="reco-card" style="padding:10px 12px; margin-bottom:10px;">
+        <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span class="badge badge-${readiness.ready ? 'active' : 'critical'}">Launch ${escapeHtml(readiness.status || 'unknown')}</span>
+            <span class="badge badge-${metrics.urgent_open_groups ? 'critical' : 'active'}">Urgent ${fmt(metrics.urgent_open_groups || 0, 'integer')}</span>
+            <span class="badge badge-${metrics.important_open_groups ? 'warning' : 'active'}">Important ${fmt(metrics.important_open_groups || 0, 'integer')}</span>
+            <span class="badge badge-low">Open ${fmt(metrics.open_groups || 0, 'integer')}</span>
+          </div>
+          <div class="text-muted" style="font-size:0.72rem;">Oldest open: ${fmt(metrics.oldest_open_age_days || 0, 'integer')}d · Excluded rows: ${fmt(metrics.rows_excluded_from_sensitive_actions || 0, 'integer')}</div>
+        </div>
+        ${(readiness.reasons || []).length ? `<div class="text-orange" style="font-size:0.72rem; margin-top:6px;">${readiness.reasons.map((reason) => escapeHtml(reason.replace(/_/g, ' '))).join(' · ')}</div>` : ''}
+      </div>
+    `;
     if (!rows.length) {
-      el.innerHTML = `<div class="empty-state"><div class="empty-state-text">No ${escapeHtml(status)} collision groups</div></div>`;
+      el.innerHTML = `${metricHtml}<div class="empty-state"><div class="empty-state-text">No ${escapeHtml(status)} collision groups</div></div>`;
       return;
     }
-    el.innerHTML = `<div style="display:grid; gap:10px;">
+    el.innerHTML = `${metricHtml}<div style="display:grid; gap:10px;">
       ${rows.map((group) => `
         <div class="reco-card" style="padding:12px 14px;">
           <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
             <div>
               <div style="font-weight:600; font-size:0.86rem;">${escapeHtml(group.identity_type.replace('_', ' '))} · <span class="mono">${escapeHtml(group.identity_hash || '')}</span></div>
-              <div class="text-muted" style="font-size:0.72rem;">${fmt(group.member_count, 'integer')} members · ${escapeHtml(group.downstream_effect.replace(/_/g, ' '))}${group.latest_decision ? ` · latest: ${escapeHtml(group.latest_decision.replace(/_/g, ' '))}` : ''}</div>
+              <div class="text-muted" style="font-size:0.72rem;">${fmt(group.member_count, 'integer')} members · score ${fmt(group.priority?.score || 0, 'integer')} · ${escapeHtml(group.downstream_effect.replace(/_/g, ' '))}${group.latest_decision ? ` · latest: ${escapeHtml(group.latest_decision.replace(/_/g, ' '))}` : ''}</div>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="badge badge-${group.priority?.level === 'urgent' ? 'critical' : group.priority?.level === 'important' ? 'warning' : 'low'}">${escapeHtml(group.priority?.level || 'normal')}</span>
               <span class="badge badge-${group.status === 'open' ? 'critical' : group.status === 'ignored' ? 'warning' : 'active'}">${escapeHtml(group.status)}</span>
               <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, 'confirmed_same_person')">Confirm same</button>
               <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, 'keep_separate')">Keep separate</button>
               <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, '${group.status === 'open' ? 'ignore' : 'reopen'}')">${group.status === 'open' ? 'Ignore' : 'Reopen'}</button>
+            </div>
+          </div>
+          <div class="alert-banner alert-${group.priority?.level === 'urgent' ? 'critical' : 'warning'}" style="margin-top:10px;">
+            <div style="font-size:0.76rem; line-height:1.45;">
+              <strong>Evidence:</strong> ${escapeHtml(group.evidence?.why_collided || 'Multiple identities share one hash.')}
+              <br><strong>Restrictions:</strong> ${(group.evidence?.restrictions || []).map((item) => escapeHtml(item.replace(/_/g, ' '))).join(', ')}
+              <br><strong>If confirmed:</strong> ${escapeHtml(group.evidence?.confirm_same_person_effect || '')}
             </div>
           </div>
           <div style="overflow:auto; margin-top:10px;">
