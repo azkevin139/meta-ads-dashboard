@@ -1,5 +1,6 @@
 const { queryAll, queryOne } = require('../db');
 const syncTruth = require('./syncTruthService');
+const identityCollisions = require('./identityCollisionService');
 
 const STALE_AFTER_HOURS = 24;
 
@@ -61,6 +62,7 @@ function actionDecisionFromHealth(policy, { blockOn = ['failed'], warnOn = ['par
 }
 
 async function getIdentityCollisionHashes(accountId) {
+  const resolved = await identityCollisions.getResolvedHashSets(accountId);
   const rows = await queryAll(`
     WITH collisions AS (
       SELECT 'email_hash' AS method, email_hash AS identity_hash
@@ -79,13 +81,20 @@ async function getIdentityCollisionHashes(accountId) {
   `, [accountId]);
 
   return {
-    email: new Set(rows.filter((row) => row.method === 'email_hash').map((row) => row.identity_hash)),
-    phone: new Set(rows.filter((row) => row.method === 'phone_hash').map((row) => row.identity_hash)),
+    email: new Set(rows
+      .filter((row) => row.method === 'email_hash' && !resolved.email.has(row.identity_hash))
+      .map((row) => row.identity_hash)),
+    phone: new Set(rows
+      .filter((row) => row.method === 'phone_hash' && !resolved.phone.has(row.identity_hash))
+      .map((row) => row.identity_hash)),
   };
 }
 
 async function hasIdentityCollision(accountId, visitor = {}) {
   if (!visitor.email_hash && !visitor.phone_hash) return false;
+  const resolved = await identityCollisions.getResolvedHashSets(accountId);
+  if (visitor.email_hash && resolved.email.has(visitor.email_hash)) return false;
+  if (visitor.phone_hash && resolved.phone.has(visitor.phone_hash)) return false;
   const row = await queryOne(`
     WITH candidates AS (
       SELECT 'email_hash' AS method, email_hash AS identity_hash, client_id, ghl_contact_id

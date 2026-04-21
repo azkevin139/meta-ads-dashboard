@@ -10,6 +10,7 @@ const revisitAutomation = require('../services/revisitAutomationService');
 const accountAccess = require('../services/accountAccessService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
+const identityCollisions = require('../services/identityCollisionService');
 const { queryAll } = require('../db');
 const {
   ensureArray,
@@ -183,6 +184,49 @@ router.get('/lifecycle-summary', async (req, res) => {
 router.get('/identity-health', async (req, res) => {
   try {
     res.json({ data: await intelligence.getIdentityHealth(req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/identity-collisions', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const data = await identityCollisions.listCollisionGroups(account.id, {
+      status: optionalTrimmedString(req.query.status, 30) || 'open',
+      limit: optionalInteger(req.query.limit, 'limit must be a positive integer') || 50,
+    });
+    res.json({ data });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/identity-collisions/:id/resolve', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const groupId = ensureInteger(req.params.id, 'id must be a positive integer');
+    const body = ensureObject(req.body);
+    const decision = ensureNonEmptyString(body.decision, 'decision required');
+    const rationale = optionalTrimmedString(body.rationale, 1000);
+    const result = await identityCollisions.resolveCollisionGroup(account.id, groupId, {
+      decision,
+      rationale,
+      userId: req.user?.id,
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'identity_collision.resolved',
+      target_type: 'identity_collision_group',
+      target_id: String(groupId),
+      account_id: account.id,
+      before_json: { previous_status: result.resolution.previous_status },
+      after_json: {
+        decision,
+        next_status: result.resolution.next_status,
+        rationale,
+      },
+    });
+    res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
   }

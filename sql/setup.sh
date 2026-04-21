@@ -40,7 +40,8 @@ for migration in \
   v17_security_wave1_public_inputs.sql \
   v18_security_audit_log.sql \
   v19_data_truth_layer.sql \
-  v20_lifecycle_identity_integrity.sql
+  v20_lifecycle_identity_integrity.sql \
+  v21_identity_collision_resolution.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

@@ -53,6 +53,17 @@ async function loadIntelligence(container) {
       <div class="table-header"><span class="table-title">Identity Stitching</span><span class="badge badge-warning">CONFIDENCE</span></div>
       <div id="intel-identity-health"><div class="loading">Loading identity health</div></div>
     </div>
+    <div class="table-container mb-md">
+      <div class="table-header">
+        <span class="table-title">Collision Review</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="loadIdentityCollisions('open')">Open</button>
+          <button class="btn btn-sm" onclick="loadIdentityCollisions('ignored')">Ignored</button>
+          <button class="btn btn-sm" onclick="loadIdentityCollisions('resolved')">Resolved</button>
+        </div>
+      </div>
+      <div id="intel-identity-collisions"><div class="loading">Loading collision review queue</div></div>
+    </div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1.2fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
         <div class="table-header"><span class="table-title">First-Party Funnel</span><span class="badge badge-active">META + TRACKING</span></div>
@@ -94,6 +105,7 @@ async function loadIntelligence(container) {
     loadAudienceSegments(),
     loadLifecycleSummary(),
     loadIdentityHealth(),
+    loadIdentityCollisions(),
     loadFunnel(),
     loadBreakdowns(),
     loadCreativeLibrary(),
@@ -172,6 +184,94 @@ async function loadIdentityHealth() {
     `;
   } catch (err) {
     el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+async function loadIdentityCollisions(status = 'open') {
+  const el = document.getElementById('intel-identity-collisions');
+  if (!el) return;
+  try {
+    const res = await apiGet(`/intelligence/identity-collisions?status=${encodeURIComponent(status)}`);
+    const rows = res.data || [];
+    if (!rows.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-text">No ${escapeHtml(status)} collision groups</div></div>`;
+      return;
+    }
+    el.innerHTML = `<div style="display:grid; gap:10px;">
+      ${rows.map((group) => `
+        <div class="reco-card" style="padding:12px 14px;">
+          <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:600; font-size:0.86rem;">${escapeHtml(group.identity_type.replace('_', ' '))} · <span class="mono">${escapeHtml(group.identity_hash || '')}</span></div>
+              <div class="text-muted" style="font-size:0.72rem;">${fmt(group.member_count, 'integer')} members · ${escapeHtml(group.downstream_effect.replace(/_/g, ' '))}${group.latest_decision ? ` · latest: ${escapeHtml(group.latest_decision.replace(/_/g, ' '))}` : ''}</div>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <span class="badge badge-${group.status === 'open' ? 'critical' : group.status === 'ignored' ? 'warning' : 'active'}">${escapeHtml(group.status)}</span>
+              <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, 'confirmed_same_person')">Confirm same</button>
+              <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, 'keep_separate')">Keep separate</button>
+              <button class="btn btn-sm" onclick="openCollisionResolutionDrawer(${group.id}, '${group.status === 'open' ? 'ignore' : 'reopen'}')">${group.status === 'open' ? 'Ignore' : 'Reopen'}</button>
+            </div>
+          </div>
+          <div style="overflow:auto; margin-top:10px;">
+            <table>
+              <thead><tr><th>Client</th><th>GHL Contact</th><th>Source</th><th>Confidence</th><th>Last Seen</th></tr></thead>
+              <tbody>${(group.members || []).map((member) => `<tr>
+                <td class="mono">${escapeHtml(member.client_id || '—')}</td>
+                <td class="mono">${escapeHtml(member.ghl_contact_id || '—')}</td>
+                <td>${escapeHtml(member.metadata?.source || member.source || 'visitors')}</td>
+                <td><span class="badge badge-${member.confidence === 'high' ? 'active' : member.confidence === 'medium' ? 'warning' : 'critical'}">${escapeHtml(member.confidence)}</span></td>
+                <td>${member.metadata?.last_seen_at ? fmtDateTime(member.metadata.last_seen_at) : '—'}</td>
+              </tr>`).join('')}</tbody>
+            </table>
+          </div>
+          ${group.latest_rationale ? `<div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Rationale: ${escapeHtml(group.latest_rationale)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+function openCollisionResolutionDrawer(groupId, decision) {
+  const labels = {
+    confirmed_same_person: 'Confirm Same Person',
+    keep_separate: 'Keep Separate',
+    ignore: 'Ignore For Now',
+    reopen: 'Reopen Collision',
+  };
+  const requiresRationale = decision === 'confirmed_same_person' || decision === 'keep_separate';
+  openDrawer(labels[decision] || 'Resolve Collision', `
+    <div class="alert-banner alert-warning" style="margin-bottom:12px;">
+      This decision changes downstream trust policy for this collision group. It does not mutate visitor or GHL source records.
+    </div>
+    <div class="form-group">
+      <label class="form-label">Decision</label>
+      <input class="form-input" value="${escapeHtml((labels[decision] || decision))}" disabled>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Rationale${requiresRationale ? ' required' : ''}</label>
+      <textarea id="collision-resolution-rationale" class="form-textarea" rows="4" placeholder="Explain why this decision is safe."></textarea>
+    </div>
+  `, `
+    <button class="btn btn-primary" onclick="submitCollisionResolution(${groupId}, '${escapeJs(decision)}')">Save Decision</button>
+    <button class="btn" onclick="closeDrawer()">Cancel</button>
+  `);
+}
+
+async function submitCollisionResolution(groupId, decision) {
+  const rationale = document.getElementById('collision-resolution-rationale')?.value.trim() || '';
+  if ((decision === 'confirmed_same_person' || decision === 'keep_separate') && rationale.length < 5) {
+    toast('Rationale is required for this decision', 'error');
+    return;
+  }
+  try {
+    await apiPost(`/intelligence/identity-collisions/${groupId}/resolve`, { decision, rationale });
+    toast('Collision decision saved', 'success');
+    closeDrawer();
+    await Promise.all([loadIdentityHealth(), loadIdentityCollisions()]);
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
