@@ -1,33 +1,9 @@
-const fs = require('fs');
-const path = require('path');
 const { queryOne, queryAll } = require('../db');
 const metaLeadSync = require('./metaLeadSyncService');
 const ghl = require('./ghlService');
 const warehouse = require('./warehouseSyncService');
 const diagnostics = require('./trackingDiagnosticsService');
 const syncTruth = require('./syncTruthService');
-
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const OUTAGE_FILE = path.join(DATA_DIR, 'tracking-outages.json');
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function readOutages() {
-  try {
-    if (!fs.existsSync(OUTAGE_FILE)) return {};
-    return JSON.parse(fs.readFileSync(OUTAGE_FILE, 'utf8'));
-  } catch (_err) {
-    return {};
-  }
-}
-
-function writeOutages(data) {
-  ensureDataDir();
-  fs.writeFileSync(OUTAGE_FILE, JSON.stringify(data, null, 2));
-  return data;
-}
 
 function validateDate(value, name) {
   const text = String(value || '').trim();
@@ -48,24 +24,52 @@ async function saveWindow(accountId, { outage_start, outage_end, notes }) {
   const start = validateDate(outage_start, 'outage_start');
   const end = validateDate(outage_end, 'outage_end');
   if (start > end) throw new Error('outage_end must be on or after outage_start');
-  const data = readOutages();
-  data[String(accountId)] = {
-    outage_start: start,
-    outage_end: end,
-    notes: notes ? String(notes).trim().slice(0, 1000) : '',
-    updated_at: new Date().toISOString(),
-  };
-  writeOutages(data);
-  return data[String(accountId)];
+  return queryOne(`
+    INSERT INTO tracking_outage_windows (
+      account_id, outage_start, outage_end, notes, status, updated_at
+    ) VALUES ($1,$2,$3,$4,'active',NOW())
+    ON CONFLICT (account_id) WHERE status = 'active' DO UPDATE SET
+      outage_start = EXCLUDED.outage_start,
+      outage_end = EXCLUDED.outage_end,
+      notes = EXCLUDED.notes,
+      updated_at = NOW()
+    RETURNING
+      id,
+      outage_start::text,
+      outage_end::text,
+      notes,
+      status,
+      last_backfill_at,
+      last_backfill,
+      created_at,
+      updated_at
+  `, [accountId, start, end, notes ? String(notes).trim().slice(0, 1000) : '']);
 }
 
-function getWindow(accountId) {
-  const data = readOutages();
-  return data[String(accountId)] || null;
+async function getWindow(accountId, { includeRecovered = false } = {}) {
+  return queryOne(`
+    SELECT
+      id,
+      outage_start::text,
+      outage_end::text,
+      notes,
+      status,
+      last_backfill_at,
+      last_backfill,
+      created_at,
+      updated_at
+    FROM tracking_outage_windows
+    WHERE account_id = $1
+      AND ($2::boolean = TRUE OR status = 'active')
+    ORDER BY
+      CASE status WHEN 'active' THEN 1 WHEN 'recovered' THEN 2 ELSE 3 END,
+      updated_at DESC
+    LIMIT 1
+  `, [accountId, includeRecovered === true]);
 }
 
 async function getSummary(accountId) {
-  const window = getWindow(accountId);
+  const window = await getWindow(accountId);
   if (!window) {
     return {
       outage_window: null,
@@ -101,8 +105,7 @@ async function getSummary(accountId) {
   const aggregateRows = await queryAll(`
     SELECT
       COALESCE(SUM(clicks), 0) AS clicks,
-      COALESCE(SUM(spend), 0) AS spend,
-      actions_json
+      COALESCE(SUM(spend), 0) AS spend
     FROM daily_insights
     WHERE account_id = $1
       AND level = 'account'
@@ -286,19 +289,23 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
   ]);
   const errorCount = [meta, ghlResult, warehouseResult].filter((result) => result?.error).length;
 
-  const data = readOutages();
-  data[String(accountId)] = {
-    ...(data[String(accountId)] || {}),
-    outage_start: start,
-    outage_end: end,
-    last_backfill_at: new Date().toISOString(),
-    last_backfill: {
+  const lastBackfill = {
       meta_leads: meta,
       ghl_contacts: ghlResult,
       meta_aggregate: warehouseResult,
-    },
   };
-  writeOutages(data);
+  await queryOne(`
+    INSERT INTO tracking_outage_windows (
+      account_id, outage_start, outage_end, status, last_backfill_at, last_backfill, updated_at
+    ) VALUES ($1,$2,$3,'active',NOW(),$4::jsonb,NOW())
+    ON CONFLICT (account_id) WHERE status = 'active' DO UPDATE SET
+      outage_start = EXCLUDED.outage_start,
+      outage_end = EXCLUDED.outage_end,
+      last_backfill_at = EXCLUDED.last_backfill_at,
+      last_backfill = EXCLUDED.last_backfill,
+      updated_at = NOW()
+    RETURNING id
+  `, [accountId, start, end, JSON.stringify(lastBackfill)]);
   await syncTruth.finishRun(run.id, {
     status: errorCount ? 'partial' : 'success',
     attemptedCount: 3,

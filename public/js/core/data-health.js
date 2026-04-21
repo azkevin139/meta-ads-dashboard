@@ -36,9 +36,12 @@
     const rows = datasets
       .map(({ source, dataset }) => findRun(health, source, dataset))
       .filter(Boolean);
+    const includesTrackingRecovery = datasets.some((row) => row.source === 'tracking' && row.dataset === 'recovery');
+    const outageWarning = includesTrackingRecovery && health?.tracking_outage?.launch_readiness?.status === 'warning';
     if (!rows.length) return { state: 'unavailable', label: 'unavailable', rows };
     if (rows.some((row) => row.status === 'failed')) return { state: 'failed', label: 'failed', rows };
     if (rows.some((row) => row.status === 'partial' || row.status === 'skipped')) return { state: 'partial', label: 'partial', rows };
+    if (outageWarning) return { state: 'partial', label: 'outage affected', rows, extra_reason: 'active_tracking_outage_window' };
     if (rows.some((row) => freshnessLabel(row).state === 'stale')) return { state: 'stale', label: 'stale', rows };
     return { state: 'fresh', label: 'fresh', rows };
   }
@@ -72,6 +75,7 @@
             </div>
           `).join('') : '<div class="text-muted">No sync truth recorded yet.</div>'}
         </div>
+        ${summary?.extra_reason ? `<div class="text-orange mono" style="font-size:0.7rem; margin-top:8px;">${escapeHtml(summary.extra_reason)}</div>` : ''}
       </div>
     `;
   }

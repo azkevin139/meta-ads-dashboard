@@ -442,6 +442,26 @@ CREATE INDEX idx_identity_collision_groups_key ON identity_collision_groups(acco
 CREATE INDEX idx_identity_collision_members_group ON identity_collision_members(collision_group_id);
 CREATE INDEX idx_identity_collision_resolutions_group ON identity_collision_resolutions(collision_group_id, created_at DESC);
 
+CREATE TABLE tracking_outage_windows (
+  id BIGSERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  outage_start DATE NOT NULL,
+  outage_end DATE NOT NULL,
+  notes TEXT,
+  last_backfill_at TIMESTAMPTZ,
+  last_backfill JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'recovered', 'archived')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (outage_end >= outage_start)
+);
+
+CREATE UNIQUE INDEX idx_tracking_outage_windows_account_active
+  ON tracking_outage_windows(account_id)
+  WHERE status = 'active';
+CREATE INDEX idx_tracking_outage_windows_account_updated
+  ON tracking_outage_windows(account_id, updated_at DESC);
+
 -- ============================================================
 -- 8. KNOWN CONTACT REVISIT AUTOMATION
 -- ============================================================

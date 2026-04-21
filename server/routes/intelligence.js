@@ -141,10 +141,25 @@ router.get('/data-health', async (req, res) => {
       GROUP BY account_id, level
       ORDER BY account_id, level
     `, [account.id]);
+    const outageWindow = await trackingRecovery.getWindow(account.id, { includeRecovered: true });
+    const outageReadiness = outageWindow
+      ? {
+          status: outageWindow.status === 'active' ? 'warning' : 'ready',
+          reasons: outageWindow.status === 'active' ? ['active_tracking_outage_window'] : [],
+          window_id: outageWindow.id,
+          outage_start: outageWindow.outage_start,
+          outage_end: outageWindow.outage_end,
+          last_backfill_at: outageWindow.last_backfill_at,
+        }
+      : { status: 'ready', reasons: [] };
     res.json({
       account_id: account.id,
       data: runs,
       warehouse_coverage: warehouseCoverage,
+      tracking_outage: {
+        window: outageWindow,
+        launch_readiness: outageReadiness,
+      },
       reason_codes: [
         'tracker_not_installed',
         'tracker_underreporting',
