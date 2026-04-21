@@ -2,6 +2,7 @@ const fetch = require('node-fetch');
 const config = require('../config');
 const { queryAll, queryOne, query } = require('../db');
 const intelligence = require('./intelligenceService');
+const trustPolicy = require('./trustPolicyService');
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -200,12 +201,24 @@ async function buildAnalysisContext(accountId, metaContext = {}) {
     liveDecisionContext = { error: err.message };
   }
 
+  const policy = await trustPolicy.getAiRecommendationPolicy(accountId);
+
   return {
     account: account.name,
     currency: account.currency,
     date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
     entities,
     live_decision_context: liveDecisionContext,
+    trust_policy: {
+      action: policy.action,
+      reasons: policy.reasons,
+      health_state: policy.health?.state,
+      guidance: policy.action === 'suppress'
+        ? 'Suppress recommendations because required upstream data is failed.'
+        : policy.action === 'downgrade'
+          ? 'Reduce confidence and explain degraded upstream data.'
+          : 'Data health is acceptable for recommendations.',
+    },
   };
 }
 
@@ -246,9 +259,18 @@ async function callOpenAI(context) {
 
 async function runAnalysis(accountId, metaContext = {}) {
   const context = await buildAnalysisContext(accountId, metaContext);
+  const policy = await trustPolicy.getAiRecommendationPolicy(accountId);
 
   if (context.entities.length === 0) {
     return { recommendations: [], summary: 'No campaign data for yesterday.' };
+  }
+
+  if (policy.action === 'suppress') {
+    return {
+      recommendations: [],
+      summary: `AI analysis suppressed by trust policy: ${policy.reasons.join(', ') || 'degraded upstream data'}.`,
+      trust_policy: context.trust_policy,
+    };
   }
 
   const result = await callOpenAI(context);
@@ -276,12 +298,23 @@ async function runAnalysis(accountId, metaContext = {}) {
       rec.entity_type,
       rec.issue_type,
       rec.root_cause,
-      rec.recommendation,
+      policy.action === 'downgrade'
+        ? `${rec.recommendation} Data-health caveat: ${policy.reasons.join(', ') || 'upstream data is degraded'}.`
+        : rec.recommendation,
       rec.urgency,
-      rec.confidence,
+      Math.max(0, Math.min(1, Number(rec.confidence || 0) * policy.confidenceMultiplier)),
       rec.expected_impact,
       JSON.stringify(context),
     ]);
+  }
+
+  if (policy.action === 'downgrade') {
+    result.recommendations = (result.recommendations || []).map((rec) => ({
+      ...rec,
+      confidence: Math.max(0, Math.min(1, Number(rec.confidence || 0) * policy.confidenceMultiplier)),
+      trust_policy: context.trust_policy,
+    }));
+    result.summary = `${result.summary || ''} Data-health caveat: ${policy.reasons.join(', ') || 'upstream data is degraded'}.`.trim();
   }
 
   return result;

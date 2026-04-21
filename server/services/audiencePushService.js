@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const metaApi = require('./metaApi');
 const { query, queryOne, queryAll } = require('../db');
+const trustPolicy = require('./trustPolicyService');
 
 // Meta Customer Match requires SHA-256 of lowercase-trimmed email/phone.
 function sha256Lower(value) {
@@ -20,28 +21,63 @@ const SEGMENT_SQL = {
   non_converted_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0)`,
   converted_contacts: `WHERE account_id = $1 AND (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   known_contacts: `WHERE account_id = $1 AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  new_lead_contacts: `WHERE account_id = $1 AND normalized_stage = 'new_lead' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  contacted_contacts: `WHERE account_id = $1 AND normalized_stage = 'contacted' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   qualified_contacts: `WHERE account_id = $1 AND normalized_stage = 'qualified' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  booked_contacts: `WHERE account_id = $1 AND normalized_stage = 'booked' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  showed_contacts: `WHERE account_id = $1 AND normalized_stage = 'showed' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
   closed_contacts: `WHERE account_id = $1 AND (normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  closed_won_contacts: `WHERE account_id = $1 AND (normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0) AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
+  closed_lost_contacts: `WHERE account_id = $1 AND normalized_stage = 'closed_lost' AND (email_hash IS NOT NULL OR phone_hash IS NOT NULL)`,
 };
 
 async function buildSegmentData(accountId, segmentKey) {
   const where = SEGMENT_SQL[segmentKey];
   if (!where) throw new Error(`Unknown segment key: ${segmentKey}`);
   const rows = await queryAll(`
-    SELECT email_hash, phone_hash, raw
+    SELECT client_id, ghl_contact_id, email_hash, phone_hash, raw
     FROM visitors
     ${where}
   `, [accountId]);
 
+  const collisionHashes = await trustPolicy.getIdentityCollisionHashes(accountId);
   const emails = [];
   const phones = [];
+  let excludedCollisionRows = 0;
+  let highConfidenceRows = 0;
+  let mediumConfidenceRows = 0;
+  let lowConfidenceRows = 0;
+
   for (const row of rows) {
+    const emailCollides = row.email_hash && collisionHashes.email.has(row.email_hash);
+    const phoneCollides = row.phone_hash && collisionHashes.phone.has(row.phone_hash);
+    if (emailCollides || phoneCollides) {
+      excludedCollisionRows += 1;
+      continue;
+    }
+    if (row.ghl_contact_id && !String(row.client_id || '').startsWith('ghl_') && !String(row.client_id || '').startsWith('meta_lead_')) {
+      highConfidenceRows += 1;
+    } else if (row.ghl_contact_id || row.email_hash || row.phone_hash) {
+      mediumConfidenceRows += 1;
+    } else {
+      lowConfidenceRows += 1;
+    }
     // visitors.email_hash is already sha256(lowercase-trimmed-email).
     // Meta accepts that as-is for EMAIL schema.
     if (row.email_hash) emails.push(row.email_hash);
     if (row.phone_hash) phones.push(row.phone_hash);
   }
-  return { emails, phones, totalRows: rows.length };
+  return {
+    emails,
+    phones,
+    totalRows: rows.length,
+    policy: {
+      excluded_collision_rows: excludedCollisionRows,
+      high_confidence_rows: highConfidenceRows,
+      medium_confidence_rows: mediumConfidenceRows,
+      low_confidence_rows: lowConfidenceRows,
+    },
+  };
 }
 
 async function ensureCustomAudience(account, { segmentKey, segmentName }) {
@@ -96,8 +132,12 @@ async function uploadUsers(account, audienceId, emails, phones) {
 }
 
 async function pushSegment(account, { segmentKey, segmentName }) {
+  const decision = await trustPolicy.assertAudiencePushAllowed(account.id);
+  if (!decision.allowed) {
+    throw new Error(`Audience push blocked by trust policy: ${decision.reasons.join(', ') || decision.level}`);
+  }
   const push = await ensureCustomAudience(account, { segmentKey, segmentName });
-  const { emails, phones, totalRows } = await buildSegmentData(account.id, segmentKey);
+  const { emails, phones, totalRows, policy } = await buildSegmentData(account.id, segmentKey);
 
   if (emails.length === 0 && phones.length === 0) {
     await query(`
@@ -105,7 +145,7 @@ async function pushSegment(account, { segmentKey, segmentName }) {
       SET last_push_at = NOW(), last_push_count = 0, last_push_error = 'No hashable identifiers in segment', updated_at = NOW()
       WHERE id = $1
     `, [push.id]);
-    return { meta_audience_id: push.meta_audience_id, uploaded: 0, total_rows: totalRows, warning: 'No emails/phones to hash' };
+    return { meta_audience_id: push.meta_audience_id, uploaded: 0, total_rows: totalRows, warning: 'No emails/phones to hash', policy: { ...policy, decision } };
   }
 
   let uploaded = 0;
@@ -126,7 +166,16 @@ async function pushSegment(account, { segmentKey, segmentName }) {
   `, [push.id, uploaded, errorMessage]);
 
   if (errorMessage) throw new Error(errorMessage);
-  return { meta_audience_id: push.meta_audience_id, uploaded, total_rows: totalRows };
+  return {
+    meta_audience_id: push.meta_audience_id,
+    uploaded,
+    total_rows: totalRows,
+    policy: {
+      ...policy,
+      decision,
+      warning: decision.level === 'warn' ? `Data health warning: ${decision.reasons.join(', ')}` : null,
+    },
+  };
 }
 
 async function listPushes(accountId) {

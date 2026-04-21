@@ -3,6 +3,7 @@ const fetch = require('node-fetch');
 const { URL } = require('url');
 const { pool, query, queryOne } = require('../db');
 const config = require('../config');
+const trustPolicy = require('./trustPolicyService');
 
 let timer = null;
 
@@ -104,6 +105,11 @@ async function enqueueFromPageView(visitor = {}, input = {}) {
   });
   if (!eligibility.eligible) {
     return { queued: false, suppressed: true, reasons: eligibility.reasons };
+  }
+
+  const policy = await trustPolicy.assertRevisitAllowed(visitor);
+  if (!policy.allowed) {
+    return { queued: false, suppressed: true, reasons: policy.reasons || ['trust_policy_blocked'], policy };
   }
 
   if (await hasRecentSend(visitor.account_id, visitor.ghl_contact_id, eligibility.ruleKey, settings.cooldownHours)) {
@@ -291,6 +297,12 @@ async function processDueJobs({ limit = 10 } = {}) {
       });
       if (!visitor || !eligibility.eligible) {
         await markSuppressed(job, eligibility.reasons.join(',') || 'visitor_missing');
+        result.suppressed += 1;
+        continue;
+      }
+      const policy = await trustPolicy.assertRevisitAllowed(visitor);
+      if (!policy.allowed) {
+        await markSuppressed(job, (policy.reasons || ['trust_policy_blocked']).join(','));
         result.suppressed += 1;
         continue;
       }

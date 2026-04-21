@@ -668,7 +668,9 @@ async function pushSegmentToMeta(segmentKey, segmentName) {
     if (!allowed) return;
     toast('Uploading to Meta…', 'info');
     const result = await apiPost('/intelligence/audience-push', { segmentKey, segmentName });
-    toast(`Uploaded ${result.uploaded || 0} identifier(s) to Meta audience ${result.meta_audience_id}`, 'success');
+    const excluded = result.policy?.excluded_collision_rows || 0;
+    const warning = result.policy?.warning ? ` ${result.policy.warning}` : '';
+    toast(`Uploaded ${result.uploaded || 0} identifier(s) to Meta audience ${result.meta_audience_id}${excluded ? `; excluded ${excluded} collision row(s)` : ''}.${warning}`, result.policy?.warning ? 'warning' : 'success');
     loadAudienceSegments();
   } catch (err) {
     toast(`Error: ${safeErrorMessage(err)}`, 'error');
