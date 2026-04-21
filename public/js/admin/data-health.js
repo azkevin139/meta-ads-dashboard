@@ -58,6 +58,34 @@
     `).join('');
   }
 
+  function readinessBadge(readiness) {
+    const status = readiness?.status || 'unknown';
+    const cls = status === 'ready' ? 'active' : status === 'blocked' ? 'critical' : 'warning';
+    return `<span class="badge badge-${cls}">${escapeHtml(status)}</span>`;
+  }
+
+  function formatCspValue(value, max = 72) {
+    const text = String(value || '—');
+    const short = text.length > max ? `${text.slice(0, max - 1)}…` : text;
+    return `<span title="${escapeHtml(text)}">${escapeHtml(short)}</span>`;
+  }
+
+  function renderCspRows(rows) {
+    if (!rows.length) {
+      return '<tr><td colspan="6" class="text-muted">No CSP violation reports in this window.</td></tr>';
+    }
+    return rows.map(row => `
+      <tr>
+        <td><span class="mono">${escapeHtml(row.directive || 'unknown')}</span></td>
+        <td>${formatCspValue(row.blocked_uri)}</td>
+        <td>${formatCspValue(row.source_file)}</td>
+        <td class="mono">${fmt(row.count || 0, 'integer')}</td>
+        <td style="font-size:0.78rem;">${fmtDateTime(row.first_seen_at)}</td>
+        <td style="font-size:0.78rem;">${fmtDateTime(row.last_seen_at)}</td>
+      </tr>
+    `).join('');
+  }
+
   async function loadDataHealth() {
     const section = asyncSection.createAsyncSection({
       targetId: 'admin-data-health',
@@ -118,5 +146,69 @@
     }
   }
 
+  async function loadCspViolations() {
+    const section = asyncSection.createAsyncSection({
+      targetId: 'admin-csp-violations',
+      loadingText: 'Loading CSP reports',
+      render: (summary) => `
+        <div class="table-container">
+          <div class="table-header">
+            <span class="table-title">CSP Enforcement Readiness</span>
+            <button class="btn btn-sm" data-csp-refresh>Refresh</button>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 12px 16px 16px;">
+            <div class="kpi-card">
+              <div class="kpi-label">Readiness</div>
+              <div>${readinessBadge(summary.enforcement_readiness)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Reports</div>
+              <div class="kpi-value">${fmt(summary.total || 0, 'integer')}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">First-Party Blocking</div>
+              <div class="kpi-value">${fmt(summary.first_party_blocking || 0, 'integer')}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Window</div>
+              <div class="kpi-value">${fmt(summary.window_hours || 0, 'integer')}h</div>
+            </div>
+          </div>
+          ${summary.enforcement_readiness?.reasons?.length ? `
+            <div class="alert-banner alert-warning" style="margin: 0 16px 16px;">
+              CSP remains report-only. Reason: ${summary.enforcement_readiness.reasons.map(escapeHtml).join(', ')}
+            </div>
+          ` : `
+            <div class="alert-banner alert-info" style="margin: 0 16px 16px;">
+              No first-party blocking reports found in this window. Keep observing before enforcing.
+            </div>
+          `}
+          <table>
+            <thead>
+              <tr>
+                <th>Directive</th>
+                <th>Blocked URI</th>
+                <th>Source</th>
+                <th>Count</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody>${renderCspRows(summary.rows || [])}</tbody>
+          </table>
+        </div>
+      `,
+    });
+    section?.setLoading();
+    try {
+      const res = await apiGet('/admin/csp-violations?hours=168');
+      section?.setData(res.data || {});
+      document.querySelector('#admin-csp-violations [data-csp-refresh]')?.addEventListener('click', loadCspViolations);
+    } catch (err) {
+      section?.setError(err);
+    }
+  }
+
   window.loadDataHealth = loadDataHealth;
+  window.loadCspViolations = loadCspViolations;
 })();

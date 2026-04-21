@@ -15,6 +15,9 @@ async function loadAdmin(container) {
     <div id="admin-data-health" style="margin-bottom: 20px;">
       <div class="loading">Loading data health</div>
     </div>
+    <div id="admin-csp-violations" style="margin-bottom: 20px;">
+      <div class="loading">Loading CSP reports</div>
+    </div>
     <div class="table-container" style="margin-bottom: 20px;">
       <div class="table-header">
         <span class="table-title">Meta Accounts</span>
@@ -39,5 +42,5 @@ async function loadAdmin(container) {
     </div>
   `;
 
-  await Promise.all([loadDataHealth(), loadAdminAccounts(), loadAdminUsers(), loadAdminSessions()]);
+  await Promise.all([loadDataHealth(), loadCspViolations(), loadAdminAccounts(), loadAdminUsers(), loadAdminSessions()]);
 }

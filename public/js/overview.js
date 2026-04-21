@@ -212,6 +212,13 @@ function bindOverviewControls(container) {
       if (el.dataset.overviewAction === 'apply-date') applyCustomDate();
     });
   });
+  if (!container.dataset.overviewNavBound) {
+    container.dataset.overviewNavBound = 'true';
+    container.addEventListener('click', (event) => {
+      const target = event.target.closest('[data-nav-target]');
+      if (target?.dataset.navTarget) navigateTo(target.dataset.navTarget);
+    });
+  }
 }
 function setPreset(preset) {
   overviewFilterState.setPreset(preset);
@@ -244,14 +251,14 @@ function renderAlerts(pendingRecos, trackingAlerts) {
   const warningTracking = (trackingAlerts || []).filter(a => a.severity === 'warning');
   if (criticalTracking.length) {
     parts.push(...criticalTracking.map((alert) => `
-      <div class="alert-banner alert-critical" onclick="navigateTo('settings')" style="cursor:pointer; margin-bottom:8px;">
+      <div class="alert-banner alert-critical" data-nav-target="settings" style="cursor:pointer; margin-bottom:8px;">
         Tracking alert: ${escapeHtml(alert.title)} — ${escapeHtml(alert.message)}
       </div>
     `));
   }
   if (warningTracking.length) {
     parts.push(...warningTracking.map((alert) => `
-      <div class="alert-banner alert-warning" onclick="navigateTo('settings')" style="cursor:pointer; margin-bottom:8px;">
+      <div class="alert-banner alert-warning" data-nav-target="settings" style="cursor:pointer; margin-bottom:8px;">
         Tracking alert: ${escapeHtml(alert.title)} — ${escapeHtml(alert.message)}
       </div>
     `));
@@ -259,9 +266,9 @@ function renderAlerts(pendingRecos, trackingAlerts) {
   const criticalCount = pendingRecos.filter(r => r.urgency === 'critical').length;
   const highCount = pendingRecos.filter(r => r.urgency === 'high').length;
   if (criticalCount > 0) {
-    parts.push(`<div class="alert-banner alert-critical" onclick="navigateTo('ai')" style="cursor:pointer">⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review</div>`);
+    parts.push(`<div class="alert-banner alert-critical" data-nav-target="ai" style="cursor:pointer">⚠ ${criticalCount} critical issue${criticalCount > 1 ? 's' : ''} ${highCount > 0 ? `and ${highCount} high-priority` : ''} — click to review</div>`);
   } else if (highCount > 0) {
-    parts.push(`<div class="alert-banner alert-warning" onclick="navigateTo('ai')" style="cursor:pointer">${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending</div>`);
+    parts.push(`<div class="alert-banner alert-warning" data-nav-target="ai" style="cursor:pointer">${highCount} high-priority recommendation${highCount > 1 ? 's' : ''} pending</div>`);
   }
   alertArea.innerHTML = parts.join('');
 }

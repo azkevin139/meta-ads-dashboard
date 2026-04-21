@@ -88,3 +88,26 @@ test('security audit redacts credential-like fields recursively', () => {
     },
   });
 });
+
+test('csp service normalizes legacy and reporting-api payloads', () => {
+  const csp = require('../services/cspService');
+  assert.deepEqual(csp.normalizeReport({
+    'csp-report': {
+      'document-uri': 'https://track.lnxo.me/',
+      'blocked-uri': 'inline',
+    },
+  }), {
+    'document-uri': 'https://track.lnxo.me/',
+    'blocked-uri': 'inline',
+  });
+  assert.deepEqual(csp.normalizeReport([{
+    type: 'csp-violation',
+    body: {
+      documentURL: 'https://track.lnxo.me/',
+      blockedURL: 'inline',
+    },
+  }]), {
+    documentURL: 'https://track.lnxo.me/',
+    blockedURL: 'inline',
+  });
+});

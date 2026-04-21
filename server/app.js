@@ -26,6 +26,7 @@ function createApp(config) {
   const webhookRoutes = require('./routes/webhooks');
   const createRoutes = require('./routes/create');
   const { pool } = require('./db');
+  const cspService = require('./services/cspService');
 
   const app = express();
   app.set('trust proxy', 1);
@@ -89,6 +90,9 @@ function createApp(config) {
       ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || null,
       report: req.body || null,
     }));
+    cspService.recordReport(req).catch((err) => {
+      console.warn('[csp-report] persistence failed:', err.message);
+    });
     res.status(204).end();
   });
   app.get('/js/meta-tracker.js', (req, res, next) => {

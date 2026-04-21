@@ -42,7 +42,8 @@ for migration in \
   v19_data_truth_layer.sql \
   v20_lifecycle_identity_integrity.sql \
   v21_identity_collision_resolution.sql \
-  v22_tracking_outage_windows.sql
+  v22_tracking_outage_windows.sql \
+  v23_csp_violation_ledger.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

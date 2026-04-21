@@ -4,6 +4,7 @@ const router = express.Router();
 const auth = require('../services/authService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
+const cspService = require('../services/cspService');
 const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
 
@@ -52,6 +53,17 @@ router.get('/security-audit', async (req, res) => {
       action: optionalTrimmedString(req.query.action, 200),
     });
     res.json({ data: rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/csp-violations', async (req, res) => {
+  try {
+    res.json({ data: await cspService.getSummary({
+      hours: req.query.hours,
+      limit: req.query.limit,
+    }) });
   } catch (err) {
     sendError(res, err);
   }
