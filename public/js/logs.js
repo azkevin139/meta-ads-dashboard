@@ -75,6 +75,6 @@ async function loadLogs(container) {
       </div>
     `;
   } catch (err) {
-    document.getElementById('logs-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    document.getElementById('logs-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }

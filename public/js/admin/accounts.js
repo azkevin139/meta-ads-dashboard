@@ -119,7 +119,7 @@
       if (is_active && res.data?.id) await switchActiveAccount(res.data.id);
       loadAdminAccounts();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -135,7 +135,7 @@
       await dashboardApp.hydrateAccountContext();
       loadAdminAccounts();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -146,7 +146,7 @@
       toast('Token checked', 'success');
       loadAdminAccounts();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -177,6 +177,9 @@
           <div><span class="text-muted">Location ID:</span> ${escapeHtml(status.location_id || '—')}</div>
           <div><span class="text-muted">Last sync:</span> ${lastSync}</div>
           <div><span class="text-muted">Contacts last run:</span> ${status.last_sync_count || 0}</div>
+          <div><span class="text-muted">Contacts scanned:</span> ${status.last_scan_count || 0} · <span class="text-muted">Matched:</span> ${status.last_match_count || 0}</div>
+          <div><span class="text-muted">Mode:</span> ${escapeHtml(status.last_sync_mode || 'incremental')}${status.oldest_synced_at ? ` · oldest synced ${fmtDateTime(status.oldest_synced_at)}` : ''}</div>
+          ${status.last_bootstrap_at ? `<div><span class="text-muted">Last bootstrap:</span> ${fmtDateTime(status.last_bootstrap_at)}</div>` : ''}
           ${status.last_sync_error ? `<div class="alert-banner alert-warning" style="margin-top:8px;">${escapeHtml(status.last_sync_error)}</div>` : ''}
         </div>
         <div class="form-group">
@@ -194,12 +197,43 @@
           ${configured ? `<button class="btn btn-danger" onclick="clearGhlCredentials(${accountId})">Remove</button>` : ''}
           <button class="btn" onclick="closeDrawer()">Close</button>
         </div>
+        <div class="reco-card" style="padding:10px 12px; margin-top:14px;">
+          <div class="reco-entity mb-sm" style="font-size:0.8rem;">Historical GHL sync</div>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:8px; align-items:end;">
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Mode</label>
+              <select id="ghl-sync-mode" class="form-select">
+                <option value="incremental">Incremental</option>
+                <option value="range">Custom range</option>
+                <option value="full">Full historical</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Since</label>
+              <input id="ghl-sync-since" type="datetime-local" class="form-input" />
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Until</label>
+              <input id="ghl-sync-until" type="datetime-local" class="form-input" />
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label class="form-label">Max pages</label>
+              <input id="ghl-sync-max-pages" type="number" min="1" max="1000" class="form-input" placeholder="500" />
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="presetGhlSyncRange(7)">Last 7d</button>
+            <button class="btn btn-sm" onclick="presetGhlSyncRange(30)">Last 30d</button>
+            <button class="btn btn-sm" onclick="presetGhlSyncFull()">All historical</button>
+            <button class="btn btn-sm btn-primary" onclick="triggerGhlSync(${accountId}, true)">Run Historical Sync</button>
+          </div>
+        </div>
         <div class="text-muted" style="font-size:0.72rem; margin-top:14px; line-height:1.5;">
-          Contacts are pulled every 6 hours. Each GHL contact gets matched back to a visitor by their custom <code>client_id</code> field first, then by hashed email or phone.
+          Contacts are pulled every 6 hours. Each GHL contact gets matched back to a visitor by their custom <code>client_id</code> field first, then by hashed email or phone. Historical sync now supports incremental, range, and full bootstrap modes.
         </div>
       `);
     } catch (err) {
-      setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
+      setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
     }
   }
 
@@ -216,18 +250,55 @@
       toast('GHL connected', 'success');
       openGhlDrawer(accountId, '');
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
-  async function triggerGhlSync(accountId) {
+  function toLocalDateTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function presetGhlSyncRange(days) {
+    const mode = document.getElementById('ghl-sync-mode');
+    const since = document.getElementById('ghl-sync-since');
+    const until = document.getElementById('ghl-sync-until');
+    if (mode) mode.value = 'range';
+    if (since) since.value = toLocalDateTime(new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString());
+    if (until) until.value = toLocalDateTime(new Date().toISOString());
+  }
+
+  function presetGhlSyncFull() {
+    const mode = document.getElementById('ghl-sync-mode');
+    const since = document.getElementById('ghl-sync-since');
+    const until = document.getElementById('ghl-sync-until');
+    if (mode) mode.value = 'full';
+    if (since) since.value = '';
+    if (until) until.value = '';
+  }
+
+  async function triggerGhlSync(accountId, useManualOptions = false) {
     try {
       toast('Syncing GHL…', 'info');
-      const result = await apiPost(`/accounts/${accountId}/ghl/sync`, {});
-      toast(`${result.imported || 0} contact(s) synced (${result.matched || 0} matched to visitors)`, 'success');
+      const payload = {};
+      if (useManualOptions) {
+        const mode = document.getElementById('ghl-sync-mode')?.value || 'incremental';
+        const since = document.getElementById('ghl-sync-since')?.value;
+        const until = document.getElementById('ghl-sync-until')?.value;
+        const maxPages = document.getElementById('ghl-sync-max-pages')?.value;
+        payload.mode = mode;
+        if (since) payload.since = new Date(since).toISOString();
+        if (until) payload.until = new Date(until).toISOString();
+        if (maxPages) payload.maxPages = parseInt(maxPages, 10);
+      }
+      const result = await apiPost(`/accounts/${accountId}/ghl/sync`, payload);
+      toast(`${result.imported || 0} contact(s) synced (${result.matched || 0} matched, ${result.scanned || 0} scanned)`, 'success');
       openGhlDrawer(accountId, '');
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -239,7 +310,7 @@
       closeDrawer();
       loadAdminAccounts();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -253,6 +324,8 @@
     openGhlDrawer,
     saveGhlCredentials,
     triggerGhlSync,
+    presetGhlSyncRange,
+    presetGhlSyncFull,
     clearGhlCredentials,
   });
 })();

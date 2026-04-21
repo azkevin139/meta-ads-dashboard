@@ -101,7 +101,7 @@ async function loadAdSets(container) {
       setTimeout(() => openCreateAdSet(metaCampaignId), 0);
     }
   } catch (err) {
-    document.getElementById('adsets-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    document.getElementById('adsets-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -115,7 +115,7 @@ async function bulkAdSetAction(action) {
     for (const id of adsetBulkSelection.getSelected()) await apiPost(`/meta/entity/adset/${id}/status`, { accountId: ACCOUNT_ID, status: targetStatus });
     toast(`Updated ${adsetBulkSelection.size()} ad set(s)`, 'success');
     navigateTo('adsets', pageState);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+  } catch (err) { toast(`Error: ${safeErrorMessage(err)}`, 'error'); }
 }
 function bindAdSetControls(container) {
   if (container.__adsetControlsBound) return;
@@ -148,7 +148,7 @@ async function openAdSetEditor(adsetId) {
     ]);
     renderAdSetEditor(res.data, pixelsRes.data || []);
   } catch (err) {
-    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
+    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
   }
 }
 
@@ -275,14 +275,14 @@ async function saveAdSetEditor(adsetId) {
     toast('Ad set updated', 'success');
     closeDrawer();
     navigateTo('adsets', pageState);
-  } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+  } catch (err) { toast(`Error: ${safeErrorMessage(err)}`, 'error'); }
 }
 
 async function adsetStatusAction(adsetId, status) {
-  try { await apiPost(`/meta/entity/adset/${adsetId}/status`, { accountId: ACCOUNT_ID, status }); toast('Ad set status updated', 'success'); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+  try { await apiPost(`/meta/entity/adset/${adsetId}/status`, { accountId: ACCOUNT_ID, status }); toast('Ad set status updated', 'success'); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${safeErrorMessage(err)}`, 'error'); }
 }
 async function adsetDuplicate(adsetId) {
-  try { await apiPost(`/meta/entity/adset/${adsetId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Ad set duplicated', 'success'); closeDrawer(); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${err.message}`, 'error'); }
+  try { await apiPost(`/meta/entity/adset/${adsetId}/duplicate`, { accountId: ACCOUNT_ID }); toast('Ad set duplicated', 'success'); closeDrawer(); navigateTo('adsets', pageState); } catch (err) { toast(`Error: ${safeErrorMessage(err)}`, 'error'); }
 }
 
 function bindAdSetDrawerActions() {
@@ -379,6 +379,6 @@ async function submitCreateAdSet(campaignId) {
     closeDrawer();
     navigateTo('adsets', pageState);
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }

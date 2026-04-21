@@ -5,6 +5,10 @@
 
 -- Clean slate (drop in reverse dependency order)
 DROP TABLE IF EXISTS action_log CASCADE;
+DROP TABLE IF EXISTS security_audit_log CASCADE;
+DROP TABLE IF EXISTS webhook_event_ledger CASCADE;
+DROP TABLE IF EXISTS known_contact_revisit_sends CASCADE;
+DROP TABLE IF EXISTS known_contact_revisit_jobs CASCADE;
 DROP TABLE IF EXISTS ai_recommendations CASCADE;
 DROP TABLE IF EXISTS touch_sequence_events CASCADE;
 DROP TABLE IF EXISTS touch_sequence_steps CASCADE;
@@ -14,6 +18,7 @@ DROP TABLE IF EXISTS ads CASCADE;
 DROP TABLE IF EXISTS adsets CASCADE;
 DROP TABLE IF EXISTS campaigns CASCADE;
 DROP TABLE IF EXISTS user_sessions CASCADE;
+DROP TABLE IF EXISTS user_account_access CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
 
@@ -43,6 +48,7 @@ CREATE TABLE accounts (
   last_leads_sync_since TIMESTAMPTZ,
   last_leads_sync_until TIMESTAMPTZ,
   last_leads_sync_error TEXT,
+  tracking_allowed_origins TEXT[] DEFAULT NULL,
   ghl_api_key_encrypted TEXT,
   ghl_location_id TEXT,
   ghl_last_sync_at TIMESTAMPTZ,
@@ -92,6 +98,51 @@ CREATE TABLE user_sessions (
 CREATE INDEX idx_sessions_user ON user_sessions(user_id);
 CREATE INDEX idx_sessions_token ON user_sessions(token);
 CREATE INDEX idx_sessions_active_account ON user_sessions(active_account_id);
+
+CREATE TABLE user_account_access (
+  id BIGSERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'operator', 'viewer')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, account_id)
+);
+
+CREATE INDEX idx_user_account_access_user ON user_account_access(user_id);
+CREATE INDEX idx_user_account_access_account ON user_account_access(account_id);
+
+CREATE TABLE webhook_event_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  source TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  payload_hash TEXT,
+  received_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(source, event_id)
+);
+
+CREATE INDEX idx_webhook_event_ledger_source_received ON webhook_event_ledger(source, received_at DESC);
+
+CREATE TABLE security_audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_email TEXT,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT,
+  account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  before_json JSONB,
+  after_json JSONB,
+  result TEXT NOT NULL DEFAULT 'success' CHECK (result IN ('success', 'denied', 'failed')),
+  ip TEXT,
+  user_agent TEXT,
+  request_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_security_audit_log_created ON security_audit_log(created_at DESC);
+CREATE INDEX idx_security_audit_log_actor ON security_audit_log(actor_user_id, created_at DESC);
+CREATE INDEX idx_security_audit_log_account ON security_audit_log(account_id, created_at DESC);
+CREATE INDEX idx_security_audit_log_action ON security_audit_log(action, created_at DESC);
 
 -- ============================================================
 -- 2. CAMPAIGNS
@@ -341,6 +392,52 @@ CREATE INDEX idx_log_account ON action_log(account_id);
 CREATE INDEX idx_log_entity ON action_log(entity_type, entity_id);
 CREATE INDEX idx_log_action ON action_log(action);
 CREATE INDEX idx_log_created ON action_log(created_at DESC);
+CREATE UNIQUE INDEX idx_visitor_events_lifecycle_dedupe_key
+  ON visitor_events(account_id, ((metadata->>'dedupe_key')))
+  WHERE metadata->>'dedupe_key' IS NOT NULL;
+
+-- ============================================================
+-- 8. KNOWN CONTACT REVISIT AUTOMATION
+-- ============================================================
+CREATE TABLE known_contact_revisit_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  ghl_contact_id TEXT NOT NULL,
+  rule_key TEXT NOT NULL,
+  page_url TEXT,
+  page_path TEXT,
+  event_name TEXT DEFAULT 'PageView',
+  scheduled_for TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'sent', 'suppressed', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_known_contact_revisit_jobs_due ON known_contact_revisit_jobs(status, scheduled_for);
+CREATE INDEX idx_known_contact_revisit_jobs_contact ON known_contact_revisit_jobs(account_id, ghl_contact_id, rule_key, created_at DESC);
+
+CREATE TABLE known_contact_revisit_sends (
+  id BIGSERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  ghl_contact_id TEXT NOT NULL,
+  rule_key TEXT NOT NULL,
+  job_id BIGINT REFERENCES known_contact_revisit_jobs(id) ON DELETE SET NULL,
+  page_url TEXT,
+  delivery_target TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'sent' CHECK (delivery_status IN ('sent', 'failed')),
+  response_code INTEGER,
+  response_body TEXT,
+  payload JSONB,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_known_contact_revisit_sends_contact ON known_contact_revisit_sends(account_id, ghl_contact_id, rule_key, sent_at DESC);
 
 -- ============================================================
 -- HELPER VIEWS

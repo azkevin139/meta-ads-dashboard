@@ -45,7 +45,7 @@ async function loadAI(container) {
     document.getElementById('ai-content').innerHTML = html;
 
   } catch (err) {
-    document.getElementById('ai-content').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    document.getElementById('ai-content').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -92,7 +92,7 @@ async function approveRec(id) {
     toast('Recommendation approved', 'success');
     navigateTo('ai');
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -102,7 +102,7 @@ async function dismissRec(id) {
     toast('Recommendation dismissed', 'info');
     navigateTo('ai');
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -114,6 +114,6 @@ async function triggerAnalysis() {
     toast(`Analysis complete: ${count} recommendation${count !== 1 ? 's' : ''}`, 'success');
     navigateTo('ai');
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }

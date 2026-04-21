@@ -67,3 +67,24 @@ test('webhook security rejects stale timestamps and dedupes event ids', async ()
     restoreCache(originals);
   }
 });
+
+test('security audit redacts credential-like fields recursively', () => {
+  const audit = require('../services/securityAuditService');
+  assert.deepEqual(audit.redact({
+    email: 'ops@test.com',
+    token: 'secret-token',
+    nested: {
+      apiKey: 'secret-key',
+      safe: 'visible',
+      list: [{ password: 'hidden', name: 'ok' }],
+    },
+  }), {
+    email: 'ops@test.com',
+    token: '[REDACTED]',
+    nested: {
+      apiKey: '[REDACTED]',
+      safe: 'visible',
+      list: [{ password: '[REDACTED]', name: 'ok' }],
+    },
+  });
+});

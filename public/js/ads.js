@@ -76,7 +76,7 @@ async function loadAds(container) {
     `;
     for (const ad of ads) { adsCreative.loadAdCreative(ad.id); }
   } catch (err) {
-    document.getElementById('ads-grid').innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    document.getElementById('ads-grid').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -139,7 +139,6 @@ function adCard(ad, ins) {
 }
 
 function truncate(str, len) { return str && str.length > len ? str.substring(0, len) + '...' : str || ''; }
-function escapeHtml(str) { return (str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function bindAdsControls(container) {
   if (container.__adsControlsBound) return;
   container.__adsControlsBound = true;

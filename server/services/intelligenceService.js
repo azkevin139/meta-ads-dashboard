@@ -517,6 +517,10 @@ async function getAudienceSegments({ since, until, preset } = {}, context = {}) 
         UNION ALL
         SELECT 'landing_page_leads', 'Landing page form submitters', 'first_party', 'Contacts who submitted a form on your landing page (not native Meta form).', COUNT(DISTINCT client_id) FROM base WHERE ghl_contact_id IS NOT NULL AND (meta_lead_id IS NULL AND lower(COALESCE(source_event_type, '')) NOT LIKE 'fb-lead%')
         UNION ALL
+        SELECT 'new_lead_contacts', 'New leads', 'first_party', 'Known contacts whose normalized lifecycle stage is new lead.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'new_lead'
+        UNION ALL
+        SELECT 'contacted_contacts', 'Contacted contacts', 'first_party', 'Known contacts whose normalized lifecycle stage is contacted.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'contacted'
+        UNION ALL
         SELECT 'non_converted_contacts', 'Non-converted contacts', 'first_party', 'Known first-party contacts who have not yet converted. Useful for later-step suppression-safe retargeting.', COUNT(DISTINCT client_id) FROM base WHERE (email_hash IS NOT NULL OR phone_hash IS NOT NULL) AND NOT (meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0)
         UNION ALL
         SELECT 'converted_contacts', 'Converted / excluded contacts', 'first_party', 'Contacts who already converted, submitted a lead, booked, or reached a closed/revenue stage. Use as a global exclusion audience.', COUNT(DISTINCT client_id) FROM base WHERE meta_lead_id IS NOT NULL OR ghl_contact_id IS NOT NULL OR normalized_stage IN ('booked', 'showed', 'closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0
@@ -525,7 +529,15 @@ async function getAudienceSegments({ since, until, preset } = {}, context = {}) 
         UNION ALL
         SELECT 'qualified_contacts', 'Qualified contacts', 'first_party', 'Contacts whose normalized stage is qualified.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'qualified'
         UNION ALL
+        SELECT 'booked_contacts', 'Booked contacts', 'first_party', 'Contacts whose normalized stage is booked.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'booked'
+        UNION ALL
+        SELECT 'showed_contacts', 'Showed contacts', 'first_party', 'Contacts whose normalized stage is showed.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'showed'
+        UNION ALL
         SELECT 'closed_contacts', 'Closed or revenue contacts', 'first_party', 'Contacts with normalized closed stage or tracked revenue.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage IN ('closed_won', 'closed_lost') OR COALESCE(revenue, 0) > 0
+        UNION ALL
+        SELECT 'closed_won_contacts', 'Closed won contacts', 'first_party', 'Contacts whose normalized stage is closed won or carry revenue.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0
+        UNION ALL
+        SELECT 'closed_lost_contacts', 'Closed lost contacts', 'first_party', 'Contacts whose normalized stage is closed lost.', COUNT(DISTINCT client_id) FROM base WHERE normalized_stage = 'closed_lost'
       ) segments
       ORDER BY size DESC, name
     `, [accountId, range.since, range.until]);
@@ -652,6 +664,128 @@ async function getCreativeLibrary({ since, until, preset } = {}, context = {}) {
   })).sort((a, b) => b.spend - a.spend);
 }
 
+async function getLifecycleSummary({ since, until, preset } = {}, context = {}) {
+  const accountId = context?.id || null;
+  const range = resolveDateRange({ since, until, preset });
+  if (!accountId) {
+    return { range, stages: [], events: [], totals: {} };
+  }
+
+  const [stageRows, eventRows] = await Promise.all([
+    queryAll(`
+      SELECT normalized_stage AS stage, COUNT(DISTINCT client_id) AS count
+      FROM visitors
+      WHERE account_id = $1
+        AND normalized_stage IS NOT NULL
+        AND last_seen_at::date BETWEEN $2::date AND $3::date
+      GROUP BY normalized_stage
+      ORDER BY count DESC, normalized_stage
+    `, [accountId, range.since, range.until]),
+    queryAll(`
+      SELECT event_name, COUNT(*) AS count
+      FROM visitor_events
+      WHERE account_id = $1
+        AND event_name IN ('GHLContactImported', 'GHLStageChanged', 'GHLBooked', 'GHLRevenueUpdated', 'MetaLead')
+        AND fired_at::date BETWEEN $2::date AND $3::date
+      GROUP BY event_name
+      ORDER BY count DESC, event_name
+    `, [accountId, range.since, range.until]),
+  ]);
+
+  const stages = stageRows.map((row) => ({ stage: row.stage, count: parseInt(row.count, 10) || 0 }));
+  const events = eventRows.map((row) => ({ event_name: row.event_name, count: parseInt(row.count, 10) || 0 }));
+  const totals = {
+    known_contacts: stages.reduce((sum, row) => sum + row.count, 0),
+    qualified: stages.find((row) => row.stage === 'qualified')?.count || 0,
+    booked: stages.find((row) => row.stage === 'booked')?.count || 0,
+    closed_won: stages.find((row) => row.stage === 'closed_won')?.count || 0,
+  };
+  return { range, stages, events, totals };
+}
+
+async function getIdentityHealth(context = {}) {
+  const accountId = context?.id || null;
+  if (!accountId) {
+    return { totals: {}, confidence: [], collisions: [] };
+  }
+
+  const [totals, collisions] = await Promise.all([
+    queryAll(`
+      SELECT
+        COUNT(*)::int AS visitor_rows,
+        (COUNT(*) FILTER (WHERE ghl_contact_id IS NOT NULL))::int AS known_contact_rows,
+        (COUNT(*) FILTER (
+          WHERE ghl_contact_id IS NOT NULL
+            AND LEFT(client_id, 4) <> 'ghl_'
+            AND LEFT(client_id, 10) <> 'meta_lead_'
+        ))::int AS same_browser_known_rows,
+        (COUNT(*) FILTER (
+          WHERE ghl_contact_id IS NOT NULL
+            AND (LEFT(client_id, 4) = 'ghl_' OR LEFT(client_id, 10) = 'meta_lead_')
+        ))::int AS imported_known_rows,
+        (COUNT(*) FILTER (WHERE email_hash IS NOT NULL OR phone_hash IS NOT NULL))::int AS hashed_identity_rows,
+        (COUNT(*) FILTER (WHERE ghl_contact_id IS NULL AND email_hash IS NULL AND phone_hash IS NULL AND meta_lead_id IS NULL))::int AS anonymous_rows
+      FROM visitors
+      WHERE account_id = $1
+    `, [accountId]),
+    queryAll(`
+      WITH collisions AS (
+        SELECT
+          'email_hash' AS method,
+          email_hash AS identity_hash,
+          COUNT(DISTINCT client_id)::int AS client_ids,
+          COUNT(DISTINCT ghl_contact_id)::int AS ghl_contacts,
+          MAX(last_seen_at) AS last_seen_at
+        FROM visitors
+        WHERE account_id = $1 AND email_hash IS NOT NULL
+        GROUP BY email_hash
+        HAVING COUNT(DISTINCT client_id) > 1 OR COUNT(DISTINCT ghl_contact_id) > 1
+        UNION ALL
+        SELECT
+          'phone_hash' AS method,
+          phone_hash AS identity_hash,
+          COUNT(DISTINCT client_id)::int AS client_ids,
+          COUNT(DISTINCT ghl_contact_id)::int AS ghl_contacts,
+          MAX(last_seen_at) AS last_seen_at
+        FROM visitors
+        WHERE account_id = $1 AND phone_hash IS NOT NULL
+        GROUP BY phone_hash
+        HAVING COUNT(DISTINCT client_id) > 1 OR COUNT(DISTINCT ghl_contact_id) > 1
+      )
+      SELECT method, identity_hash, client_ids, ghl_contacts, last_seen_at
+      FROM collisions
+      ORDER BY GREATEST(client_ids, ghl_contacts) DESC, last_seen_at DESC
+      LIMIT 25
+    `, [accountId]),
+  ]);
+
+  const row = totals[0] || {};
+  const high = parseInt(row.same_browser_known_rows, 10) || 0;
+  const medium = parseInt(row.imported_known_rows, 10) || 0;
+  const low = collisions.length;
+  const anonymous = parseInt(row.anonymous_rows, 10) || 0;
+
+  return {
+    totals: {
+      visitor_rows: parseInt(row.visitor_rows, 10) || 0,
+      known_contact_rows: parseInt(row.known_contact_rows, 10) || 0,
+      hashed_identity_rows: parseInt(row.hashed_identity_rows, 10) || 0,
+      anonymous_rows: anonymous,
+      collision_groups: low,
+    },
+    confidence: [
+      { level: 'high', label: 'Same browser known contact', count: high, meaning: 'Browser client_id is directly stitched to a GHL contact.' },
+      { level: 'medium', label: 'Imported or hashed known contact', count: medium, meaning: 'Identity came from CRM/Meta import or hashed email/phone, not a same-browser revisit.' },
+      { level: 'low', label: 'Collision groups', count: low, meaning: 'One hashed identity maps to multiple browser IDs or GHL contacts.' },
+      { level: 'unresolved', label: 'Anonymous only', count: anonymous, meaning: 'No GHL, email, phone, or Meta lead identity is attached.' },
+    ],
+    collisions: collisions.map((collision) => ({
+      ...collision,
+      identity_hash: collision.identity_hash ? `${String(collision.identity_hash).slice(0, 10)}...` : null,
+    })),
+  };
+}
+
 module.exports = {
   DEFAULT_TARGETS,
   getAccountContext,
@@ -667,4 +801,6 @@ module.exports = {
   getAudienceSegments,
   getBreakdowns,
   getCreativeLibrary,
+  getLifecycleSummary,
+  getIdentityHealth,
 };

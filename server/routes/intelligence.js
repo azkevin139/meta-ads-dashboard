@@ -6,6 +6,11 @@ const tracking = require('../services/trackingService');
 const trackingRecovery = require('../services/trackingRecoveryService');
 const audiencePush = require('../services/audiencePushService');
 const touchSequences = require('../services/touchSequenceService');
+const revisitAutomation = require('../services/revisitAutomationService');
+const accountAccess = require('../services/accountAccessService');
+const securityAudit = require('../services/securityAuditService');
+const syncTruth = require('../services/syncTruthService');
+const { queryAll } = require('../db');
 const {
   ensureArray,
   ensureBoolean,
@@ -18,6 +23,12 @@ const {
 
 function adminOrOperator(req, res, next) {
   if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
+    securityAudit.fromRequest(req, {
+      action: 'operator.denied',
+      target_type: 'intelligence_route',
+      target_id: req.path,
+      result: 'denied',
+    });
     return res.status(403).json({ error: 'Operator or admin access required' });
   }
   next();
@@ -111,9 +122,67 @@ router.get('/audience-health', async (req, res) => {
   }
 });
 
+router.get('/data-health', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const runs = await syncTruth.getHealth(account.id);
+    const warehouseCoverage = await queryAll(`
+      SELECT
+        account_id,
+        level,
+        MIN(date) AS coverage_start,
+        MAX(date) AS coverage_end,
+        COUNT(*)::int AS row_count,
+        COUNT(DISTINCT date)::int AS day_count,
+        MAX(date) AS latest_date
+      FROM daily_insights
+      WHERE account_id = $1
+      GROUP BY account_id, level
+      ORDER BY account_id, level
+    `, [account.id]);
+    res.json({
+      account_id: account.id,
+      data: runs,
+      warehouse_coverage: warehouseCoverage,
+      reason_codes: [
+        'tracker_not_installed',
+        'tracker_underreporting',
+        'meta_sync_partial',
+        'meta_rate_limited',
+        'lead_sync_ad_cap',
+        'ghl_auth_failed',
+        'ghl_stage_unmapped',
+        'warehouse_stale',
+        'true_zero_likely',
+        'identity_low_confidence',
+        'outage_window_applied',
+        'no_token',
+      ],
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 router.get('/audience-segments', async (req, res) => {
   try {
     res.json(await intelligence.getAudienceSegments(req.query, req.metaAccount));
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/lifecycle-summary', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getLifecycleSummary(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/identity-health', async (req, res) => {
+  try {
+    res.json({ data: await intelligence.getIdentityHealth(req.metaAccount) });
   } catch (err) {
     sendError(res, err);
   }
@@ -164,6 +233,13 @@ router.post('/touch-sequences', adminOrOperator, async (req, res) => {
       enabled: body.enabled,
       steps,
     });
+    await securityAudit.fromRequest(req, {
+      action: 'touch_sequence.saved',
+      target_type: 'touch_sequence',
+      target_id: String(result.id),
+      account_id: accountId,
+      after_json: { ...result, steps_count: steps.length },
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
@@ -174,7 +250,14 @@ router.delete('/touch-sequences/:id', adminOrOperator, async (req, res) => {
   try {
     const accountId = req.metaAccount?.id;
     if (!accountId) return res.status(400).json({ error: 'No active account' });
-    await touchSequences.deleteSequence(accountId, ensureInteger(req.params.id, 'id must be a positive integer'));
+    const sequenceId = ensureInteger(req.params.id, 'id must be a positive integer');
+    await touchSequences.deleteSequence(accountId, sequenceId);
+    await securityAudit.fromRequest(req, {
+      action: 'touch_sequence.deleted',
+      target_type: 'touch_sequence',
+      target_id: String(sequenceId),
+      account_id: accountId,
+    });
     res.json({ success: true });
   } catch (err) {
     sendError(res, err);
@@ -186,6 +269,13 @@ router.post('/touch-sequences/run-monitor', adminOrOperator, async (req, res) =>
     const account = req.metaAccount;
     if (!account?.id) return res.status(400).json({ error: 'No active account' });
     const result = await touchSequences.runMonitorForAccount(account);
+    await securityAudit.fromRequest(req, {
+      action: 'touch_sequence.monitor_triggered',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: result,
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
@@ -196,7 +286,15 @@ router.post('/touch-sequences/:id/run-monitor', adminOrOperator, async (req, res
   try {
     const account = req.metaAccount;
     if (!account?.id) return res.status(400).json({ error: 'No active account' });
-    const result = await touchSequences.runMonitorForSequence(account, ensureInteger(req.params.id, 'id must be a positive integer'));
+    const sequenceId = ensureInteger(req.params.id, 'id must be a positive integer');
+    const result = await touchSequences.runMonitorForSequence(account, sequenceId);
+    await securityAudit.fromRequest(req, {
+      action: 'touch_sequence.monitor_triggered',
+      target_type: 'touch_sequence',
+      target_id: String(sequenceId),
+      account_id: account.id,
+      after_json: result,
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
@@ -211,6 +309,13 @@ router.post('/audience-push', adminOrOperator, async (req, res) => {
     const segmentKey = ensureNonEmptyString(body.segmentKey, 'segmentKey required');
     const segmentName = optionalTrimmedString(body.segmentName, 200);
     const result = await audiencePush.pushSegment(account, { segmentKey, segmentName });
+    await securityAudit.fromRequest(req, {
+      action: 'audience_push.triggered',
+      target_type: 'audience_segment',
+      target_id: segmentKey,
+      account_id: account.id,
+      after_json: result,
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);
@@ -225,6 +330,12 @@ router.post('/audience-push/:id/auto-refresh', adminOrOperator, async (req, res)
       ensureBoolean(body.enabled, 'enabled must be true or false'),
       optionalInteger(body.hours, 'hours must be a positive integer')
     );
+    await securityAudit.fromRequest(req, {
+      action: 'audience_push.auto_refresh_changed',
+      target_type: 'audience_push',
+      target_id: String(req.params.id),
+      after_json: body,
+    });
     res.json({ success: true });
   } catch (err) {
     sendError(res, err);
@@ -233,8 +344,8 @@ router.post('/audience-push/:id/auto-refresh', adminOrOperator, async (req, res)
 
 router.get('/tracking-health', async (req, res) => {
   try {
-    const accountId = req.query.accountId || req.metaAccount?.id || null;
-    const health = await tracking.getHealth(accountId);
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const health = await tracking.getHealth(account.id);
     res.json(health);
   } catch (err) {
     sendError(res, err);
@@ -243,9 +354,8 @@ router.get('/tracking-health', async (req, res) => {
 
 router.get('/tracking-recovery', async (req, res) => {
   try {
-    const accountId = req.query.accountId || req.metaAccount?.id || null;
-    if (!accountId) return res.json({ outage_window: null, buckets: [], note: 'No active account' });
-    const summary = await trackingRecovery.getSummary(parseInt(accountId, 10));
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const summary = await trackingRecovery.getSummary(account.id);
     res.json(summary);
   } catch (err) {
     sendError(res, err);
@@ -254,10 +364,9 @@ router.get('/tracking-recovery', async (req, res) => {
 
 router.get('/tracking-alerts', async (req, res) => {
   try {
-    const accountId = req.query.accountId || req.metaAccount?.id || null;
-    if (!accountId) return res.json({ alerts: [], summary: {}, note: 'No active account' });
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
     const hours = req.query.hours ? ensureInteger(req.query.hours, 'hours must be a positive integer') : 24;
-    const alerts = await trackingRecovery.getAlerts(parseInt(accountId, 10), { hours });
+    const alerts = await trackingRecovery.getAlerts(account.id, { hours });
     res.json(alerts);
   } catch (err) {
     sendError(res, err);
@@ -267,12 +376,18 @@ router.get('/tracking-alerts', async (req, res) => {
 router.post('/tracking-recovery', adminOrOperator, async (req, res) => {
   try {
     const body = ensureObject(req.body);
-    const accountId = body.accountId ? ensureInteger(body.accountId, 'accountId must be a positive integer') : req.metaAccount?.id;
-    if (!accountId) return res.status(400).json({ error: 'No active account' });
-    const saved = await trackingRecovery.saveWindow(accountId, {
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const saved = await trackingRecovery.saveWindow(account.id, {
       outage_start: ensureNonEmptyString(body.outage_start, 'outage_start required'),
       outage_end: ensureNonEmptyString(body.outage_end, 'outage_end required'),
       notes: optionalTrimmedString(body.notes, 1000),
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'tracking_recovery.window_saved',
+      target_type: 'tracking_recovery',
+      target_id: String(saved.id || account.id),
+      account_id: account.id,
+      after_json: saved,
     });
     res.json({ success: true, data: saved });
   } catch (err) {
@@ -283,14 +398,20 @@ router.post('/tracking-recovery', adminOrOperator, async (req, res) => {
 router.post('/tracking-recovery/backfill', adminOrOperator, async (req, res) => {
   try {
     const body = ensureObject(req.body);
-    const accountId = body.accountId ? ensureInteger(body.accountId, 'accountId must be a positive integer') : req.metaAccount?.id;
-    if (!accountId) return res.status(400).json({ error: 'No active account' });
-    const window = await trackingRecovery.saveWindow(accountId, {
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const window = await trackingRecovery.saveWindow(account.id, {
       outage_start: ensureNonEmptyString(body.outage_start, 'outage_start required'),
       outage_end: ensureNonEmptyString(body.outage_end, 'outage_end required'),
       notes: optionalTrimmedString(body.notes, 1000),
     });
-    const result = await trackingRecovery.runBackfill(accountId, window);
+    const result = await trackingRecovery.runBackfill(account.id, window);
+    await securityAudit.fromRequest(req, {
+      action: 'tracking_recovery.backfill_triggered',
+      target_type: 'tracking_recovery',
+      target_id: String(window.id || account.id),
+      account_id: account.id,
+      after_json: { window, result },
+    });
     res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
@@ -300,6 +421,20 @@ router.post('/tracking-recovery/backfill', adminOrOperator, async (req, res) => 
 router.get('/creative-library', async (req, res) => {
   try {
     res.json({ data: await intelligence.getCreativeLibrary(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/revisit-automation', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const data = {
+      config: revisitAutomation.getConfigSummary(),
+      activity: [],
+    };
+    data.activity = await revisitAutomation.listRecentActivity(account.id, { limit: 20 });
+    res.json(data);
   } catch (err) {
     sendError(res, err);
   }

@@ -371,6 +371,17 @@ router.get('/leads-sync-status', async (req, res) => {
   }
 });
 
+router.get('/lead-form-registry', async (req, res) => {
+  try {
+    const account = req.metaAccount;
+    if (!account?.id) return res.json({ forms: [], sync: {}, configured: false });
+    const data = await leadSync.getLeadFormRegistry(account.id, req.query);
+    res.json({ configured: true, ...data });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
 // POST /api/meta/warehouse-sync — refresh the local DB mirror for the active account
 router.post('/warehouse-sync', adminOrOperator, async (req, res) => {
   try {

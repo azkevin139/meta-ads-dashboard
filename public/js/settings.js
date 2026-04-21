@@ -38,6 +38,11 @@ async function loadSettings(container) {
       </div>
 
       <div class="reco-card mb-md">
+        <div class="reco-entity mb-sm">Known Contact Revisit Automation</div>
+        <div id="revisit-automation-info"><div class="loading">Loading revisit automation</div></div>
+      </div>
+
+      <div class="reco-card mb-md">
         <div class="reco-entity mb-sm">Connected Account</div>
         <div id="account-info"><div class="loading">Loading</div></div>
       </div>
@@ -87,37 +92,43 @@ async function loadSettings(container) {
     targetId: 'health-info',
     loadingText: 'Checking',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const rateSection = settingsAsyncSection.createAsyncSection({
     targetId: 'rate-info',
     loadingText: 'Loading',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const trackingSection = settingsAsyncSection.createAsyncSection({
     targetId: 'tracking-health-info',
     loadingText: 'Checking tracker',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const leadSection = settingsAsyncSection.createAsyncSection({
     targetId: 'meta-leads-info',
     loadingText: 'Loading lead sync status',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
+  });
+  const revisitSection = settingsAsyncSection.createAsyncSection({
+    targetId: 'revisit-automation-info',
+    loadingText: 'Loading revisit automation',
+    render: (html) => html,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const recoverySection = settingsAsyncSection.createAsyncSection({
     targetId: 'tracking-recovery-info',
     loadingText: 'Loading recovery window',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const reconciliationSection = settingsAsyncSection.createAsyncSection({
     targetId: 'tracking-reconciliation-info',
     loadingText: 'Loading reconciliation',
     render: (html) => html,
-    onError: (err) => `<span class="text-red">Error: ${err.message}</span>`,
+    onError: (err) => `<span class="text-red">Error: ${safeErrorMessage(err)}</span>`,
   });
   const accountSection = settingsAsyncSection.createAsyncSection({
     targetId: 'account-info',
@@ -210,6 +221,13 @@ async function loadSettings(container) {
     renderLeadSyncStatus(status, leadSection);
   } catch (err) {
     leadSection?.setError(err);
+  }
+
+  try {
+    const data = await apiGet(`/intelligence/revisit-automation?accountId=${ACCOUNT_ID}`);
+    renderRevisitAutomationStatus(data, revisitSection);
+  } catch (err) {
+    revisitSection?.setError(err);
   }
 
   try {
@@ -323,7 +341,7 @@ async function saveTrackingRecoveryWindow() {
     const recon = document.getElementById('tracking-reconciliation-info');
     if (recon) recon.innerHTML = renderTrackingReconciliation(data);
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -346,7 +364,7 @@ async function runTrackingRecoveryBackfill(btn) {
     const recon = document.getElementById('tracking-reconciliation-info');
     if (recon) recon.innerHTML = renderTrackingReconciliation(data);
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -440,6 +458,7 @@ function renderLeadSyncStatus(status, section = null) {
   const lastSync = status.last_sync_at ? fmtDateTime(status.last_sync_at) : 'never';
   const imported = status.last_sync_count || 0;
   const err = status.last_sync_error;
+  const registryTable = '<div id="meta-lead-form-registry" style="margin-top:12px;"><div class="loading">Loading form registry</div></div>';
   const html = `
     <div class="flex-between mb-sm" style="gap:10px; flex-wrap:wrap;">
       <div style="font-size:0.82rem;">
@@ -485,8 +504,57 @@ function renderLeadSyncStatus(status, section = null) {
     </div>
     ${err ? `<div class="alert-banner alert-warning" style="margin-top:10px;">Last sync error: ${escapeHtml(err)}</div>` : ''}
     <div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Incremental lead sync runs every 15 minutes. Use manual range/full sync for historical recovery from older ads and archived delivery.</div>
+    ${registryTable}
   `;
   section ? section.setData(html) : (el.innerHTML = html);
+  loadMetaLeadFormRegistry();
+}
+
+function renderRevisitAutomationStatus(data, section = null) {
+  const config = data?.config || {};
+  const activity = data?.activity || [];
+  const html = `
+    <div class="flex-between mb-sm" style="gap:10px; flex-wrap:wrap;">
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <span class="badge badge-${config.enabled ? 'active' : 'warning'}">${config.enabled ? 'Enabled' : 'Disabled'}</span>
+        ${config.webhook_configured ? '<span class="badge badge-active">Webhook configured</span>' : '<span class="badge badge-critical">Webhook missing</span>'}
+        ${config.signing_secret_configured ? '<span class="badge badge-active">Signed</span>' : '<span class="badge badge-warning">Unsigned</span>'}
+      </div>
+      <div class="text-muted" style="font-size:0.72rem;">Worker poll: ${fmtWait((config.interval_ms || 0) / 1000)}</div>
+    </div>
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; font-size:0.82rem;">
+      <div><div class="kpi-label">Delay</div><div style="font-weight:600;">${fmt(config.delay_seconds, 'integer')}s</div></div>
+      <div><div class="kpi-label">Cooldown</div><div style="font-weight:600;">${fmt(config.cooldown_hours, 'integer')}h</div></div>
+      <div><div class="kpi-label">Max attempts</div><div style="font-weight:600;">${fmt(config.max_attempts, 'integer')}</div></div>
+      <div><div class="kpi-label">Key paths</div><div style="font-weight:600;">${(config.key_paths || []).length}</div></div>
+    </div>
+    <div class="text-muted" style="font-size:0.76rem; margin-top:10px;">
+      ${config.key_paths?.length ? `Eligible paths: ${config.key_paths.map((path) => `<span class="mono">${escapeHtml(path)}</span>`).join(', ')}` : 'No key paths configured. Even if enabled, revisits will be suppressed until key paths are set in env.'}
+    </div>
+    ${!config.enabled ? '<div class="alert-banner alert-warning" style="margin-top:12px;">Feature code is live, but revisit automation is disabled in environment configuration.</div>' : ''}
+    ${config.enabled && !config.webhook_configured ? '<div class="alert-banner alert-critical" style="margin-top:12px;">Webhook URL is missing. Eligible revisit jobs will not be deliverable.</div>' : ''}
+    <div class="table-container" style="margin-top:12px;">
+      <div class="table-header"><span class="table-title">Recent Revisit Jobs</span><span class="badge badge-low">READ ONLY</span></div>
+      ${activity.length ? `
+        <table>
+          <thead><tr><th>Contact</th><th>Path</th><th>Status</th><th class="right">Attempts</th><th>Scheduled</th><th>Sent</th><th>Notes</th></tr></thead>
+          <tbody>
+            ${activity.map((row) => `<tr>
+              <td class="name-cell"><span class="mono">${escapeHtml(row.ghl_contact_id || '—')}</span></td>
+              <td><span class="mono">${escapeHtml(row.page_path || '—')}</span></td>
+              <td><span class="badge badge-${row.status === 'sent' ? 'active' : row.status === 'failed' ? 'critical' : row.status === 'suppressed' ? 'warning' : 'low'}">${escapeHtml(row.status)}</span></td>
+              <td class="right">${fmt(row.attempt_count, 'integer')}</td>
+              <td>${row.scheduled_for ? fmtDateTime(row.scheduled_for) : '—'}</td>
+              <td>${row.delivery_sent_at ? fmtDateTime(row.delivery_sent_at) : (row.sent_at ? fmtDateTime(row.sent_at) : '—')}</td>
+              <td>${escapeHtml(row.last_error || row.delivery_status || '—')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      ` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No revisit jobs recorded for the selected account yet.</div>'}
+    </div>
+    <div class="text-muted" style="font-size:0.72rem; margin-top:8px;">Configuration is currently environment-driven. This screen shows live status and recent activity, but does not edit secrets in-browser.</div>
+  `;
+  section ? section.setData(html) : (document.getElementById('revisit-automation-info').innerHTML = html);
 }
 
 function toLocalInputValue(value) {
@@ -536,9 +604,40 @@ async function triggerLeadSync(btn, useManualOptions = false) {
     toast(`${result.imported || 0} lead(s) imported${result.skipped ? `, ${result.skipped} skipped` : ''}${result.scanned ? `, ${result.scanned} scanned` : ''}`, 'success');
     const status = await apiGet('/meta/leads-sync-status');
     renderLeadSyncStatus(status);
+    loadMetaLeadFormRegistry();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Sync Leads Now'; }
+  }
+}
+
+async function loadMetaLeadFormRegistry() {
+  const el = document.getElementById('meta-lead-form-registry');
+  if (!el) return;
+  try {
+    const res = await apiGet('/meta/lead-form-registry');
+    const forms = res.forms || [];
+    if (!forms.length) {
+      el.innerHTML = '<div class="text-muted" style="font-size:0.76rem;">No imported Meta lead form history for this account yet.</div>';
+      return;
+    }
+    el.innerHTML = `<div class="table-container" style="margin-top:12px;">
+      <div class="table-header"><span class="table-title">Imported Lead Form Registry</span><span class="badge badge-active">LOCAL COVERAGE</span></div>
+      <table>
+        <thead><tr><th>Form ID</th><th class="right">Leads</th><th class="right">Ads</th><th>Coverage</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          ${forms.map((row) => `<tr>
+            <td class="name-cell"><span class="mono">${escapeHtml(row.form_id)}</span></td>
+            <td class="right">${fmt(row.lead_count, 'integer')}</td>
+            <td class="right">${fmt(row.ad_count, 'integer')}</td>
+            <td><span class="badge badge-${row.coverage === 'partial' ? 'warning' : 'active'}">${escapeHtml(row.coverage.replace(/_/g, ' '))}</span></td>
+            <td>${row.last_seen_at ? fmtDateTime(row.last_seen_at) : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -608,7 +707,7 @@ async function renderSavedMetaAccounts() {
       </div>
     `;
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -673,7 +772,7 @@ async function discoverMetaAccounts() {
       </div>
     `;
   } catch (err) {
-    resultsEl.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    resultsEl.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -700,8 +799,8 @@ async function syncMetaAccountMetadata() {
       `);
     }
   } catch (err) {
-    if (el) el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
-    toast(`Error: ${err.message}`, 'error');
+    if (el) el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -725,7 +824,7 @@ async function saveDiscoveredMetaAccounts() {
     await hydrateAccountContext();
     await renderSavedMetaAccounts();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 

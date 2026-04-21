@@ -355,6 +355,19 @@ async function emitLifecycleEvents(account, clientId, previousVisitor, normalise
   if (!events.length) return;
 
   for (const event of events) {
+    const dedupeKey = crypto
+      .createHash('sha256')
+      .update([
+        'ghl',
+        account.id,
+        normalised.ghl_contact_id,
+        event.event_name,
+        firedAt,
+        event.metadata?.current_stage || '',
+        event.metadata?.normalized_stage || '',
+        event.value === undefined ? '' : event.value,
+      ].join('|'))
+      .digest('hex');
     await query(`
       INSERT INTO visitor_events (client_id, account_id, event_name, campaign_id, adset_id, ad_id, value, currency, metadata, fired_at)
       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
@@ -362,10 +375,7 @@ async function emitLifecycleEvents(account, clientId, previousVisitor, normalise
         SELECT 1
         FROM visitor_events
         WHERE account_id = $2
-          AND event_name = $3
-          AND fired_at = $10::timestamptz
-          AND metadata->>'source' = 'ghl'
-          AND metadata->>'ghl_contact_id' = $11
+          AND metadata->>'dedupe_key' = $11
       )
     `, [
       clientId,
@@ -378,10 +388,12 @@ async function emitLifecycleEvents(account, clientId, previousVisitor, normalise
       'USD',
       JSON.stringify({
         source: 'ghl',
+        dedupe_key: dedupeKey,
+        event_time: firedAt,
         ...(event.metadata || {}),
       }),
       firedAt,
-      String(normalised.ghl_contact_id),
+      dedupeKey,
     ]);
   }
 }

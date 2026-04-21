@@ -91,7 +91,7 @@
       closeDrawer();
       loadAdminUsers();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -145,7 +145,7 @@
       closeDrawer();
       loadAdminUsers();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 
@@ -156,7 +156,7 @@
       toast('User deleted', 'success');
       loadAdminUsers();
     } catch (err) {
-      toast(`Error: ${err.message}`, 'error');
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
     }
   }
 

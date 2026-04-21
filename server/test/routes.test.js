@@ -14,11 +14,13 @@ test('auth login sets session cookie and registration is disabled by default', a
   const authServicePath = require.resolve('../services/authService');
   const configPath = require.resolve('../config');
   const csrfServicePath = require.resolve('../services/csrfService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
   const routePath = require.resolve('../routes/auth');
   const originals = new Map([
     [authServicePath, require.cache[authServicePath]],
     [configPath, require.cache[configPath]],
     [csrfServicePath, require.cache[csrfServicePath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
     [routePath, require.cache[routePath]],
   ]);
 
@@ -38,6 +40,12 @@ test('auth login sets session cookie and registration is disabled by default', a
       isProduction: false,
       allowSelfSignup: false,
       sessionSecret: 'test-session-secret',
+    },
+  };
+  require.cache[securityAuditPath] = {
+    exports: {
+      write: async () => {},
+      fromRequest: async () => {},
     },
   };
 

@@ -2,6 +2,7 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const auth = require('../services/authService');
+const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
 const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
@@ -9,6 +10,12 @@ const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedS
 // Admin-only middleware
 function adminOnly(req, res, next) {
   if (!req.user || req.user.role !== 'admin') {
+    securityAudit.fromRequest(req, {
+      action: 'admin.denied',
+      target_type: 'admin_route',
+      target_id: req.path,
+      result: 'denied',
+    });
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
@@ -31,6 +38,20 @@ router.get('/sessions', async (req, res) => {
   try {
     const sessions = await auth.getActiveSessions();
     res.json({ data: sessions });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/security-audit', async (req, res) => {
+  try {
+    const rows = await securityAudit.list({
+      limit: req.query.limit,
+      accountId: req.query.accountId ? ensureInteger(req.query.accountId, 'accountId must be a positive integer') : undefined,
+      actorUserId: req.query.actorUserId ? ensureInteger(req.query.actorUserId, 'actorUserId must be a positive integer') : undefined,
+      action: optionalTrimmedString(req.query.action, 200),
+    });
+    res.json({ data: rows });
   } catch (err) {
     sendError(res, err);
   }
@@ -95,6 +116,12 @@ router.post('/users', async (req, res) => {
     if (!password) return res.status(400).json({ error: 'Password required' });
     if (password.length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters' });
     const user = await auth.register(email, password, name, role);
+    await securityAudit.fromRequest(req, {
+      action: 'user.created',
+      target_type: 'user',
+      target_id: String(user.id),
+      after_json: { id: user.id, email: user.email, role: user.role, name: user.name },
+    });
     res.json({ success: true, data: user });
   } catch (err) {
     sendError(res, err);
@@ -111,6 +138,12 @@ router.post('/users/:id', async (req, res) => {
     const name = optionalTrimmedString(body.name, 200);
     const password = optionalTrimmedString(body.password, 500);
     await auth.updateUser(userId, { role, is_active, name, password });
+    await securityAudit.fromRequest(req, {
+      action: role !== undefined ? 'user.role_or_profile_updated' : 'user.updated',
+      target_type: 'user',
+      target_id: String(userId),
+      after_json: { role, is_active, name, password_changed: Boolean(password) },
+    });
     res.json({ success: true });
   } catch (err) {
     sendError(res, err);
@@ -123,6 +156,11 @@ router.delete('/users/:id', async (req, res) => {
     const userId = parseInt(req.params.id, 10);
     if (userId === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
     await auth.deleteUser(userId);
+    await securityAudit.fromRequest(req, {
+      action: 'user.deleted',
+      target_type: 'user',
+      target_id: String(userId),
+    });
     res.json({ success: true });
   } catch (err) {
     sendError(res, err);

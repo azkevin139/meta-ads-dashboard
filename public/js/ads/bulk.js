@@ -19,7 +19,7 @@
         toast(res.message, 'success');
         navigateTo('ads', getPageState());
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 

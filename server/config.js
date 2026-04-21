@@ -72,6 +72,20 @@ module.exports = {
     webhookSigningSecret: process.env.TOUCH_SEQUENCE_WEBHOOK_SIGNING_SECRET || '',
   },
 
+  revisitAutomation: {
+    enabled: process.env.REVISIT_AUTOMATION_ENABLED === 'true',
+    webhookUrl: process.env.REVISIT_AUTOMATION_WEBHOOK_URL || '',
+    webhookSigningSecret: process.env.REVISIT_AUTOMATION_WEBHOOK_SIGNING_SECRET || '',
+    cooldownHours: parseInt(process.env.REVISIT_AUTOMATION_COOLDOWN_HOURS || '', 10) || 24,
+    delaySeconds: parseInt(process.env.REVISIT_AUTOMATION_DELAY_SECONDS || '', 10) || 60,
+    intervalMs: parseInt(process.env.REVISIT_AUTOMATION_INTERVAL_MS || '', 10) || 30 * 1000,
+    maxAttempts: parseInt(process.env.REVISIT_AUTOMATION_MAX_ATTEMPTS || '', 10) || 3,
+    keyPaths: String(process.env.REVISIT_AUTOMATION_KEY_PATHS || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  },
+
   authSecret: sessionSecret,
   sessionSecret,
   accountTokenSecret,

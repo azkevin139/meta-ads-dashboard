@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { query, queryOne } = require('../db');
 const diagnostics = require('./trackingDiagnosticsService');
 const { normalizeStage } = require('./lifecycleStageService');
+const revisitAutomation = require('./revisitAutomationService');
 
 function clean(value) {
   if (value === undefined || value === null) return null;
@@ -126,6 +127,11 @@ async function recordEvent(input = {}) {
     clean(input.currency) || visitor.currency || 'USD',
     JSON.stringify(input.metadata || {}),
   ]);
+  if (eventName === 'PageView') {
+    revisitAutomation.enqueueFromPageView(visitor, input).catch((err) => {
+      console.warn('[tracking] revisit automation enqueue failed:', err.message);
+    });
+  }
   return visitor;
 }
 

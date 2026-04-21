@@ -35,7 +35,12 @@ for migration in \
   v12_ghl_sync_state.sql \
   v13_normalized_stage.sql \
   v14_meta_lead_sync_state.sql \
-  v19_data_truth_layer.sql
+  v15_known_contact_revisit_automation.sql \
+  v16_security_wave1.sql \
+  v17_security_wave1_public_inputs.sql \
+  v18_security_audit_log.sql \
+  v19_data_truth_layer.sql \
+  v20_lifecycle_identity_integrity.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

@@ -7,7 +7,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "worker": "node server/worker.js",
-    "test": "node --test --test-concurrency=1 server/test/*.test.js"
+    "test": "node --test --test-concurrency=1 server/test/*.test.js",
+    "test:xss": "bash scripts/check-xss-render-paths.sh"
   },
   "dependencies": {
     "cors": "^2.8.5",

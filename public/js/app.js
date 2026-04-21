@@ -18,10 +18,6 @@ const layoutHelpersFactory = window.LayoutHelpers;
 const authUiHelpers = window.AuthUiHelpers;
 const headerStatusHelpers = window.HeaderStatusHelpers;
 
-function escapeHtml(str) {
-  return String(str || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 const appState = appStateHelpers.createAppState();
 appState.setCurrentUser(sessionState.getCurrentUser());
 const clearMetaCooldown = cooldown.clear;

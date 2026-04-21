@@ -6,6 +6,7 @@ const csrf = require('../services/csrfService');
 const { ensureNonEmptyString, ensureObject, optionalTrimmedString } = require('../validation');
 const router = express.Router();
 const auth = require('../services/authService');
+const securityAudit = require('../services/securityAuditService');
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
@@ -36,8 +37,31 @@ router.post('/login', async (req, res) => {
     const result = await auth.login(email, password, ip, userAgent);
     const tokenHash = auth.hashSessionToken(result.token);
     res.setHeader('Set-Cookie', serializeCookie('session_token', result.token, sessionCookieOptions(config)));
+    await securityAudit.write({
+      actor_user_id: result.user.id,
+      actor_email: result.user.email,
+      action: 'auth.login_success',
+      target_type: 'user',
+      target_id: String(result.user.id),
+      result: 'success',
+      ip,
+      user_agent: userAgent,
+      request_id: req.requestId,
+    }).catch((auditErr) => console.warn('[securityAudit] login success write failed:', auditErr.message));
     res.json({ user: result.user, csrf_token: csrf.createToken(tokenHash) });
   } catch (err) {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    securityAudit.write({
+      actor_email: body.email,
+      action: 'auth.login_failed',
+      target_type: 'user',
+      target_id: body.email,
+      result: 'failed',
+      ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      user_agent: req.headers['user-agent'] || '',
+      request_id: req.requestId,
+      after_json: { reason: err.message },
+    }).catch((auditErr) => console.warn('[securityAudit] login failure write failed:', auditErr.message));
     res.status(401).json({ error: err.message });
   }
 });
@@ -48,6 +72,10 @@ router.post('/logout', async (req, res) => {
     const token = parseCookies(req.headers.cookie || '').session_token ||
       (req.headers.authorization || '').replace('Bearer ', '');
     if (token) await auth.logout(token);
+    await securityAudit.fromRequest(req, {
+      action: 'auth.logout',
+      target_type: 'session',
+    });
     res.setHeader('Set-Cookie', serializeCookie('session_token', '', { ...sessionCookieOptions(config), maxAge: 0 }));
     res.json({ success: true });
   } catch (err) {

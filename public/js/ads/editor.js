@@ -115,7 +115,7 @@
         closeDrawer();
         navigateTo('ads', getPageState());
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 
@@ -139,7 +139,7 @@
           <div style="font-size:0.72rem; color:var(--text-muted); margin-top:12px;">Editing creates a new creative. Ad may re-enter review.</div>
         `);
       } catch (err) {
-        setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
+        setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
       }
     }
 
@@ -157,7 +157,7 @@
         closeDrawer();
         loadCreative(metaAdId);
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 

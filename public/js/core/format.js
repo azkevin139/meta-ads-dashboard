@@ -1,4 +1,17 @@
 (function () {
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function safeErrorMessage(err) {
+    return escapeHtml(err && err.message ? err.message : 'Unexpected error');
+  }
+
   function fmt(value, type = 'number') {
     if (value === null || value === undefined) return '—';
     const n = parseFloat(value);
@@ -39,10 +52,14 @@
   }
 
   window.FormatHelpers = {
+    escapeHtml,
+    safeErrorMessage,
     fmt,
     fmtDelta,
     fmtDate,
     fmtDateTime,
     fmtBudget,
   };
+  window.escapeHtml = escapeHtml;
+  window.safeErrorMessage = safeErrorMessage;
 })();

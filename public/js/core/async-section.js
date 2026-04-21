@@ -15,7 +15,7 @@
           target.innerHTML = onError(err);
           return;
         }
-        target.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+        target.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
       },
       setData(data) {
         target.innerHTML = render(data);

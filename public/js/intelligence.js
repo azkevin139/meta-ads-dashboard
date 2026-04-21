@@ -9,6 +9,7 @@ let intelBreakdown = 'publisher_platform';
 let touchSequenceDefaults = [];
 let touchSequenceCache = [];
 let touchSequenceEditingId = null;
+let intelDataHealth = null;
 
 async function loadIntelligence(container) {
   container.innerHTML = `
@@ -37,6 +38,20 @@ async function loadIntelligence(container) {
     <div class="table-container mb-md">
       <div class="table-header"><span class="table-title">Audience Segments</span><span class="badge badge-active">RETARGETING</span></div>
       <div id="intel-audience-segments"><div class="loading">Loading audience segments</div></div>
+    </div>
+    <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
+      <div class="table-container">
+        <div class="table-header"><span class="table-title">Lifecycle Summary</span><span class="badge badge-active">CRM + TRACKING</span></div>
+        <div id="intel-lifecycle-summary"><div class="loading">Loading lifecycle summary</div></div>
+      </div>
+      <div class="table-container">
+        <div class="table-header"><span class="table-title">Lifecycle Events</span><span class="badge badge-active">LEDGER</span></div>
+        <div id="intel-lifecycle-events"><div class="loading">Loading lifecycle events</div></div>
+      </div>
+    </div>
+    <div class="table-container mb-md">
+      <div class="table-header"><span class="table-title">Identity Stitching</span><span class="badge badge-warning">CONFIDENCE</span></div>
+      <div id="intel-identity-health"><div class="loading">Loading identity health</div></div>
     </div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1.2fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
@@ -77,6 +92,8 @@ async function loadIntelligence(container) {
     loadDecisionQueues(),
     loadTouchSequences(),
     loadAudienceSegments(),
+    loadLifecycleSummary(),
+    loadIdentityHealth(),
     loadFunnel(),
     loadBreakdowns(),
     loadCreativeLibrary(),
@@ -84,6 +101,103 @@ async function loadIntelligence(container) {
     loadAudienceHealth(),
     loadJourneys(),
   ]);
+  await loadIntelDataHealth();
+}
+
+async function loadIntelDataHealth() {
+  const el = document.getElementById('intel-freshness');
+  if (!el || !window.DataHealth) return null;
+  try {
+    intelDataHealth = await window.DataHealth.load({ force: true });
+    const summary = window.DataHealth.summarizeHealth(intelDataHealth, [
+      { source: 'meta', dataset: 'warehouse_insights' },
+      { source: 'meta', dataset: 'leads' },
+      { source: 'ghl', dataset: 'contacts' },
+      { source: 'tracking', dataset: 'recovery' },
+    ]);
+    const range = intelDateFrom === intelDateTo ? intelDateFrom : `${intelDateFrom} to ${intelDateTo}`;
+    el.innerHTML = window.DataHealth.panel(summary, `Decision Data Health · ${range}`);
+    return intelDataHealth;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-warning">Data health unavailable: ${safeErrorMessage(err)}</div>`;
+    return null;
+  }
+}
+
+async function confirmDegradedDataAction(actionLabel, datasets) {
+  if (!window.DataHealth) return true;
+  const health = intelDataHealth || await window.DataHealth.load({ force: true }).catch(() => null);
+  const summary = window.DataHealth.summarizeHealth(health, datasets);
+  if (summary.state === 'failed') {
+    const reason = (summary.rows || []).find((row) => row.status === 'failed')?.partial_reason || 'upstream sync failed';
+    toast(`${actionLabel} blocked: data health is failed (${reason})`, 'error');
+    return false;
+  }
+  if (summary.state === 'partial' || summary.state === 'stale') {
+    const details = (summary.rows || [])
+      .map((row) => `${row.source}/${row.dataset}: ${row.status}${row.partial_reason ? ` (${row.partial_reason})` : ''}`)
+      .join('\n');
+    return confirmAction(`${actionLabel} is using ${summary.state} data.\n\n${details || 'No detailed health rows available.'}\n\nContinue anyway?`);
+  }
+  return true;
+}
+
+async function loadIdentityHealth() {
+  const el = document.getElementById('intel-identity-health');
+  if (!el) return;
+  try {
+    const res = await apiGet('/intelligence/identity-health');
+    const data = res.data || {};
+    const confidence = data.confidence || [];
+    const collisions = data.collisions || [];
+    el.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:10px;">
+        ${confidence.map((row) => `<div class="reco-card" style="padding:10px 12px;">
+          <div class="kpi-label">${escapeHtml(row.label)}</div>
+          <div style="font-weight:600; font-size:1rem;">${fmt(row.count, 'integer')}</div>
+          <div class="text-muted" style="font-size:0.72rem; line-height:1.35;">${escapeHtml(row.meaning)}</div>
+        </div>`).join('')}
+      </div>
+      ${collisions.length ? `<div class="alert-banner alert-warning" style="margin-top:10px;">${fmt(collisions.length, 'integer')} identity collision group(s) need review before using low-confidence stitched audiences.</div>
+      <div style="overflow:auto; margin-top:10px;"><table>
+        <thead><tr><th>Method</th><th>Hash</th><th class="right">Browser IDs</th><th class="right">GHL Contacts</th><th>Last Seen</th></tr></thead>
+        <tbody>${collisions.map((row) => `<tr>
+          <td>${escapeHtml(row.method)}</td>
+          <td class="mono">${escapeHtml(row.identity_hash || '')}</td>
+          <td class="right">${fmt(row.client_ids, 'integer')}</td>
+          <td class="right">${fmt(row.ghl_contacts, 'integer')}</td>
+          <td>${fmtDateTime(row.last_seen_at)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : '<div class="text-muted" style="font-size:0.78rem; margin-top:10px;">No email/phone identity collisions detected.</div>'}
+    `;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+async function loadLifecycleSummary() {
+  const summaryEl = document.getElementById('intel-lifecycle-summary');
+  const eventsEl = document.getElementById('intel-lifecycle-events');
+  try {
+    const res = await apiGet(`/intelligence/lifecycle-summary?${intelRangeQuery()}`);
+    const data = res.data || {};
+    const stages = data.stages || [];
+    const events = data.events || [];
+    summaryEl.innerHTML = stages.length ? `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+      ${stages.map((row) => `<div class="reco-card" style="padding:10px 12px;">
+        <div class="kpi-label">${escapeHtml(row.stage.replace(/_/g, ' '))}</div>
+        <div style="font-weight:600; font-size:1rem;">${fmt(row.count, 'integer')}</div>
+      </div>`).join('')}
+    </div>` : '<div class="empty-state"><div class="empty-state-text">No lifecycle stage data yet</div></div>';
+    eventsEl.innerHTML = events.length ? `<div style="display:grid; gap:8px;">
+      ${events.map((row) => `<div class="reco-card" style="padding:10px 12px;">
+        <div class="flex-between" style="gap:10px;"><div>${escapeHtml(row.event_name)}</div><div style="font-weight:600;">${fmt(row.count, 'integer')}</div></div>
+      </div>`).join('')}
+    </div>` : '<div class="empty-state"><div class="empty-state-text">No lifecycle events yet</div></div>';
+  } catch (err) {
+    summaryEl.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+    eventsEl.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
 }
 
 async function loadTouchSequences() {
@@ -150,19 +264,25 @@ async function loadTouchSequences() {
       </div>
     `).join('');
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
 async function runTouchSequenceMonitor(sequenceId) {
   try {
+    const allowed = await confirmDegradedDataAction('Touch sequence monitor', [
+      { source: 'meta', dataset: 'warehouse_insights' },
+      { source: 'meta', dataset: 'entities' },
+      { source: 'ghl', dataset: 'contacts' },
+    ]);
+    if (!allowed) return;
     toast('Running sequence monitor…', 'info');
     const path = sequenceId ? `/intelligence/touch-sequences/${sequenceId}/run-monitor` : '/intelligence/touch-sequences/run-monitor';
     await apiPost(path, {});
     toast('Sequence monitor complete', 'success');
     loadTouchSequences();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -381,7 +501,7 @@ async function saveTouchSequence() {
     closeDrawer();
     await loadTouchSequences();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -392,7 +512,7 @@ async function deleteTouchSequence(sequenceId) {
     toast('Touch sequence deleted', 'success');
     await loadTouchSequences();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -406,11 +526,9 @@ async function loadDecisionQueues() {
     const res = await apiGet(`/intelligence/rules?${intelRangeQuery()}`);
     const queues = res.queues || {};
     const paging = res.meta?.paging;
-    const freshness = document.getElementById('intel-freshness');
-    if (freshness) {
-      freshness.innerHTML = paging && paging.truncated
-        ? `<div class="alert-banner alert-warning">Meta returned more data than the safety page limit. Results may be partial.</div>`
-        : `<div class="text-muted" style="font-size:0.78rem; text-align:right;">${intelDateFrom === intelDateTo ? intelDateFrom : `${intelDateFrom} to ${intelDateTo}`} · live Meta data</div>`;
+    if (paging && paging.truncated) {
+      const freshness = document.getElementById('intel-freshness');
+      if (freshness) freshness.innerHTML = `<div class="alert-banner alert-warning">Meta returned more data than the safety page limit. Results may be partial.</div>`;
     }
     const order = ['Kill Waste', 'Scale Winners', 'Refresh Creative', 'Needs Tracking Review', 'Watch Closely', 'Needs More Data'];
     el.innerHTML = `
@@ -419,7 +537,7 @@ async function loadDecisionQueues() {
       </div>
     `;
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -450,7 +568,7 @@ async function loadFunnel() {
       ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.link_clicks || r.clicks,'integer')}</td><td class="right">${fmt(r.page_visits || r.landing_page_views,'integer')}</td><td class="right">${fmt(r.leads,'integer')}</td><td class="right">${fmt(r.ghl_contacted,'integer')}</td><td class="right">${fmt(r.qualified,'integer')}</td><td class="right">${fmt(r.closed,'integer')}</td><td class="right">${r.true_roas ? fmt(r.true_roas,'decimal') + 'x' : '—'}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No funnel data</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -482,6 +600,7 @@ async function loadAudienceSegments() {
       <tbody>
         ${rows.map(segment => {
           const source = segment.source === 'meta_custom_audience' ? 'Meta audience' : 'First-party';
+          const lifecycle = lifecycleBadge(segment.key);
           const size = formatSegmentSize(segment);
           const status = segment.retargeting_status || 'waiting_for_data';
           const existingPush = pushBySegment[segment.key];
@@ -506,7 +625,7 @@ async function loadAudienceSegments() {
           }
           return `<tr>
             <td class="name-cell">
-              ${escapeHtml(segment.name)}
+              <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">${escapeHtml(segment.name)}${lifecycle}</div>
               <div class="text-muted" style="font-size:0.72rem; line-height:1.35;">${escapeHtml(segment.description || '')}</div>
               ${existingPush?.meta_audience_id ? `<div class="mono text-muted" style="font-size:0.68rem; margin-top:2px;">→ ${escapeHtml(existingPush.meta_audience_id)}</div>` : ''}
               ${segment.audience_id ? `<div class="mono text-muted" style="font-size:0.68rem; margin-top:2px;">${escapeHtml(segment.audience_id)}</div>` : ''}
@@ -520,18 +639,39 @@ async function loadAudienceSegments() {
       </tbody>
     </table></div>`;
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
+}
+
+function lifecycleBadge(segmentKey) {
+  const map = {
+    new_lead_contacts: ['info', 'New lead'],
+    contacted_contacts: ['warning', 'Contacted'],
+    qualified_contacts: ['active', 'Qualified'],
+    booked_contacts: ['warning', 'Booked'],
+    showed_contacts: ['active', 'Showed'],
+    closed_won_contacts: ['active', 'Closed won'],
+    closed_lost_contacts: ['critical', 'Closed lost'],
+  };
+  const badge = map[segmentKey];
+  if (!badge) return '';
+  return `<span class="badge badge-${badge[0]}" style="font-size:0.68rem;">${escapeHtml(badge[1])}</span>`;
 }
 
 async function pushSegmentToMeta(segmentKey, segmentName) {
   try {
+    const allowed = await confirmDegradedDataAction('Audience push', [
+      { source: 'meta', dataset: 'leads' },
+      { source: 'ghl', dataset: 'contacts' },
+      { source: 'tracking', dataset: 'recovery' },
+    ]);
+    if (!allowed) return;
     toast('Uploading to Meta…', 'info');
     const result = await apiPost('/intelligence/audience-push', { segmentKey, segmentName });
     toast(`Uploaded ${result.uploaded || 0} identifier(s) to Meta audience ${result.meta_audience_id}`, 'success');
     loadAudienceSegments();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -541,7 +681,7 @@ async function toggleAutoRefresh(pushId, currentlyOn) {
     toast(`Auto-refresh ${!currentlyOn ? 'enabled' : 'disabled'}`, 'success');
     loadAudienceSegments();
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -586,7 +726,7 @@ async function loadTrueRoas() {
       ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.meta_reported_roas,'decimal')}x</td><td class="right">${fmt(r.true_roas,'decimal')}x</td><td class="right">${fmt(r.first_party_revenue,'currency')}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No first-party revenue yet</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -605,7 +745,7 @@ async function loadAudienceHealth() {
       }).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No custom audiences returned</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -630,7 +770,7 @@ async function loadJourneys() {
       }).join('')}
     </div>` : '<div class="empty-state"><div class="empty-state-text">No tracked journeys yet</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -641,7 +781,7 @@ async function openContactDrawer(clientId) {
     const res = await apiGet(`/intelligence/contact?clientId=${encodeURIComponent(clientId)}`);
     renderContactDrawer(res.data);
   } catch (err) {
-    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
+    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
   }
 }
 
@@ -706,7 +846,7 @@ async function loadBreakdowns() {
       ${rows.map(r => `<tr><td>${escapeHtml(r.segment)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.results,'integer')}</td><td class="right">${r.cpa ? fmt(r.cpa,'currency') : '—'}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No breakdown data</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -731,7 +871,7 @@ async function loadCreativeLibrary() {
       </div>`).join('')}
     </div>` : '<div class="empty-state"><div class="empty-state-text">No creative data</div></div>';
   } catch (err) {
-    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${err.message}</div>`;
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -748,7 +888,7 @@ async function openTargetSettings() {
       <div style="display:flex; gap:8px; margin-top:18px;"><button class="btn btn-primary" onclick="saveTargetSettings()">Save Targets</button><button class="btn" onclick="closeDrawer()">Cancel</button></div>
     `);
   } catch (err) {
-    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${err.message}</div>`);
+    setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
   }
 }
 
@@ -767,7 +907,7 @@ async function saveTargetSettings() {
     closeDrawer();
     navigateTo('intelligence');
   } catch (err) {
-    toast(`Error: ${err.message}`, 'error');
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 

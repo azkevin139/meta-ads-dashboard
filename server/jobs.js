@@ -4,6 +4,7 @@ const ghlSync = require('./services/ghlService');
 const audiencePush = require('./services/audiencePushService');
 const warehouseSync = require('./services/warehouseSyncService');
 const touchSequences = require('./services/touchSequenceService');
+const revisitAutomation = require('./services/revisitAutomationService');
 
 const JOB_DEFINITIONS = [
   {
@@ -35,6 +36,11 @@ const JOB_DEFINITIONS = [
     name: 'touch-sequence-monitor',
     disabledEnv: 'DISABLE_TOUCH_SEQUENCE_MONITOR',
     start: () => touchSequences.startBackgroundMonitor(),
+  },
+  {
+    name: 'revisit-automation',
+    disabledEnv: 'DISABLE_REVISIT_AUTOMATION',
+    start: () => revisitAutomation.startBackgroundProcessor(),
   },
 ];
 

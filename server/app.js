@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const authMiddleware = require('./middleware/auth');
 const csrfMiddleware = require('./middleware/csrf');
 const metaUsage = require('./services/metaUsageService');
@@ -28,9 +29,32 @@ function createApp(config) {
 
   const app = express();
   app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    req.requestId = req.headers['x-request-id'] || crypto.randomUUID();
+    res.setHeader('X-Request-Id', req.requestId);
+    next();
+  });
 
   if (helmet) {
-    app.use(helmet({ contentSecurityPolicy: false }));
+    app.use(helmet({
+      contentSecurityPolicy: {
+        reportOnly: true,
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'self'"],
+          baseUri: ["'self'"],
+          objectSrc: ["'none'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+          fontSrc: ["'self'", 'data:'],
+          connectSrc: ["'self'", 'https://track.lnxo.me', 'https://n8n.emma42.com'],
+          frameAncestors: ["'none'"],
+          formAction: ["'self'"],
+          reportUri: ['/api/security/csp-report'],
+        },
+      },
+    }));
   }
 
   if (rateLimit) {
@@ -56,8 +80,17 @@ function createApp(config) {
 
   app.use(express.json({
     limit: '1mb',
+    type: ['application/json', 'application/csp-report', 'application/reports+json'],
     verify: (req, _res, buf) => { req.rawBody = buf; },
   }));
+  app.post('/api/security/csp-report', (req, res) => {
+    console.warn('[csp-report]', JSON.stringify({
+      request_id: req.requestId,
+      ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || null,
+      report: req.body || null,
+    }));
+    res.status(204).end();
+  });
   app.get('/js/meta-tracker.js', (req, res, next) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Access-Control-Allow-Origin', '*');

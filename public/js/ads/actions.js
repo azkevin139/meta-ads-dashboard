@@ -7,7 +7,7 @@
         toast(`Paused: ${name}`, 'success');
         navigateTo('ads', getPageState());
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 
@@ -18,7 +18,7 @@
         toast(`Resumed: ${name}`, 'success');
         navigateTo('ads', getPageState());
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 
@@ -28,7 +28,7 @@
         await apiPost('/actions/duplicate', { accountId: ACCOUNT_ID, entityType: 'ad', metaEntityId: metaId });
         toast(`Duplicated: ${name}`, 'success');
       } catch (err) {
-        toast(`Error: ${err.message}`, 'error');
+        toast(`Error: ${safeErrorMessage(err)}`, 'error');
       }
     }
 

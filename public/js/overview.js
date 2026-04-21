@@ -36,6 +36,7 @@ async function loadOverview(container) {
       </div>
     </div>
     <div id="date-label" class="text-muted mb-sm" style="font-size: 0.78rem; text-align: right;">${getDateLabel()}</div>
+    <div id="overview-data-health" class="mb-md"></div>
     <div id="meta-pulse-card" class="reco-card mb-md"><div class="loading">Loading Meta pulse</div></div>
     <div id="alert-area"></div>
     <div id="kpi-area" class="kpi-grid"><div class="loading">Loading KPIs</div></div>
@@ -46,7 +47,7 @@ async function loadOverview(container) {
   const kpiSection = overviewAsyncSection.createAsyncSection({
     targetId: 'kpi-area',
     loadingText: 'Loading KPIs',
-    onError: (err) => `<div class="alert-banner alert-critical">Error: ${err.message}</div>`,
+    onError: (err) => `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`,
     render: (metrics) => metrics,
   });
   const campaignsSection = overviewAsyncSection.createAsyncSection({
@@ -57,14 +58,16 @@ async function loadOverview(container) {
   });
 
   try {
-    const [liveRes, listRes, recoRes, rateRes, trackingAlertRes] = await Promise.all([
+    const [liveRes, listRes, recoRes, rateRes, trackingAlertRes, healthRes] = await Promise.all([
       apiGet(`/meta/live?level=campaign&since=${dateFrom}&until=${dateTo}`),
       apiGet('/meta/campaigns'),
       apiGet(`/ai/recommendations?accountId=${ACCOUNT_ID}&status=pending`),
       apiGet('/meta/rate-limit-status'),
       apiGet(`/intelligence/tracking-alerts?accountId=${ACCOUNT_ID}&hours=24`).catch(() => ({ alerts: [] })),
+      window.DataHealth?.load({ force: true }).catch(() => null),
     ]);
     renderMetaPulse(rateRes);
+    renderOverviewDataHealth(healthRes);
     startMetaPulseAutoRefresh();
 
     const desiredByCampaign = {};
@@ -124,6 +127,18 @@ async function loadOverview(container) {
   } catch (err) {
     kpiSection?.setError(err);
   }
+}
+
+function renderOverviewDataHealth(health) {
+  const el = document.getElementById('overview-data-health');
+  if (!el || !window.DataHealth) return;
+  const summary = window.DataHealth.summarizeHealth(health, [
+    { source: 'meta', dataset: 'warehouse_insights' },
+    { source: 'meta', dataset: 'entities' },
+    { source: 'meta', dataset: 'leads' },
+    { source: 'ghl', dataset: 'contacts' },
+  ]);
+  el.innerHTML = window.DataHealth.panel(summary, 'Data Health');
 }
 
 function startMetaPulseAutoRefresh() {

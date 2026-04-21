@@ -4,6 +4,7 @@ const accountService = require('../services/accountService');
 const accountAccess = require('../services/accountAccessService');
 const tokenHealth = require('../services/tokenHealthService');
 const ghl = require('../services/ghlService');
+const securityAudit = require('../services/securityAuditService');
 const {
   ensureInteger,
   ensureEnum,
@@ -17,6 +18,12 @@ const router = express.Router();
 
 function adminOnly(req, res, next) {
   if (!req.user || req.user.role !== 'admin') {
+    securityAudit.fromRequest(req, {
+      action: 'admin.denied',
+      target_type: 'accounts_route',
+      target_id: req.path,
+      result: 'denied',
+    });
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
@@ -49,6 +56,13 @@ router.post('/active', async (req, res) => {
 router.post('/', adminOnly, async (req, res) => {
   try {
     const account = await accountService.createAccount(req.body);
+    await securityAudit.fromRequest(req, {
+      action: 'account.created_or_token_imported',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: account,
+    });
     res.json({ success: true, data: account });
   } catch (err) {
     sendError(res, err);
@@ -59,6 +73,11 @@ router.post('/discover', adminOnly, async (req, res) => {
   try {
     const body = ensureObject(req.body);
     const discovered = await accountService.discoverAccountsForToken(ensureNonEmptyString(body.token, 'token required'));
+    await securityAudit.fromRequest(req, {
+      action: 'account.token_discovered',
+      target_type: 'account_token',
+      after_json: { discovered_count: discovered.accounts?.length || 0 },
+    });
     res.json(discovered);
   } catch (err) {
     sendError(res, err);
@@ -68,6 +87,11 @@ router.post('/discover', adminOnly, async (req, res) => {
 router.post('/import', adminOnly, async (req, res) => {
   try {
     const imported = await accountService.importAccountsFromToken(ensureObject(req.body));
+    await securityAudit.fromRequest(req, {
+      action: 'account.token_imported',
+      target_type: 'account',
+      after_json: { imported_count: imported.length, accounts: imported },
+    });
     res.json({ success: true, data: imported });
   } catch (err) {
     sendError(res, err);
@@ -79,6 +103,13 @@ router.post('/sync-metadata', adminOnly, async (req, res) => {
     const body = ensureObject(req.body);
     const accountId = body.accountId ? ensureInteger(body.accountId, 'accountId must be a positive integer') : null;
     const result = await accountService.refreshAccountMetadata(accountId);
+    await securityAudit.fromRequest(req, {
+      action: 'account.metadata_synced',
+      target_type: 'account',
+      target_id: accountId ? String(accountId) : 'all',
+      account_id: accountId,
+      after_json: result,
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);
@@ -117,6 +148,13 @@ router.post('/:id/token-check', adminOnly, async (req, res) => {
     );
     if (!row) return res.status(404).json({ error: 'Account not found' });
     const result = await tokenHealth.checkAccount(row);
+    await securityAudit.fromRequest(req, {
+      action: 'account.token_checked',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+      after_json: result,
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);
@@ -140,6 +178,13 @@ router.post('/:id/ghl', adminOnly, async (req, res) => {
     const apiKey = ensureNonEmptyString(body.apiKey, 'apiKey required');
     const locationId = ensureNonEmptyString(body.locationId, 'locationId required');
     const result = await ghl.saveGhlCredentials(accountId, { apiKey, locationId });
+    await securityAudit.fromRequest(req, {
+      action: 'ghl.credentials_saved',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+      after_json: { locationId, configured: true },
+    });
     res.json(result);
   } catch (err) {
     sendError(res, err);
@@ -148,7 +193,14 @@ router.post('/:id/ghl', adminOnly, async (req, res) => {
 
 router.delete('/:id/ghl', adminOnly, async (req, res) => {
   try {
-    await ghl.clearGhlCredentials(parseInt(req.params.id, 10));
+    const accountId = parseInt(req.params.id, 10);
+    await ghl.clearGhlCredentials(accountId);
+    await securityAudit.fromRequest(req, {
+      action: 'ghl.credentials_deleted',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+    });
     res.json({ success: true });
   } catch (err) {
     sendError(res, err);
@@ -158,11 +210,19 @@ router.delete('/:id/ghl', adminOnly, async (req, res) => {
 router.post('/:id/ghl/sync', adminOnly, async (req, res) => {
   try {
     const body = ensureObject(req.body || {});
-    const result = await ghl.syncAccountById(parseInt(req.params.id, 10), {
+    const accountId = parseInt(req.params.id, 10);
+    const result = await ghl.syncAccountById(accountId, {
       mode: body.mode ? ensureEnum(body.mode, ['incremental', 'full', 'range'], 'mode must be incremental, full, or range') : 'incremental',
       sinceOverride: body.since ? ensureNonEmptyString(body.since, 'since must be a non-empty string') : undefined,
       untilOverride: body.until ? ensureNonEmptyString(body.until, 'until must be a non-empty string') : undefined,
       maxPages: optionalInteger(body.maxPages, 'maxPages must be a positive integer'),
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'ghl.sync_triggered',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+      after_json: { options: body, result },
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -173,6 +233,13 @@ router.post('/:id/ghl/sync', adminOnly, async (req, res) => {
 router.post('/:id/default', adminOnly, async (req, res) => {
   try {
     const account = await accountService.setDefaultAccount(parseInt(req.params.id, 10));
+    await securityAudit.fromRequest(req, {
+      action: 'account.default_changed',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: account,
+    });
     res.json({ success: true, data: account });
   } catch (err) {
     sendError(res, err);

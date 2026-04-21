@@ -49,7 +49,7 @@
         if (sessionState.setCsrfToken) sessionState.setCsrfToken(data.csrf_token);
         await onLoginSuccess(data.user);
       } catch (err) {
-        errorDiv.innerHTML = `<div class="alert-banner alert-critical" style="margin-bottom:12px; font-size:0.82rem;">${err.message}</div>`;
+        errorDiv.innerHTML = `<div class="alert-banner alert-critical" style="margin-bottom:12px; font-size:0.82rem;">${safeErrorMessage(err)}</div>`;
       }
     }
 
