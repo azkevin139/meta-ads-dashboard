@@ -12,6 +12,7 @@ const metaApi = require('./metaApi');
 const metaCache = require('./metaCache');
 const accountService = require('./accountService');
 const { query, queryAll, queryOne } = require('../db');
+const syncTruth = require('./syncTruthService');
 
 async function ensureAccountExists(account) {
   // Used for the internal id → Meta id bridge in foreign keys.
@@ -245,12 +246,29 @@ function isRateLimit(err) {
 }
 
 async function syncAccountEntities(accountId) {
+  const run = await syncTruth.startRun({
+    source: 'meta',
+    dataset: 'entities',
+    accountId,
+    mode: 'mirror',
+  });
   const account = await accountService.getAccountById(accountId);
-  if (!account || !account.access_token) return { account_id: accountId, skipped: 'no_token' };
+  if (!account || !account.access_token) {
+    await syncTruth.finishRun(run.id, { status: 'skipped', partialReason: 'no_token', errorSummary: 'Account has no stored token' });
+    return { account_id: accountId, skipped: 'no_token', sync_run_id: run.id, sync_status: 'skipped' };
+  }
 
   // Check budget — skip when account is already at cache_only/blocked.
   const budget = metaCache.budgetStatus(accountId);
-  if (budget.mode !== 'normal') return { account_id: accountId, skipped: `budget_${budget.mode}` };
+  if (budget.mode !== 'normal') {
+    await syncTruth.finishRun(run.id, {
+      status: 'skipped',
+      partialReason: 'meta_rate_limited',
+      errorSummary: `Skipped due to call budget mode: ${budget.mode}`,
+      metadata: { budget },
+    });
+    return { account_id: accountId, skipped: `budget_${budget.mode}`, sync_run_id: run.id, sync_status: 'skipped' };
+  }
 
   const report = { account_id: accountId, campaigns: 0, adsets: 0, ads: 0, insights: 0, error: null };
 
@@ -286,21 +304,59 @@ async function syncAccountEntities(accountId) {
     report.error = err.message;
   }
 
+  const attempted = report.campaigns + report.adsets + report.ads;
+  const status = report.error ? (attempted > 0 ? 'partial' : 'failed') : 'success';
+  await syncTruth.finishRun(run.id, {
+    status,
+    attemptedCount: attempted,
+    importedCount: attempted,
+    changedCount: attempted,
+    errorCount: report.error ? 1 : 0,
+    partialReason: report.error ? (isRateLimit({ message: report.error }) ? 'meta_rate_limited' : 'meta_sync_partial') : null,
+    errorSummary: report.error,
+    metadata: {
+      campaigns: report.campaigns,
+      adsets: report.adsets,
+      ads: report.ads,
+    },
+  });
+  report.sync_run_id = run.id;
+  report.sync_status = status;
   return report;
 }
 
 async function syncAccountInsights(accountId, { days = 3 } = {}) {
-  const account = await accountService.getAccountById(accountId);
-  if (!account || !account.access_token) return { account_id: accountId, skipped: 'no_token' };
-
-  const budget = metaCache.budgetStatus(accountId);
-  if (budget.mode !== 'normal') return { account_id: accountId, skipped: `budget_${budget.mode}` };
-
-  const report = { account_id: accountId, inserted: { account: 0, campaign: 0, adset: 0, ad: 0 }, error: null };
-
   const today = new Date();
   const since = new Date(today.getTime() - days * 86400000).toISOString().slice(0, 10);
   const until = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+  const run = await syncTruth.startRun({
+    source: 'meta',
+    dataset: 'warehouse_insights',
+    accountId,
+    mode: 'rolling',
+    coverageStart: since,
+    coverageEnd: until,
+    metadata: { days },
+  });
+  const account = await accountService.getAccountById(accountId);
+  if (!account || !account.access_token) {
+    await syncTruth.finishRun(run.id, { status: 'skipped', partialReason: 'no_token', errorSummary: 'Account has no stored token' });
+    return { account_id: accountId, skipped: 'no_token', sync_run_id: run.id, sync_status: 'skipped' };
+  }
+
+  const budget = metaCache.budgetStatus(accountId);
+  if (budget.mode !== 'normal') {
+    await syncTruth.finishRun(run.id, {
+      status: 'skipped',
+      partialReason: 'meta_rate_limited',
+      errorSummary: `Skipped due to call budget mode: ${budget.mode}`,
+      metadata: { budget },
+    });
+    return { account_id: accountId, skipped: `budget_${budget.mode}`, sync_run_id: run.id, sync_status: 'skipped' };
+  }
+
+  const report = { account_id: accountId, inserted: { account: 0, campaign: 0, adset: 0, ad: 0 }, error: null };
+
   const timeRange = { since, until };
 
   try {
@@ -323,16 +379,56 @@ async function syncAccountInsights(accountId, { days = 3 } = {}) {
     report.error = err.message;
   }
 
+  const inserted = Object.values(report.inserted || {}).reduce((sum, value) => sum + (parseInt(value, 10) || 0), 0);
+  const status = report.error ? (inserted > 0 ? 'partial' : 'failed') : 'success';
+  await syncTruth.finishRun(run.id, {
+    status,
+    attemptedCount: inserted,
+    importedCount: inserted,
+    changedCount: inserted,
+    errorCount: report.error ? 1 : 0,
+    partialReason: report.error ? (isRateLimit({ message: report.error }) ? 'meta_rate_limited' : 'meta_sync_partial') : null,
+    errorSummary: report.error,
+    coverageStart: since,
+    coverageEnd: until,
+    metadata: { inserted: report.inserted },
+  });
+  report.sync_run_id = run.id;
+  report.sync_status = status;
   return report;
 }
 
 async function syncAccountInsightsRange(accountId, { since, until, levels = ['account'] } = {}) {
+  const run = await syncTruth.startRun({
+    source: 'meta',
+    dataset: 'warehouse_insights',
+    accountId,
+    mode: 'range',
+    coverageStart: since,
+    coverageEnd: until,
+    metadata: { levels },
+  });
   const account = await accountService.getAccountById(accountId);
-  if (!account || !account.access_token) return { account_id: accountId, skipped: 'no_token' };
-  if (!since || !until) throw new Error('since and until are required');
+  if (!account || !account.access_token) {
+    await syncTruth.finishRun(run.id, { status: 'skipped', partialReason: 'no_token', errorSummary: 'Account has no stored token' });
+    return { account_id: accountId, skipped: 'no_token', sync_run_id: run.id, sync_status: 'skipped' };
+  }
+  if (!since || !until) {
+    const err = new Error('since and until are required');
+    await syncTruth.markRunFailed(run.id, err);
+    throw err;
+  }
 
   const budget = metaCache.budgetStatus(accountId);
-  if (budget.mode !== 'normal') return { account_id: accountId, skipped: `budget_${budget.mode}` };
+  if (budget.mode !== 'normal') {
+    await syncTruth.finishRun(run.id, {
+      status: 'skipped',
+      partialReason: 'meta_rate_limited',
+      errorSummary: `Skipped due to call budget mode: ${budget.mode}`,
+      metadata: { budget },
+    });
+    return { account_id: accountId, skipped: `budget_${budget.mode}`, sync_run_id: run.id, sync_status: 'skipped' };
+  }
 
   const report = { account_id: accountId, inserted: {}, error: null };
   const adAccountId = metaApi.contextAccountId(account);
@@ -349,6 +445,22 @@ async function syncAccountInsightsRange(accountId, { since, until, levels = ['ac
   } catch (err) {
     report.error = err.message;
   }
+  const inserted = Object.values(report.inserted || {}).reduce((sum, value) => sum + (parseInt(value, 10) || 0), 0);
+  const status = report.error ? (inserted > 0 ? 'partial' : 'failed') : 'success';
+  await syncTruth.finishRun(run.id, {
+    status,
+    attemptedCount: inserted,
+    importedCount: inserted,
+    changedCount: inserted,
+    errorCount: report.error ? 1 : 0,
+    partialReason: report.error ? (isRateLimit({ message: report.error }) ? 'meta_rate_limited' : 'meta_sync_partial') : null,
+    errorSummary: report.error,
+    coverageStart: since,
+    coverageEnd: until,
+    metadata: { inserted: report.inserted, levels },
+  });
+  report.sync_run_id = run.id;
+  report.sync_status = status;
   return report;
 }
 

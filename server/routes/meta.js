@@ -346,7 +346,8 @@ router.get('/leads-sync-status', async (req, res) => {
     const account = req.metaAccount;
     if (!account?.id) return res.json({ configured: false });
     const row = await require('../db').queryOne(
-      `SELECT last_leads_sync_at, last_leads_sync_count, last_leads_sync_scan_count, last_leads_sync_ad_count,
+      `SELECT last_leads_sync_at, last_leads_sync_attempted_at, last_leads_sync_success_at,
+              last_leads_sync_count, last_leads_sync_scan_count, last_leads_sync_ad_count,
               last_leads_sync_mode, last_leads_sync_since, last_leads_sync_until, last_leads_sync_error
        FROM accounts WHERE id = $1`,
       [account.id]
@@ -355,6 +356,8 @@ router.get('/leads-sync-status', async (req, res) => {
       configured: true,
       account_id: account.id,
       last_sync_at: row?.last_leads_sync_at || null,
+      last_attempted_sync_at: row?.last_leads_sync_attempted_at || null,
+      last_successful_sync_at: row?.last_leads_sync_success_at || null,
       last_sync_count: row?.last_leads_sync_count || 0,
       last_scan_count: row?.last_leads_sync_scan_count || 0,
       last_ad_count: row?.last_leads_sync_ad_count || 0,

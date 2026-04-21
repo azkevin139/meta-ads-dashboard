@@ -3,6 +3,7 @@ const metaCache = require('./metaCache');
 const tracking = require('./trackingService');
 const { query, queryAll, queryOne } = require('../db');
 const accountService = require('./accountService');
+const syncTruth = require('./syncTruthService');
 
 const LEAD_CAMPAIGN_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
 const MAX_ADS_PER_ACCOUNT = parseInt(process.env.META_LEAD_SYNC_MAX_ADS_PER_ACCOUNT, 10) || 20;
@@ -106,31 +107,63 @@ async function syncAccountLeads(account, options = {}) {
   if (!account || !account.id) throw new Error('Account required');
   options = normalizeSyncOptions(options);
 
+  const sinceRow = await queryOne('SELECT last_leads_sync_success_at, last_leads_sync_at FROM accounts WHERE id = $1', [account.id]);
+  const sinceTs = options.sinceOverride || (options.mode === 'incremental'
+    ? (sinceRow?.last_leads_sync_success_at || sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_success_at || sinceRow.last_leads_sync_at) : null)
+    : null);
+  const untilTs = options.untilOverride || null;
+  const run = await syncTruth.startRun({
+    source: 'meta',
+    dataset: 'leads',
+    accountId: account.id,
+    mode: options.mode,
+    coverageStart: sinceTs ? sinceTs.toISOString() : null,
+    coverageEnd: untilTs ? untilTs.toISOString() : null,
+    triggeredBy: options.triggeredBy || null,
+    requestId: options.requestId || null,
+    metadata: {
+      include_archived: options.includeArchived,
+      max_ads: options.maxAds,
+    },
+  });
+
   const cooldownRemaining = metaApi.getCooldownRemainingSeconds();
   if (cooldownRemaining > 0) {
+    await syncTruth.finishRun(run.id, {
+      status: 'skipped',
+      partialReason: 'meta_rate_limited',
+      errorSummary: `Skipped due to Meta cooldown (${cooldownRemaining}s remaining)`,
+    });
     return {
       account_id: account.id,
       meta_account_id: account.meta_account_id,
       imported: 0,
       skipped: 0,
       error: `Skipped due to Meta cooldown (${cooldownRemaining}s remaining)`,
+      sync_run_id: run.id,
+      sync_status: 'skipped',
     };
   }
 
   const budget = metaCache.budgetStatus(account.id);
   if (budget.mode !== 'normal') {
+    await syncTruth.finishRun(run.id, {
+      status: 'skipped',
+      partialReason: 'meta_rate_limited',
+      errorSummary: `Skipped due to call budget mode: ${budget.mode}`,
+      metadata: { budget },
+    });
     return {
       account_id: account.id,
       meta_account_id: account.meta_account_id,
       imported: 0,
       skipped: 0,
       error: `Skipped due to call budget mode: ${budget.mode}`,
+      sync_run_id: run.id,
+      sync_status: 'skipped',
     };
   }
 
-  const sinceRow = await queryOne('SELECT last_leads_sync_at FROM accounts WHERE id = $1', [account.id]);
-  const sinceTs = options.sinceOverride || (options.mode === 'incremental' ? (sinceRow?.last_leads_sync_at ? new Date(sinceRow.last_leads_sync_at) : null) : null);
-  const untilTs = options.untilOverride || null;
   const sinceUnix = sinceTs ? Math.floor(sinceTs.getTime() / 1000) : null;
   const untilUnix = untilTs ? Math.floor(untilTs.getTime() / 1000) : null;
 
@@ -178,7 +211,9 @@ async function syncAccountLeads(account, options = {}) {
 
   await query(`
     UPDATE accounts
-    SET last_leads_sync_at = NOW(),
+    SET last_leads_sync_attempted_at = NOW(),
+        last_leads_sync_at = NOW(),
+        last_leads_sync_success_at = CASE WHEN $8::text IS NULL THEN NOW() ELSE last_leads_sync_success_at END,
         last_leads_sync_count = $2,
         last_leads_sync_scan_count = $3,
         last_leads_sync_ad_count = $4,
@@ -189,6 +224,22 @@ async function syncAccountLeads(account, options = {}) {
         updated_at = NOW()
     WHERE id = $1
   `, [account.id, imported, scanned, adCount, options.mode, sinceTs ? sinceTs.toISOString() : null, untilTs ? untilTs.toISOString() : null, errorMessage]);
+
+  const syncStatus = errorMessage ? (scanned > 0 || imported > 0 ? 'partial' : 'failed') : 'success';
+  await syncTruth.finishRun(run.id, {
+    status: syncStatus,
+    attemptedCount: scanned,
+    importedCount: imported,
+    skippedCount: skipped,
+    errorCount: errorMessage || skipped ? 1 : 0,
+    partialReason: errorMessage ? (/rate limit|user request limit/i.test(errorMessage) ? 'meta_rate_limited' : 'meta_sync_partial') : null,
+    errorSummary: errorMessage,
+    metadata: {
+      ad_count: adCount,
+      include_archived: options.includeArchived,
+      max_ads: options.maxAds,
+    },
+  });
 
   return {
     account_id: account.id,
@@ -202,6 +253,8 @@ async function syncAccountLeads(account, options = {}) {
     imported,
     skipped,
     error: errorMessage,
+    sync_run_id: run.id,
+    sync_status: syncStatus,
   };
 }
 
@@ -216,7 +269,7 @@ async function syncAllAccounts() {
   const rows = await queryAll(`
     SELECT id
     FROM accounts
-    ORDER BY COALESCE(last_leads_sync_at, to_timestamp(0)) ASC, id ASC
+    ORDER BY COALESCE(last_leads_sync_success_at, last_leads_sync_at, to_timestamp(0)) ASC, id ASC
     LIMIT $1
   `, [MAX_ACCOUNTS_PER_RUN]);
   const results = [];
@@ -240,6 +293,75 @@ async function syncAllAccounts() {
     }
   }
   return results;
+}
+
+async function getLeadFormRegistry(accountId, { since, until } = {}) {
+  const account = await accountService.getAccountById(accountId);
+  if (!account) throw new Error(`Account ${accountId} not found`);
+
+  const params = [accountId];
+  let where = `
+    WHERE v.account_id = $1
+      AND v.meta_lead_id IS NOT NULL
+  `;
+  if (since) {
+    params.push(new Date(since).toISOString());
+    where += ` AND ve.fired_at >= $${params.length}::timestamptz`;
+  }
+  if (until) {
+    params.push(new Date(until).toISOString());
+    where += ` AND ve.fired_at <= $${params.length}::timestamptz`;
+  }
+
+  const forms = await queryAll(`
+    SELECT
+      COALESCE(ve.metadata->>'form_id', v.raw->'metadata'->>'form_id', 'unknown') AS form_id,
+      COUNT(DISTINCT v.meta_lead_id) AS lead_count,
+      COUNT(DISTINCT v.ad_id) AS ad_count,
+      MIN(ve.fired_at) AS first_seen_at,
+      MAX(ve.fired_at) AS last_seen_at,
+      ARRAY_REMOVE(ARRAY_AGG(DISTINCT v.campaign_id), NULL) AS campaign_ids
+    FROM visitors v
+    LEFT JOIN visitor_events ve
+      ON ve.client_id = v.client_id
+     AND ve.event_name = 'MetaLead'
+    ${where}
+    GROUP BY COALESCE(ve.metadata->>'form_id', v.raw->'metadata'->>'form_id', 'unknown')
+    ORDER BY lead_count DESC, form_id
+  `, params);
+
+  const status = await queryOne(`
+    SELECT last_leads_sync_at, last_leads_sync_attempted_at, last_leads_sync_success_at,
+           last_leads_sync_count, last_leads_sync_scan_count, last_leads_sync_ad_count,
+           last_leads_sync_mode, last_leads_sync_since, last_leads_sync_until, last_leads_sync_error
+    FROM accounts WHERE id = $1
+  `, [accountId]);
+
+  return {
+    account_id: accountId,
+    meta_account_id: account.meta_account_id,
+    sync: {
+      last_sync_at: status?.last_leads_sync_at || null,
+      last_attempted_sync_at: status?.last_leads_sync_attempted_at || null,
+      last_successful_sync_at: status?.last_leads_sync_success_at || null,
+      last_sync_count: status?.last_leads_sync_count || 0,
+      last_scan_count: status?.last_leads_sync_scan_count || 0,
+      last_ad_count: status?.last_leads_sync_ad_count || 0,
+      last_sync_mode: status?.last_leads_sync_mode || 'incremental',
+      last_sync_since: status?.last_leads_sync_since || null,
+      last_sync_until: status?.last_leads_sync_until || null,
+      last_sync_error: status?.last_leads_sync_error || null,
+    },
+    forms: forms.map((row) => ({
+      form_id: row.form_id,
+      lead_count: parseInt(row.lead_count, 10) || 0,
+      ad_count: parseInt(row.ad_count, 10) || 0,
+      first_seen_at: row.first_seen_at,
+      last_seen_at: row.last_seen_at,
+      campaign_ids: row.campaign_ids || [],
+      coverage: row.form_id === 'unknown' ? 'partial' : 'imported_history',
+    })),
+  };
 }
 
 function startBackgroundSync({ intervalMs = 15 * 60 * 1000 } = {}) {
@@ -269,4 +391,5 @@ module.exports = {
   syncAccountById,
   syncAllAccounts,
   startBackgroundSync,
+  getLeadFormRegistry,
 };

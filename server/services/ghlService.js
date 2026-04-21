@@ -4,6 +4,7 @@ const { query, queryAll, queryOne } = require('../db');
 const accountService = require('./accountService');
 const config = require('../config');
 const { normalizeStage } = require('./lifecycleStageService');
+const syncTruth = require('./syncTruthService');
 
 // GHL has two API flavors:
 //   v1: https://rest.gohighlevel.com/v1/  (Location API keys, "Bearer <key>")
@@ -13,13 +14,21 @@ const { normalizeStage } = require('./lifecycleStageService');
 const V1_BASE = 'https://rest.gohighlevel.com/v1';
 const V2_BASE = 'https://services.leadconnectorhq.com';
 
-function encryptionKey() {
-  return crypto.createHash('sha256').update(config.authSecret).digest();
+function encryptionKey(secret) {
+  return crypto.createHash('sha256').update(secret).digest();
+}
+function encryptionSecrets() {
+  return Array.from(new Set([
+    config.accountTokenSecret,
+    ...(config.legacyAccountTokenSecrets || []),
+    config.authSecret,
+    ...(config.legacySessionSecrets || []),
+  ].filter(Boolean)));
 }
 function encrypt(value) {
   if (!value) return null;
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(encryptionSecrets()[0]), iv);
   const ct = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `${iv.toString('base64')}:${tag.toString('base64')}:${ct.toString('base64')}`;
@@ -28,9 +37,16 @@ function decrypt(blob) {
   if (!blob) return null;
   const [iv, tag, ct] = String(blob).split(':');
   if (!iv || !tag || !ct) return null;
-  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(tag, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(ct, 'base64')), decipher.final()]).toString('utf8');
+  for (const secret of encryptionSecrets()) {
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(secret), Buffer.from(iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(tag, 'base64'));
+      return Buffer.concat([decipher.update(Buffer.from(ct, 'base64')), decipher.final()]).toString('utf8');
+    } catch (_err) {
+      // Try the next configured legacy secret.
+    }
+  }
+  return null;
 }
 
 function hashIdentity(value) {
@@ -134,7 +150,7 @@ async function listContacts(account, { since, limit = 100 } = {}) {
   // v1: GET /contacts/?limit=&startAfterId=&query=
   // v2: GET /contacts/?locationId=&limit=&startAfter=
   const params = { limit };
-  if (since) params.startAfter = new Date(since).toISOString();
+  if (since) params.startAfter = new Date(since).getTime();
   const data = await ghlRequest(account, '/contacts/', { query: params });
   // Both flavors return { contacts: [...], meta: {...} }
   return data.contacts || data.data || [];
@@ -185,7 +201,7 @@ async function listContactsPage(account, { limit = 100, cursor, since } = {}) {
   const params = { limit };
   if (cursor?.type === 'startAfter' && cursor.value) params.startAfter = cursor.value;
   else if (cursor?.type === 'startAfterId' && cursor.value) params.startAfterId = cursor.value;
-  else if (since) params.startAfter = new Date(since).toISOString();
+  else if (since) params.startAfter = new Date(since).getTime();
   const data = await ghlRequest(account, '/contacts/', { query: params });
   const contacts = data.contacts || data.data || [];
   return {
@@ -341,7 +357,16 @@ async function emitLifecycleEvents(account, clientId, previousVisitor, normalise
   for (const event of events) {
     await query(`
       INSERT INTO visitor_events (client_id, account_id, event_name, campaign_id, adset_id, ad_id, value, currency, metadata, fired_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM visitor_events
+        WHERE account_id = $2
+          AND event_name = $3
+          AND fired_at = $10::timestamptz
+          AND metadata->>'source' = 'ghl'
+          AND metadata->>'ghl_contact_id' = $11
+      )
     `, [
       clientId,
       account.id,
@@ -356,6 +381,7 @@ async function emitLifecycleEvents(account, clientId, previousVisitor, normalise
         ...(event.metadata || {}),
       }),
       firedAt,
+      String(normalised.ghl_contact_id),
     ]);
   }
 }
@@ -480,6 +506,17 @@ async function syncAccount(account, options = {}) {
   let lastCursor = null;
   let oldestSyncedAt = account.ghl_oldest_synced_at || null;
   const { mode, since, until, limit, maxPages } = normaliseSyncOptions(account, options);
+  const run = await syncTruth.startRun({
+    source: 'ghl',
+    dataset: 'contacts',
+    accountId: account.id,
+    mode,
+    coverageStart: since ? new Date(since).toISOString() : null,
+    coverageEnd: until ? new Date(until).toISOString() : null,
+    triggeredBy: options.triggeredBy || null,
+    requestId: options.requestId || null,
+    metadata: { limit, max_pages: maxPages },
+  });
   try {
     let cursor = null;
     for (let page = 0; page < maxPages; page += 1) {
@@ -511,14 +548,16 @@ async function syncAccount(account, options = {}) {
 
   await query(`
     UPDATE accounts
-    SET ghl_last_sync_at = NOW(),
+    SET ghl_last_sync_attempted_at = NOW(),
+        ghl_last_sync_at = NOW(),
+        ghl_last_sync_success_at = CASE WHEN $8::text IS NULL THEN NOW() ELSE ghl_last_sync_success_at END,
         ghl_last_sync_count = $2,
         ghl_last_scan_count = $3,
         ghl_last_match_count = $4,
         ghl_last_sync_mode = $5,
         ghl_last_cursor = $6,
-        ghl_last_bootstrap_at = CASE WHEN $5 = 'full' AND $7 IS NULL THEN NOW() ELSE ghl_last_bootstrap_at END,
-        ghl_oldest_synced_at = COALESCE($7, ghl_oldest_synced_at),
+        ghl_last_bootstrap_at = CASE WHEN $5::text = 'full' AND $7::timestamptz IS NULL THEN NOW() ELSE ghl_last_bootstrap_at END,
+        ghl_oldest_synced_at = COALESCE($7::timestamptz, ghl_oldest_synced_at),
         ghl_last_sync_error = $8,
         updated_at = NOW()
     WHERE id = $1
@@ -533,6 +572,18 @@ async function syncAccount(account, options = {}) {
     errorMessage,
   ]);
 
+  const status = errorMessage ? (scanned > 0 || imported > 0 ? 'partial' : 'failed') : 'success';
+  await syncTruth.finishRun(run.id, {
+    status,
+    attemptedCount: scanned,
+    importedCount: imported,
+    changedCount: matched,
+    skippedCount: Math.max(scanned - imported, 0),
+    errorCount: errorMessage ? 1 : 0,
+    partialReason: errorMessage ? 'ghl_auth_failed' : null,
+    errorSummary: errorMessage,
+    metadata: { pages, cursor: lastCursor },
+  });
   return {
     account_id: account.id,
     mode,
@@ -544,6 +595,8 @@ async function syncAccount(account, options = {}) {
     matched,
     cursor: lastCursor,
     error: errorMessage,
+    sync_run_id: run.id,
+    sync_status: status,
   };
 }
 
@@ -590,7 +643,8 @@ function startBackgroundSync({ intervalMs = 6 * 3600 * 1000 } = {}) {
 async function getStatus(accountId) {
   const row = await queryOne(`
     SELECT id, ghl_api_key_encrypted IS NOT NULL AS configured,
-           ghl_location_id, ghl_last_sync_at, ghl_last_sync_count, ghl_last_scan_count,
+           ghl_location_id, ghl_last_sync_at, ghl_last_sync_attempted_at, ghl_last_sync_success_at,
+           ghl_last_sync_count, ghl_last_scan_count,
            ghl_last_match_count, ghl_last_sync_mode, ghl_last_cursor, ghl_last_bootstrap_at,
            ghl_oldest_synced_at, ghl_last_sync_error
     FROM accounts WHERE id = $1
@@ -601,6 +655,8 @@ async function getStatus(accountId) {
     configured: row.configured,
     location_id: row.ghl_location_id,
     last_sync_at: row.ghl_last_sync_at,
+    last_attempted_sync_at: row.ghl_last_sync_attempted_at,
+    last_successful_sync_at: row.ghl_last_sync_success_at,
     last_sync_count: row.ghl_last_sync_count || 0,
     last_scan_count: row.ghl_last_scan_count || 0,
     last_match_count: row.ghl_last_match_count || 0,

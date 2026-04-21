@@ -5,6 +5,7 @@ const metaLeadSync = require('./metaLeadSyncService');
 const ghl = require('./ghlService');
 const warehouse = require('./warehouseSyncService');
 const diagnostics = require('./trackingDiagnosticsService');
+const syncTruth = require('./syncTruthService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const OUTAGE_FILE = path.join(DATA_DIR, 'tracking-outages.json');
@@ -269,12 +270,21 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
   const start = validateDate(outage_start, 'outage_start');
   const end = validateDate(outage_end, 'outage_end');
   if (start > end) throw new Error('outage_end must be on or after outage_start');
+  const run = await syncTruth.startRun({
+    source: 'recovery',
+    dataset: 'tracking_outage_backfill',
+    accountId,
+    mode: 'range',
+    coverageStart: start,
+    coverageEnd: end,
+  });
 
   const [meta, ghlResult, warehouseResult] = await Promise.all([
-    metaLeadSync.syncAccountById(accountId, { sinceOverride: start }).catch((err) => ({ error: err.message })),
-    ghl.syncAccountById(accountId, { sinceOverride: start }).catch((err) => ({ error: err.message })),
+    metaLeadSync.syncAccountById(accountId, { sinceOverride: start, triggeredBy: 'tracking_recovery' }).catch((err) => ({ error: err.message })),
+    ghl.syncAccountById(accountId, { sinceOverride: start, triggeredBy: 'tracking_recovery' }).catch((err) => ({ error: err.message })),
     warehouse.syncAccountInsightsRange(accountId, { since: start, until: end, levels: ['account'] }).catch((err) => ({ error: err.message })),
   ]);
+  const errorCount = [meta, ghlResult, warehouseResult].filter((result) => result?.error).length;
 
   const data = readOutages();
   data[String(accountId)] = {
@@ -289,6 +299,21 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
     },
   };
   writeOutages(data);
+  await syncTruth.finishRun(run.id, {
+    status: errorCount ? 'partial' : 'success',
+    attemptedCount: 3,
+    importedCount: [meta, ghlResult, warehouseResult].filter((result) => !result?.error).length,
+    errorCount,
+    partialReason: errorCount ? 'outage_window_applied' : null,
+    errorSummary: errorCount ? [meta, ghlResult, warehouseResult].map((result) => result?.error).filter(Boolean).join(' | ') : null,
+    coverageStart: start,
+    coverageEnd: end,
+    metadata: {
+      meta_leads: meta,
+      ghl_contacts: ghlResult,
+      meta_aggregate: warehouseResult,
+    },
+  });
 
   return {
     outage_start: start,
@@ -296,6 +321,7 @@ async function runBackfill(accountId, { outage_start, outage_end }) {
     meta_leads: meta,
     ghl_contacts: ghlResult,
     meta_aggregate: warehouseResult,
+    sync_run_id: run.id,
   };
 }
 

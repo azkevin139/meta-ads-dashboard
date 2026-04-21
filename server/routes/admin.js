@@ -2,6 +2,8 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const auth = require('../services/authService');
+const syncTruth = require('../services/syncTruthService');
+const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
 
 // Admin-only middleware
@@ -29,6 +31,53 @@ router.get('/sessions', async (req, res) => {
   try {
     const sessions = await auth.getActiveSessions();
     res.json({ data: sessions });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/data-health', async (req, res) => {
+  try {
+    const accountId = req.query.accountId ? ensureInteger(req.query.accountId, 'accountId must be a positive integer') : null;
+    const runs = await syncTruth.getHealth(accountId);
+    const params = [];
+    let where = '';
+    if (accountId) {
+      params.push(accountId);
+      where = 'WHERE account_id = $1';
+    }
+    const warehouseCoverage = await queryAll(`
+      SELECT
+        account_id,
+        level,
+        MIN(date) AS coverage_start,
+        MAX(date) AS coverage_end,
+        COUNT(*)::int AS row_count,
+        COUNT(DISTINCT date)::int AS day_count,
+        MAX(date) AS latest_date
+      FROM daily_insights
+      ${where}
+      GROUP BY account_id, level
+      ORDER BY account_id, level
+    `, params);
+    res.json({
+      data: runs,
+      warehouse_coverage: warehouseCoverage,
+      reason_codes: [
+        'tracker_not_installed',
+        'tracker_underreporting',
+        'meta_sync_partial',
+        'meta_rate_limited',
+        'lead_sync_ad_cap',
+        'ghl_auth_failed',
+        'ghl_stage_unmapped',
+        'warehouse_stale',
+        'true_zero_likely',
+        'identity_low_confidence',
+        'outage_window_applied',
+        'no_token',
+      ],
+    });
   } catch (err) {
     sendError(res, err);
   }
