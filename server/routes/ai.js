@@ -2,12 +2,14 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const aiService = require('../services/aiService');
+const accountAccess = require('../services/accountAccessService');
 const { ensureEnum, ensureInteger, ensureObject } = require('../validation');
 
 // GET /api/ai/daily?accountId=1
 router.get('/daily', async (req, res) => {
   try {
-    const accountId = parseInt(req.query.accountId, 10) || 1;
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const accountId = account.id;
     const analysis = await aiService.getDailyAnalysis(accountId);
     res.json({ data: analysis });
   } catch (err) {
@@ -18,7 +20,8 @@ router.get('/daily', async (req, res) => {
 // GET /api/ai/recommendations?accountId=1&status=pending
 router.get('/recommendations', async (req, res) => {
   try {
-    const accountId = parseInt(req.query.accountId, 10) || 1;
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const accountId = account.id;
     const status = ensureEnum(req.query.status || 'pending', ['all', 'pending', 'approved', 'dismissed'], 'Invalid status');
     const recs = await aiService.getRecommendations(accountId, status);
     res.json({ data: recs });
@@ -31,9 +34,10 @@ router.get('/recommendations', async (req, res) => {
 router.post('/run', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const rawAccountId = req.query.accountId || body.accountId || 1;
-    const accountId = ensureInteger(rawAccountId, 'accountId must be a positive integer');
-    const result = await aiService.runAnalysis(accountId, req.metaAccount);
+    const requestedAccountId = req.query.accountId || body.accountId || null;
+    const account = await accountAccess.resolveAuthorizedAccount(req, requestedAccountId, { allowAdminOverride: true });
+    const accountId = ensureInteger(account.id, 'accountId must be a positive integer');
+    const result = await aiService.runAnalysis(accountId, account);
     res.json({ data: result });
   } catch (err) {
     sendError(res, err);

@@ -2,9 +2,12 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const tracking = require('../services/trackingService');
 const diagnostics = require('../services/trackingDiagnosticsService');
-const { ensureNonEmptyString, ensureObject, optionalTrimmedString } = require('../validation');
+const trackingSecurity = require('../services/trackingSecurityService');
+const { ensureObject } = require('../validation');
 
 const router = express.Router();
+let rateLimit;
+try { rateLimit = require('express-rate-limit'); } catch (_err) { rateLimit = null; }
 
 function setTrackCors(req, res, next) {
   const origin = req.headers.origin || '*';
@@ -17,18 +20,28 @@ function setTrackCors(req, res, next) {
 }
 
 router.use(setTrackCors);
+if (rateLimit) {
+  router.use(rateLimit({
+    windowMs: 60 * 1000,
+    max: parseInt(process.env.TRACKING_IP_RATE_LIMIT_PER_MINUTE || '', 10) || 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Tracking rate limit exceeded' },
+  }));
+}
 
 router.post('/pageview', async (req, res) => {
   let metaAccountId = null;
   let accountId = null;
   try {
-    const body = ensureObject(req.body);
-    metaAccountId = ensureNonEmptyString(body.meta_account_id, 'meta_account_id required');
+    ensureObject(req.body);
+    const body = await trackingSecurity.validateRequest(req);
+    metaAccountId = body.meta_account_id;
     diagnostics.recordAttempt({ metaAccountId, pageUrl: body.page_url });
     const visitor = await tracking.recordEvent({
       ...body,
       meta_account_id: metaAccountId,
-      event_name: optionalTrimmedString(body.event_name, 100) || 'PageView',
+      event_name: body.event_name || 'PageView',
       metadata: {
         user_agent: req.headers['user-agent'] || null,
         ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || null,
@@ -67,13 +80,14 @@ router.post('/event', async (req, res) => {
   let metaAccountId = null;
   let accountId = null;
   try {
-    const body = ensureObject(req.body);
-    metaAccountId = ensureNonEmptyString(body.meta_account_id, 'meta_account_id required');
+    ensureObject(req.body);
+    const body = await trackingSecurity.validateRequest(req, { requireEventName: true });
+    metaAccountId = body.meta_account_id;
     diagnostics.recordAttempt({ metaAccountId, pageUrl: body.page_url });
     const visitor = await tracking.recordEvent({
       ...body,
       meta_account_id: metaAccountId,
-      event_name: ensureNonEmptyString(body.event_name, 'event_name required'),
+      event_name: body.event_name,
     });
     accountId = visitor.account_id || null;
     diagnostics.recordSuccess({ metaAccountId, accountId, status: 200, pageUrl: body.page_url });

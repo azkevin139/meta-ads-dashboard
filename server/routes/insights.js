@@ -2,11 +2,13 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const router = express.Router();
 const insights = require('../services/insightsService');
+const accountAccess = require('../services/accountAccessService');
 
 // GET /api/insights/overview?accountId=1&days=7
 router.get('/overview', async (req, res) => {
   try {
-    const accountId = parseInt(req.query.accountId, 10) || 1;
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const accountId = account.id;
     const days = parseInt(req.query.days, 10) || 7;
 
     const [overview, deltas, activeCampaigns] = await Promise.all([
@@ -24,7 +26,8 @@ router.get('/overview', async (req, res) => {
 // GET /api/insights/campaigns?accountId=1&days=7
 router.get('/campaigns', async (req, res) => {
   try {
-    const accountId = parseInt(req.query.accountId, 10) || 1;
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const accountId = account.id;
     const days = parseInt(req.query.days, 10) || 7;
     const campaigns = await insights.getCampaignInsights(accountId, days);
     res.json({ data: campaigns });

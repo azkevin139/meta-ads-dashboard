@@ -27,6 +27,12 @@ function assertLevel(level) {
   return LEVEL_CONFIG[level];
 }
 
+function requireAccountId(accountId) {
+  const parsed = parseInt(accountId, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error('accountId required');
+  return parsed;
+}
+
 function moneyToCents(value) {
   if (value === null || value === undefined || value === '') return undefined;
   const n = Number(value);
@@ -153,6 +159,7 @@ function buildAdsetUpdatePayload(input = {}, currentTargeting = {}) {
 
 async function updateEntity(accountId, level, id, rawInput = {}, performedBy = null, context = {}) {
   assertLevel(level);
+  const resolvedAccountId = requireAccountId(accountId);
   const before = await getEntity(level, id, context);
   let payload;
 
@@ -167,7 +174,7 @@ async function updateEntity(accountId, level, id, rawInput = {}, performedBy = n
   await metaApi.metaPost(`/${id}`, payload, context);
   const after = await getEntity(level, id, context);
 
-  await logAction(accountId || 1, level, id, after.name || before.name || id, 'entity_update', {
+  await logAction(resolvedAccountId, level, id, after.name || before.name || id, 'entity_update', {
     changed_fields: Object.keys(payload),
     before,
     after,
@@ -179,10 +186,11 @@ async function updateEntity(accountId, level, id, rawInput = {}, performedBy = n
 }
 
 async function updateEntityStatus(accountId, level, id, status, performedBy = null, context = {}) {
+  const resolvedAccountId = requireAccountId(accountId);
   const before = await getEntity(level, id, context);
   await metaApi.updateStatus(id, status, context);
   const after = await getEntity(level, id, context);
-  await logAction(accountId || 1, level, id, after.name || before.name || id, 'status_change', {
+  await logAction(resolvedAccountId, level, id, after.name || before.name || id, 'status_change', {
     previous_status: before.status,
     new_status: status,
     performed_by: performedBy,
@@ -191,9 +199,10 @@ async function updateEntityStatus(accountId, level, id, status, performedBy = nu
 }
 
 async function duplicateEntity(accountId, level, id, performedBy = null, context = {}) {
+  const resolvedAccountId = requireAccountId(accountId);
   const before = await getEntity(level, id, context);
   const result = await metaApi.duplicateEntity(id, level, context);
-  await logAction(accountId || 1, level, id, before.name || id, 'duplicate', {
+  await logAction(resolvedAccountId, level, id, before.name || id, 'duplicate', {
     source_id: id,
     result,
     performed_by: performedBy,

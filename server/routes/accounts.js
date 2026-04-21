@@ -1,6 +1,7 @@
 const express = require('express');
 const { sendError } = require('../errorResponse');
 const accountService = require('../services/accountService');
+const accountAccess = require('../services/accountAccessService');
 const tokenHealth = require('../services/tokenHealthService');
 const ghl = require('../services/ghlService');
 const {
@@ -37,6 +38,7 @@ router.post('/active', async (req, res) => {
   try {
     const body = ensureObject(req.body);
     const accountId = ensureInteger(body.accountId, 'accountId required');
+    await accountAccess.assertCanSwitchToAccount(req, accountId);
     const account = await accountService.updateSessionAccount(req.user.session_token_hash, accountId);
     res.json({ success: true, data: account });
   } catch (err) {

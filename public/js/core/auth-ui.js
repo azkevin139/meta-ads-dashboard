@@ -46,6 +46,7 @@
         if (!res.ok) throw new Error(data.error);
 
         sessionState.setCurrentUser(data.user);
+        if (sessionState.setCsrfToken) sessionState.setCsrfToken(data.csrf_token);
         await onLoginSuccess(data.user);
       } catch (err) {
         errorDiv.innerHTML = `<div class="alert-banner alert-critical" style="margin-bottom:12px; font-size:0.82rem;">${err.message}</div>`;

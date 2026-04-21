@@ -208,12 +208,14 @@ async function fetchFirstPartySegment(account, step, pushMap) {
 
 async function emitSequenceWebhook(sequence, payload) {
   if (!sequence.n8n_webhook_url) return { delivered: false, skipped: true, reason: 'No webhook configured' };
+  const sentAt = nowIso();
   const raw = JSON.stringify(payload);
   const signature = signPayload(raw);
   const headers = {
     'content-type': 'application/json',
     'x-adcommand-event': 'touch-threshold-crossed',
-    'x-adcommand-sent-at': nowIso(),
+    'x-adcommand-event-id': payload.event_id,
+    'x-adcommand-sent-at': sentAt,
   };
   if (signature) headers['x-adcommand-signature'] = signature;
   const response = await fetch(sequence.n8n_webhook_url, {
@@ -300,6 +302,7 @@ async function refreshSequenceStatus(account, sequence, { pushMap } = {}) {
 
       if (current.size >= step.threshold_count && !step.last_triggered_at) {
         const payload = {
+          event_id: `touch_threshold:${account.id}:${sequence.id}:${step.id}`,
           event: 'touch_threshold_crossed',
           account_id: account.id,
           sequence_id: sequence.id,

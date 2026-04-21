@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const { sendError } = require('../errorResponse');
 const tracking = require('../services/trackingService');
+const webhookSecurity = require('../services/webhookSecurityService');
 const { ensureObject } = require('../validation');
 
 const router = express.Router();
@@ -54,7 +55,13 @@ router.post('/ghl', async (req, res) => {
     console.warn('[webhook] GHL webhook accepted WITHOUT signature check — set GHL_WEBHOOK_SECRET to enforce.');
   }
   try {
-    const visitor = await tracking.handleGhlWebhook(ensureObject(req.body));
+    const body = ensureObject(req.body);
+    const replay = await webhookSecurity.reserveRequest(req, 'ghl', body);
+    if (!replay.accepted) {
+      console.warn(`[webhook] GHL duplicate rejected: ${replay.event_id}`);
+      return res.json({ success: true, duplicate: true });
+    }
+    const visitor = await tracking.handleGhlWebhook(body);
     res.json({ success: true, client_id: visitor.client_id });
   } catch (err) {
     sendError(res, err);
@@ -73,12 +80,24 @@ router.post('/meta-leads', async (req, res) => {
   // existing handler continues below
   try {
     const body = ensureObject(req.body);
+    const replay = await webhookSecurity.reserveRequest(req, 'meta-leads', body);
+    if (!replay.accepted) {
+      console.warn(`[webhook] Meta duplicate rejected: ${replay.event_id}`);
+      return res.json({ success: true, duplicate: true, count: 0 });
+    }
     const entries = Array.isArray(body.entry) ? body.entry : [body];
     const results = [];
+    let duplicates = 0;
     for (const entry of entries) {
       const changes = Array.isArray(entry.changes) ? entry.changes : [entry];
       for (const change of changes) {
         const value = change.value || change;
+        const eventId = value.leadgen_id || value.meta_lead_id || value.id;
+        const itemReplay = await webhookSecurity.reserveExplicit('meta-lead-item', eventId, req);
+        if (!itemReplay.accepted) {
+          duplicates += 1;
+          continue;
+        }
         const visitor = await tracking.handleMetaLead({
           ...value,
           meta_lead_id: value.leadgen_id || value.meta_lead_id,
@@ -90,7 +109,7 @@ router.post('/meta-leads', async (req, res) => {
         results.push(visitor.client_id);
       }
     }
-    res.json({ success: true, count: results.length });
+    res.json({ success: true, count: results.length, duplicates });
   } catch (err) {
     sendError(res, err);
   }

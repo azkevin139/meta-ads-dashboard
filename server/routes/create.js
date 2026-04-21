@@ -4,6 +4,7 @@ const router = express.Router();
 const metaApi = require('../services/metaApi');
 const metaUsage = require('../services/metaUsageService');
 const { logAction } = require('../services/actionService');
+const accountAccess = require('../services/accountAccessService');
 const {
   badRequest,
   ensureArray,
@@ -37,8 +38,8 @@ function adminOrOperator(req, res, next) {
 
 router.use(adminOrOperator);
 
-async function ensureSafeWrite(req, res) {
-  const usage = await metaUsage.fetchLiveStatus(false, req.metaAccount);
+async function ensureSafeWrite(req, res, account = req.metaAccount) {
+  const usage = await metaUsage.fetchLiveStatus(false, account);
   if (!usage.safe_to_write) {
     res.status(429).json({ error: `Meta API write pressure is too high right now. Wait ${usage.estimated_regain_seconds || 0}s before trying again.` });
     return false;
@@ -52,8 +53,9 @@ async function ensureSafeWrite(req, res) {
 // Body: { entityIds: [...], entityType: 'campaign'|'adset'|'ad', action: 'pause'|'resume' }
 router.post('/bulk-action', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(req, res))) return;
     const body = ensureObject(req.body);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    if (!(await ensureSafeWrite(req, res, account))) return;
     const entityIds = ensureArray(body.entityIds, 'entityIds array required').map((id) => ensureNonEmptyString(id, 'entityIds must contain ids'));
     const entityType = ensureEnum(body.entityType, ['campaign', 'adset', 'ad'], 'entityType must be campaign, adset, or ad');
     const action = ensureEnum(body.action, ['pause', 'resume'], 'action must be pause or resume');
@@ -63,8 +65,8 @@ router.post('/bulk-action', async (req, res) => {
 
     for (const id of entityIds) {
       try {
-        await metaApi.metaPost(`/${id}`, { status }, req.metaAccount);
-        await logAction(req.body.accountId || 1, entityType, id, id, action, {
+        await metaApi.metaPost(`/${id}`, { status }, account);
+        await logAction(account.id, entityType, id, id, action, {
           new_status: status,
           bulk: true,
           performed_by: req.user?.email || req.user?.name || null,
@@ -93,8 +95,9 @@ router.post('/bulk-action', async (req, res) => {
 // POST /api/create/campaign
 router.post('/campaign', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(req, res))) return;
     const body = ensureObject(req.body);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    if (!(await ensureSafeWrite(req, res, account))) return;
     const name = ensureNonEmptyString(body.name, 'name required');
     const objective = ensureEnum(body.objective, CAMPAIGN_OBJECTIVES, 'objective is invalid');
     const status = body.status === undefined ? undefined : ensureEnum(body.status, CAMPAIGN_STATUSES, 'status must be PAUSED or ACTIVE');
@@ -142,8 +145,8 @@ router.post('/campaign', async (req, res) => {
     if (startTime) payload.start_time = parsedStartTime.toISOString();
     if (stopTime) payload.stop_time = parsedStopTime.toISOString();
 
-    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/campaigns`, payload, req.metaAccount);
-    await logAction(req.metaAccount?.id || 1, 'campaign', result.id, name, 'create', {
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(account)}/campaigns`, payload, account);
+    await logAction(account.id, 'campaign', result.id, name, 'create', {
       payload,
       internal_tags: internalTags,
       performed_by: req.user?.email || req.user?.name || null,
@@ -159,8 +162,9 @@ router.post('/campaign', async (req, res) => {
 // POST /api/create/adset
 router.post('/adset', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(req, res))) return;
     const body = ensureObject(req.body);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    if (!(await ensureSafeWrite(req, res, account))) return;
     const name = ensureNonEmptyString(body.name, 'name required');
     const campaignId = ensureNonEmptyString(body.campaignId, 'campaignId required');
     const status = optionalTrimmedString(body.status, 50);
@@ -243,8 +247,8 @@ router.post('/adset', async (req, res) => {
       };
     }
 
-    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adsets`, payload, req.metaAccount);
-    await logAction(req.body.accountId || 1, 'adset', result.id, name, 'create', {
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(account)}/adsets`, payload, account);
+    await logAction(account.id, 'adset', result.id, name, 'create', {
       payload,
       performed_by: req.user?.email || req.user?.name || null,
     });
@@ -259,8 +263,9 @@ router.post('/adset', async (req, res) => {
 // POST /api/create/ad
 router.post('/ad', async (req, res) => {
   try {
-    if (!(await ensureSafeWrite(req, res))) return;
     const body = ensureObject(req.body);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    if (!(await ensureSafeWrite(req, res, account))) return;
     const name = ensureNonEmptyString(body.name, 'name required');
     const adsetId = ensureNonEmptyString(body.adsetId, 'adsetId required');
     const status = optionalTrimmedString(body.status, 50);
@@ -319,7 +324,7 @@ router.post('/ad', async (req, res) => {
         });
       }
 
-      const creativeResult = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adcreatives`, creativePayload, req.metaAccount);
+      const creativeResult = await metaApi.metaPost(`/${metaApi.contextAccountId(account)}/adcreatives`, creativePayload, account);
       creative_id = creativeResult.id;
     }
 
@@ -331,8 +336,8 @@ router.post('/ad', async (req, res) => {
       creative: JSON.stringify({ creative_id }),
     };
 
-    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/ads`, adPayload, req.metaAccount);
-    await logAction(req.body.accountId || 1, 'ad', result.id, name, 'create', {
+    const result = await metaApi.metaPost(`/${metaApi.contextAccountId(account)}/ads`, adPayload, account);
+    await logAction(account.id, 'ad', result.id, name, 'create', {
       adset_id: adsetId,
       creative_id,
       status: status || 'PAUSED',

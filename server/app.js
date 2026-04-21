@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const authMiddleware = require('./middleware/auth');
+const csrfMiddleware = require('./middleware/csrf');
 const metaUsage = require('./services/metaUsageService');
 
 let helmet, rateLimit;
@@ -37,6 +38,16 @@ function createApp(config) {
     app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Try again later.' } }));
   }
 
+  app.use('/api/track', (req, res, next) => {
+    const origin = req.headers.origin || '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    next();
+  });
+
   app.use(cors({
     origin: ['http://72.62.94.97:4000', 'http://localhost:4000', 'https://ads.emma42.com', 'https://track.lnxo.me'],
     methods: ['GET', 'POST', 'DELETE'],
@@ -54,6 +65,7 @@ function createApp(config) {
   });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use('/api', authMiddleware);
+  app.use('/api', csrfMiddleware);
 
   const readOnly = process.env.READ_ONLY === 'true';
   if (readOnly) {

@@ -3,6 +3,7 @@ const { sendError } = require('../errorResponse');
 const router = express.Router();
 const actionService = require('../services/actionService');
 const metaUsage = require('../services/metaUsageService');
+const accountAccess = require('../services/accountAccessService');
 const { ensureNonEmptyString, ensureObject, optionalNumber } = require('../validation');
 
 // Role guard — only operators and admins can make changes
@@ -30,8 +31,8 @@ router.post('/pause', adminOrOperator, async (req, res) => {
     const body = ensureObject(req.body);
     const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
     const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
-    const accountId = body.accountId;
-    const result = await actionService.pauseEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const result = await actionService.pauseEntity(account.id, entityType, metaEntityId, account);
     res.json(result);
   } catch (err) {
     sendError(res, err);
@@ -45,8 +46,8 @@ router.post('/resume', adminOrOperator, async (req, res) => {
     const body = ensureObject(req.body);
     const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
     const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
-    const accountId = body.accountId;
-    const result = await actionService.resumeEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const result = await actionService.resumeEntity(account.id, entityType, metaEntityId, account);
     res.json(result);
   } catch (err) {
     sendError(res, err);
@@ -62,7 +63,8 @@ router.post('/budget', adminOrOperator, async (req, res) => {
     const metaAdSetId = ensureNonEmptyString(body.metaAdSetId, 'metaAdSetId required');
     const newBudget = optionalNumber(body.newBudget, 'newBudget must be numeric');
     if (newBudget === undefined) return res.status(400).json({ error: 'newBudget required' });
-    const result = await actionService.updateBudget(body.accountId || 1, metaAdSetId, newBudget, req.metaAccount);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const result = await actionService.updateBudget(account.id, metaAdSetId, newBudget, account);
     res.json(result);
   } catch (err) {
     sendError(res, err);
@@ -77,8 +79,8 @@ router.post('/duplicate', adminOrOperator, async (req, res) => {
     const body = ensureObject(req.body);
     const entityType = ensureNonEmptyString(body.entityType, 'entityType required');
     const metaEntityId = ensureNonEmptyString(body.metaEntityId, 'metaEntityId required');
-    const accountId = body.accountId;
-    const result = await actionService.duplicateEntity(accountId || 1, entityType, metaEntityId, req.metaAccount);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId, { allowAdminOverride: true });
+    const result = await actionService.duplicateEntity(account.id, entityType, metaEntityId, account);
     res.json(result);
   } catch (err) {
     sendError(res, err);

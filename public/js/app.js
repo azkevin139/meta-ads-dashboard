@@ -207,6 +207,7 @@ async function showDashboard() {
     const res = await api('/auth/me');
     appState.setCurrentUser(res.user);
     sessionState.setCurrentUser(res.user);
+    if (sessionState.setCsrfToken) sessionState.setCsrfToken(res.csrf_token);
   } catch (e) {
     showLogin();
     return;

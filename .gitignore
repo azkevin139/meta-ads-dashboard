@@ -1,1 +1,3 @@
-node_modules/\n.env\n*.tar.gz
+node_modules/
+.env
+*.tar.gz

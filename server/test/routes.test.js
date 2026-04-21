@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const express = require('express');
 const { invoke, makeJsonApp } = require('./helpers');
 
 function restoreCache(entries) {
@@ -12,17 +13,21 @@ function restoreCache(entries) {
 test('auth login sets session cookie and registration is disabled by default', async () => {
   const authServicePath = require.resolve('../services/authService');
   const configPath = require.resolve('../config');
+  const csrfServicePath = require.resolve('../services/csrfService');
   const routePath = require.resolve('../routes/auth');
   const originals = new Map([
     [authServicePath, require.cache[authServicePath]],
     [configPath, require.cache[configPath]],
+    [csrfServicePath, require.cache[csrfServicePath]],
     [routePath, require.cache[routePath]],
   ]);
 
   delete require.cache[routePath];
+  delete require.cache[csrfServicePath];
   require.cache[authServicePath] = {
     exports: {
       login: async () => ({ token: 'signed-token', user: { id: 1, email: 'a@test.com', role: 'admin' } }),
+      hashSessionToken: () => 'hashed-signed-token',
       logout: async () => {},
       getUserFromToken: async () => ({ id: 1, email: 'a@test.com', role: 'admin' }),
       register: async () => ({ id: 2 }),
@@ -32,6 +37,7 @@ test('auth login sets session cookie and registration is disabled by default', a
     exports: {
       isProduction: false,
       allowSelfSignup: false,
+      sessionSecret: 'test-session-secret',
     },
   };
 
@@ -48,6 +54,7 @@ test('auth login sets session cookie and registration is disabled by default', a
     assert.match(loginRes.headers['set-cookie'] || '', /session_token=/);
     assert.equal(loginRes.json.user.email, 'a@test.com');
     assert.equal(loginRes.json.token, undefined);
+    assert.equal(typeof loginRes.json.csrf_token, 'string');
 
     const registerRes = await invoke(app, {
       method: 'POST',
@@ -56,6 +63,50 @@ test('auth login sets session cookie and registration is disabled by default', a
       body: { email: 'b@test.com', password: 'very-secure-password' },
     });
     assert.equal(registerRes.status, 403);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('csrf middleware requires token for authenticated writes', async () => {
+  const configPath = require.resolve('../config');
+  const csrfServicePath = require.resolve('../services/csrfService');
+  const middlewarePath = require.resolve('../middleware/csrf');
+  const originals = new Map([
+    [configPath, require.cache[configPath]],
+    [csrfServicePath, require.cache[csrfServicePath]],
+    [middlewarePath, require.cache[middlewarePath]],
+  ]);
+
+  delete require.cache[csrfServicePath];
+  delete require.cache[middlewarePath];
+  require.cache[configPath] = {
+    exports: {
+      sessionSecret: 'test-session-secret',
+    },
+  };
+
+  try {
+    const csrf = require('../services/csrfService');
+    const csrfMiddleware = require('../middleware/csrf');
+    const app = express();
+    app.use((req, _res, next) => {
+      req.user = { session_token_hash: 'session-hash' };
+      next();
+    });
+    app.post('/protected', csrfMiddleware, (_req, res) => res.json({ ok: true }));
+
+    const denied = await invoke(app, { method: 'POST', url: '/protected' });
+    assert.equal(denied.status, 403);
+    assert.match(denied.json.error, /Invalid CSRF token/);
+
+    const allowed = await invoke(app, {
+      method: 'POST',
+      url: '/protected',
+      headers: { 'x-csrf-token': csrf.createToken('session-hash') },
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.json.ok, true);
   } finally {
     restoreCache(originals);
   }
@@ -355,7 +406,7 @@ test('create campaign validates enums, schedule, and logs against resolved accou
       url: '/campaign',
       headers: { 'content-type': 'application/json' },
       body: {
-        accountId: 999,
+        accountId: 44,
         name: 'Test Campaign',
         objective: 'OUTCOME_SALES',
         status: 'ACTIVE',
@@ -502,6 +553,97 @@ test('meta leads sync route validates mode and forwards manual options', async (
       includeArchived: true,
       maxAds: 200,
     });
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('meta lead form registry route returns imported form data', async () => {
+  const metaApiPath = require.resolve('../services/metaApi');
+  const leadSyncPath = require.resolve('../services/metaLeadSyncService');
+  const accountServicePath = require.resolve('../services/accountService');
+  const routePath = require.resolve('../routes/meta');
+  const originals = new Map([
+    [metaApiPath, require.cache[metaApiPath]],
+    [leadSyncPath, require.cache[leadSyncPath]],
+    [accountServicePath, require.cache[accountServicePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[metaApiPath] = {
+    exports: {
+      metaGet: async () => ({}),
+      metaPost: async () => ({}),
+      contextAccountId: () => 'act_1',
+      getAdAccounts: async () => [],
+      getCampaigns: async () => [],
+      getAdSets: async () => [],
+      getAds: async () => [],
+      getInsightsRange: async () => [],
+      getInsights: async () => [],
+    },
+  };
+  require.cache[leadSyncPath] = {
+    exports: {
+      syncAccountLeads: async () => ({}),
+      getLeadFormRegistry: async () => ({ forms: [{ form_id: '123', lead_count: 4 }] }),
+    },
+  };
+  require.cache[accountServicePath] = { exports: {} };
+
+  try {
+    const router = require('../routes/meta');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 1, meta_account_id: 'act_1' };
+      next();
+    });
+
+    const res = await invoke(app, { method: 'GET', url: '/lead-form-registry' });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.forms[0].form_id, '123');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('revisit automation route returns config summary and activity', async () => {
+  const revisitPath = require.resolve('../services/revisitAutomationService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [revisitPath, require.cache[revisitPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[revisitPath] = {
+    exports: {
+      getConfigSummary: () => ({
+        enabled: false,
+        webhook_configured: false,
+        signing_secret_configured: false,
+        cooldown_hours: 24,
+        delay_seconds: 60,
+        interval_ms: 30000,
+        max_attempts: 3,
+        key_paths: ['/pricing'],
+      }),
+      listRecentActivity: async () => ([{ id: 1, ghl_contact_id: 'ghl_1', status: 'pending' }]),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin' };
+      req.metaAccount = { id: 7 };
+      next();
+    });
+    const res = await invoke(app, { url: '/revisit-automation' });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.config.delay_seconds, 60);
+    assert.equal(res.json.activity[0].ghl_contact_id, 'ghl_1');
   } finally {
     restoreCache(originals);
   }
@@ -812,6 +954,67 @@ test('tracking alerts route returns alert payload', async () => {
     assert.equal(res.status, 200);
     assert.equal(res.json.window_hours, 12);
     assert.equal(res.json.alerts[0].severity, 'critical');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('intelligence lifecycle summary route returns data payload', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = {
+    exports: {
+      readTargets: () => ({}),
+      DEFAULT_TARGETS: {},
+      getLifecycleSummary: async () => ({ stages: [{ stage: 'qualified', count: 5 }], events: [{ event_name: 'GHLStageChanged', count: 9 }] }),
+    },
+  };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: null, buckets: [] }),
+      saveWindow: async () => ({}),
+      runBackfill: async () => ({}),
+      getAlerts: async () => ({ alerts: [] }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const res = await invoke(app, { method: 'GET', url: '/lifecycle-summary' });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.data.stages[0].stage, 'qualified');
   } finally {
     restoreCache(originals);
   }

@@ -2,6 +2,7 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const config = require('../config');
 const { parseCookies, serializeCookie, sessionCookieOptions } = require('../utils/cookies');
+const csrf = require('../services/csrfService');
 const { ensureNonEmptyString, ensureObject, optionalTrimmedString } = require('../validation');
 const router = express.Router();
 const auth = require('../services/authService');
@@ -33,8 +34,9 @@ router.post('/login', async (req, res) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     const userAgent = req.headers['user-agent'] || '';
     const result = await auth.login(email, password, ip, userAgent);
+    const tokenHash = auth.hashSessionToken(result.token);
     res.setHeader('Set-Cookie', serializeCookie('session_token', result.token, sessionCookieOptions(config)));
-    res.json({ user: result.user });
+    res.json({ user: result.user, csrf_token: csrf.createToken(tokenHash) });
   } catch (err) {
     res.status(401).json({ error: err.message });
   }
@@ -61,7 +63,7 @@ router.get('/me', async (req, res) => {
     if (!token) return res.status(401).json({ error: 'Not authenticated' });
     const user = await auth.getUserFromToken(token);
     if (!user) return res.status(401).json({ error: 'Invalid or expired token' });
-    res.json({ user });
+    res.json({ user, csrf_token: csrf.createToken(user.session_token_hash) });
   } catch (err) {
     sendError(res, err);
   }

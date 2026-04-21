@@ -9,8 +9,11 @@ if (config.usingLegacySecrets) {
 const startedJobs = startBackgroundJobs();
 console.log(`[worker] Background jobs started: ${startedJobs.join(', ') || 'none'}`);
 
+const keepAlive = setInterval(() => {}, 60 * 60 * 1000);
+
 process.on('SIGTERM', async () => {
   console.log('[worker] Shutting down...');
+  clearInterval(keepAlive);
   await pool.end();
   process.exit(0);
 });
