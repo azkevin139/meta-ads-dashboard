@@ -837,6 +837,105 @@ test('touch sequence save requires steps and monitor route returns data', async 
   }
 });
 
+test('audience automation routes validate and return rule data', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const audienceAutomationPath = require.resolve('../services/audienceAutomationService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [audienceAutomationPath, require.cache[audienceAutomationPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let savedRule = null;
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[audienceAutomationPath] = {
+    exports: {
+      THRESHOLD_TYPES: ['eligible_count', 'matchable_count'],
+      ACTION_TYPES: ['create_audience', 'refresh_audience', 'notify_n8n'],
+      listRules: async () => ([{ id: 9, segment_key: 'landing_page_leads', threshold_type: 'matchable_count', threshold_value: 100, action_type: 'create_audience', enabled: true, stats: { eligible_count: 130, matchable_count: 112 } }]),
+      listAvailableSegments: async () => ([{ key: 'landing_page_leads' }]),
+      listRuns: async () => ([{ id: 1, segment_key: 'landing_page_leads', status: 'triggered' }]),
+      saveRule: async (_accountId, input) => {
+        savedRule = input;
+        return { id: 12, ...input };
+      },
+      deleteRule: async () => ({ success: true }),
+      evaluateRulesForAccount: async () => ({ evaluated: 1, triggered: 1, blocked: 0, failed: 0 }),
+    },
+  };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: null, buckets: [] }),
+      saveWindow: async () => ({}),
+      runBackfill: async () => ({}),
+      getAlerts: async () => ({ alerts: [] }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const listRes = await invoke(app, { method: 'GET', url: '/audience-automation/rules' });
+    assert.equal(listRes.status, 200);
+    assert.equal(listRes.json.data[0].segment_key, 'landing_page_leads');
+
+    const saveRes = await invoke(app, {
+      method: 'POST',
+      url: '/audience-automation/rules',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        segment_key: 'landing_page_leads',
+        threshold_type: 'matchable_count',
+        threshold_value: 100,
+        action_type: 'create_audience',
+        cooldown_minutes: 60,
+        enabled: true,
+        config: {},
+      },
+    });
+    assert.equal(saveRes.status, 200);
+    assert.equal(savedRule.segment_key, 'landing_page_leads');
+
+    const runRes = await invoke(app, {
+      method: 'POST',
+      url: '/audience-automation/evaluate-now',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(runRes.status, 200);
+    assert.equal(runRes.json.data.triggered, 1);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('tracking recovery routes save window and run backfill', async () => {
   const intelligencePath = require.resolve('../services/intelligenceService');
   const trackingServicePath = require.resolve('../services/trackingService');
@@ -1098,6 +1197,76 @@ test('account GHL sync route validates mode and forwards sync options', async ()
         sinceOverride: '2026-04-01T00:00:00.000Z',
         untilOverride: '2026-04-10T00:00:00.000Z',
         maxPages: 20,
+      },
+    });
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('account product mode route updates lead gen fast sync settings', async () => {
+  const accountServicePath = require.resolve('../services/accountService');
+  const tokenHealthPath = require.resolve('../services/tokenHealthService');
+  const ghlPath = require.resolve('../services/ghlService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const routePath = require.resolve('../routes/accounts');
+  const originals = new Map([
+    [accountServicePath, require.cache[accountServicePath]],
+    [tokenHealthPath, require.cache[tokenHealthPath]],
+    [ghlPath, require.cache[ghlPath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let modeArgs = null;
+  delete require.cache[routePath];
+  require.cache[accountServicePath] = {
+    exports: {
+      listAccounts: async () => [],
+      publicAccount: (row) => row,
+      updateSessionAccount: async () => ({}),
+      createAccount: async () => ({}),
+      discoverAccountsForToken: async () => ([]),
+      importAccountsFromToken: async () => ([]),
+      refreshAccountMetadata: async () => ({}),
+      setDefaultAccount: async () => ({}),
+      updateProductMode: async (accountId, payload) => {
+        modeArgs = { accountId, payload };
+        return { id: accountId, product_mode: payload.productMode, fast_sync_enabled: payload.fastSyncEnabled };
+      },
+    },
+  };
+  require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {} } };
+  require.cache[ghlPath] = {
+    exports: {
+      getStatus: async () => ({ configured: true }),
+      saveGhlCredentials: async () => ({ success: true }),
+      clearGhlCredentials: async () => ({ success: true }),
+      syncAccountById: async () => ({ account_id: 1 }),
+    },
+  };
+
+  try {
+    const router = require('../routes/accounts');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', session_token_hash: 'hash' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const res = await invoke(app, {
+      method: 'POST',
+      url: '/44/product-mode',
+      headers: { 'content-type': 'application/json' },
+      body: { product_mode: 'lead_gen', fast_sync_enabled: true },
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(modeArgs, {
+      accountId: 44,
+      payload: {
+        productMode: 'lead_gen',
+        fastSyncEnabled: true,
       },
     });
   } finally {

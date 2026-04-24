@@ -2,6 +2,7 @@ const metaLeadSync = require('./services/metaLeadSyncService');
 const tokenHealth = require('./services/tokenHealthService');
 const ghlSync = require('./services/ghlService');
 const audiencePush = require('./services/audiencePushService');
+const audienceAutomation = require('./services/audienceAutomationService');
 const warehouseSync = require('./services/warehouseSyncService');
 const touchSequences = require('./services/touchSequenceService');
 const revisitAutomation = require('./services/revisitAutomationService');
@@ -23,9 +24,19 @@ const JOB_DEFINITIONS = [
     start: () => ghlSync.startBackgroundSync({ intervalMs: 6 * 3600 * 1000 }),
   },
   {
+    name: 'ghl-fast-sync',
+    disabledEnv: 'DISABLE_GHL_FAST_SYNC',
+    start: () => ghlSync.startFastSync({ intervalMs: 15 * 60 * 1000 }),
+  },
+  {
     name: 'audience-refresh',
     disabledEnv: 'DISABLE_AUDIENCE_REFRESH',
     start: () => audiencePush.startBackgroundRefresh({ intervalMs: 60 * 60 * 1000 }),
+  },
+  {
+    name: 'audience-automation',
+    disabledEnv: 'DISABLE_AUDIENCE_AUTOMATION',
+    start: () => audienceAutomation.startBackgroundEvaluator({ intervalMs: 15 * 60 * 1000 }),
   },
   {
     name: 'warehouse-sync',

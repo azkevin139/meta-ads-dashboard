@@ -43,7 +43,8 @@ for migration in \
   v20_lifecycle_identity_integrity.sql \
   v21_identity_collision_resolution.sql \
   v22_tracking_outage_windows.sql \
-  v23_csp_violation_ledger.sql
+  v23_csp_violation_ledger.sql \
+  v24_audience_automation_phase1.sql
 do
   if [ -f "$(dirname "$0")/$migration" ]; then
     echo "    • $migration"

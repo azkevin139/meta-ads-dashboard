@@ -43,10 +43,13 @@ async function buildSegmentData(accountId, segmentKey) {
   const collisionHashes = await trustPolicy.getIdentityCollisionHashes(accountId);
   const emails = [];
   const phones = [];
+  const uniqueEmails = new Set();
+  const uniquePhones = new Set();
   let excludedCollisionRows = 0;
   let highConfidenceRows = 0;
   let mediumConfidenceRows = 0;
   let lowConfidenceRows = 0;
+  let matchableRows = 0;
 
   for (const row of rows) {
     const emailCollides = row.email_hash && collisionHashes.email.has(row.email_hash);
@@ -62,15 +65,23 @@ async function buildSegmentData(accountId, segmentKey) {
     } else {
       lowConfidenceRows += 1;
     }
+    if (row.email_hash || row.phone_hash) matchableRows += 1;
     // visitors.email_hash is already sha256(lowercase-trimmed-email).
     // Meta accepts that as-is for EMAIL schema.
-    if (row.email_hash) emails.push(row.email_hash);
-    if (row.phone_hash) phones.push(row.phone_hash);
+    if (row.email_hash && !uniqueEmails.has(row.email_hash)) {
+      uniqueEmails.add(row.email_hash);
+      emails.push(row.email_hash);
+    }
+    if (row.phone_hash && !uniquePhones.has(row.phone_hash)) {
+      uniquePhones.add(row.phone_hash);
+      phones.push(row.phone_hash);
+    }
   }
   return {
     emails,
     phones,
     totalRows: rows.length,
+    matchableRows,
     policy: {
       excluded_collision_rows: excludedCollisionRows,
       high_confidence_rows: highConfidenceRows,
@@ -104,6 +115,15 @@ async function ensureCustomAudience(account, { segmentKey, segmentName }) {
     RETURNING *
   `, [account.id, segmentKey, segmentName || segmentKey, created.id]);
   return row;
+}
+
+async function ensureAudienceExistsAndRefresh(account, { segmentKey, segmentName }) {
+  const push = await ensureCustomAudience(account, { segmentKey, segmentName });
+  const result = await pushSegment(account, { segmentKey, segmentName });
+  return {
+    push_id: push.id,
+    ...result,
+  };
 }
 
 async function uploadUsers(account, audienceId, emails, phones) {
@@ -244,4 +264,6 @@ module.exports = {
   refreshDue,
   startBackgroundRefresh,
   buildSegmentData,
+  ensureAudienceExistsAndRefresh,
+  SEGMENT_SQL,
 };

@@ -60,6 +60,8 @@ CREATE TABLE accounts (
   ghl_last_bootstrap_at TIMESTAMPTZ,
   ghl_oldest_synced_at TIMESTAMPTZ,
   ghl_last_sync_error TEXT,
+  product_mode TEXT NOT NULL DEFAULT 'general' CHECK (product_mode IN ('general', 'lead_gen')),
+  fast_sync_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   is_active       BOOLEAN DEFAULT TRUE,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -369,6 +371,42 @@ CREATE TABLE touch_sequence_events (
 
 CREATE INDEX idx_touch_sequence_events_sequence ON touch_sequence_events(sequence_id, created_at DESC);
 CREATE INDEX idx_touch_sequence_events_account ON touch_sequence_events(account_id, created_at DESC);
+
+CREATE TABLE audience_automation_rules (
+  id BIGSERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  segment_key TEXT NOT NULL,
+  threshold_type TEXT NOT NULL DEFAULT 'matchable_count' CHECK (threshold_type IN ('eligible_count', 'matchable_count')),
+  threshold_value INTEGER NOT NULL CHECK (threshold_value > 0),
+  action_type TEXT NOT NULL CHECK (action_type IN ('create_audience', 'refresh_audience', 'notify_n8n')),
+  cooldown_minutes INTEGER NOT NULL DEFAULT 60 CHECK (cooldown_minutes BETWEEN 1 AND 10080),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audience_automation_rules_account_enabled
+  ON audience_automation_rules(account_id, enabled, created_at DESC);
+
+CREATE TABLE audience_rule_runs (
+  id BIGSERIAL PRIMARY KEY,
+  rule_id BIGINT NOT NULL REFERENCES audience_automation_rules(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  segment_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('triggered', 'skipped', 'blocked', 'failed')),
+  eligible_count INTEGER,
+  matchable_count INTEGER,
+  reason_code TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audience_rule_runs_rule_created
+  ON audience_rule_runs(rule_id, created_at DESC);
+
+CREATE INDEX idx_audience_rule_runs_account_created
+  ON audience_rule_runs(account_id, created_at DESC);
 
 -- ============================================================
 -- 7. ACTION LOG (full audit trail)

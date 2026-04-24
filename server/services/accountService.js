@@ -49,6 +49,8 @@ function publicAccount(row) {
     label: row.label || row.name,
     currency: row.currency,
     timezone: row.timezone,
+    product_mode: row.product_mode || 'general',
+    fast_sync_enabled: row.fast_sync_enabled === true,
     is_active: row.is_active,
     token_last4: row.token_last4 || null,
     created_at: row.created_at,
@@ -118,7 +120,7 @@ async function discoverAccountsForToken(token) {
 
 async function listAccounts() {
   const rows = await queryAll(`
-    SELECT id, meta_account_id, name, label, currency, timezone, is_active, token_last4, created_at, updated_at
+    SELECT id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
     FROM accounts
     ORDER BY is_active DESC, label NULLS LAST, name
   `);
@@ -172,8 +174,8 @@ async function createAccount(input = {}) {
   }
 
   const row = await queryOne(`
-    INSERT INTO accounts (meta_account_id, name, label, currency, timezone, encrypted_token, token_last4, is_active)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO accounts (meta_account_id, name, label, currency, timezone, encrypted_token, token_last4, product_mode, fast_sync_enabled, is_active)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT (meta_account_id) DO UPDATE SET
       name = EXCLUDED.name,
       label = EXCLUDED.label,
@@ -181,9 +183,11 @@ async function createAccount(input = {}) {
       timezone = EXCLUDED.timezone,
       encrypted_token = EXCLUDED.encrypted_token,
       token_last4 = EXCLUDED.token_last4,
+      product_mode = accounts.product_mode,
+      fast_sync_enabled = accounts.fast_sync_enabled,
       is_active = CASE WHEN EXCLUDED.is_active THEN true ELSE accounts.is_active END,
       updated_at = NOW()
-    RETURNING id, meta_account_id, name, label, currency, timezone, is_active, token_last4, created_at, updated_at
+    RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
   `, [
     metaAccountId,
     name,
@@ -192,6 +196,8 @@ async function createAccount(input = {}) {
     timezone,
     encryptToken(token),
     token.slice(-4),
+    input.product_mode === 'lead_gen' ? 'lead_gen' : 'general',
+    input.fast_sync_enabled === true || input.product_mode === 'lead_gen',
     Boolean(input.is_active),
   ]);
   return publicAccount(row);
@@ -251,7 +257,7 @@ async function refreshAccountMetadata(accountId = null) {
             timezone = $4,
             updated_at = NOW()
         WHERE id = $1
-        RETURNING id, meta_account_id, name, label, currency, timezone, is_active, token_last4, created_at, updated_at
+        RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
       `, [
         row.id,
         details?.name || row.name,
@@ -282,6 +288,21 @@ async function updateSessionAccount(tokenHash, accountId) {
   return publicAccount(account);
 }
 
+async function updateProductMode(accountId, { productMode, fastSyncEnabled } = {}) {
+  const mode = productMode === 'lead_gen' ? 'lead_gen' : 'general';
+  const fastSync = fastSyncEnabled === undefined ? mode === 'lead_gen' : Boolean(fastSyncEnabled);
+  const row = await queryOne(`
+    UPDATE accounts
+    SET product_mode = $2,
+        fast_sync_enabled = $3,
+        updated_at = NOW()
+    WHERE id = $1
+    RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
+  `, [accountId, mode, fastSync]);
+  if (!row) throw new Error('Account not found');
+  return publicAccount(row);
+}
+
 module.exports = {
   encryptToken,
   decryptToken,
@@ -295,5 +316,6 @@ module.exports = {
   refreshAccountMetadata,
   setDefaultAccount,
   updateSessionAccount,
+  updateProductMode,
   publicAccount,
 };

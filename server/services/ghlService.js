@@ -618,8 +618,14 @@ async function syncAccountById(accountId, options = {}) {
   return syncAccount(account, options);
 }
 
-async function syncAllConfigured() {
-  const rows = await queryAll('SELECT * FROM accounts WHERE ghl_api_key_encrypted IS NOT NULL ORDER BY id');
+async function syncAllConfigured(filter = '') {
+  const rows = await queryAll(`
+    SELECT *
+    FROM accounts
+    WHERE ghl_api_key_encrypted IS NOT NULL
+    ${filter}
+    ORDER BY id
+  `);
   const results = [];
   for (const row of rows) {
     try {
@@ -629,6 +635,10 @@ async function syncAllConfigured() {
     }
   }
   return results;
+}
+
+async function syncFastConfigured() {
+  return syncAllConfigured('AND (product_mode = \'lead_gen\' OR fast_sync_enabled = TRUE)');
 }
 
 function startBackgroundSync({ intervalMs = 6 * 3600 * 1000 } = {}) {
@@ -649,6 +659,27 @@ function startBackgroundSync({ intervalMs = 6 * 3600 * 1000 } = {}) {
   const timer = setInterval(run, intervalMs);
   timer.unref?.();
   setTimeout(run, 5 * 60 * 1000).unref?.();
+  return timer;
+}
+
+function startFastSync({ intervalMs = 15 * 60 * 1000 } = {}) {
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const results = await syncFastConfigured();
+      const total = results.reduce((sum, row) => sum + (row.imported || 0), 0);
+      if (total > 0) console.log(`[ghlSyncFast] imported ${total} contact(s) across ${results.length} fast-sync account(s)`);
+    } catch (err) {
+      console.error(`[ghlSyncFast] background run failed: ${err.message}`);
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(run, intervalMs);
+  timer.unref?.();
+  setTimeout(run, 90 * 1000).unref?.();
   return timer;
 }
 
@@ -687,7 +718,9 @@ module.exports = {
   syncAccount,
   syncAccountById,
   syncAllConfigured,
+  syncFastConfigured,
   startBackgroundSync,
+  startFastSync,
   getStatus,
   encrypt,
   decrypt,

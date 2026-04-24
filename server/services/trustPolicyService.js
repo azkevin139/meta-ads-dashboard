@@ -157,6 +157,25 @@ async function assertAudiencePushAllowed(accountId) {
   return actionDecisionFromHealth(health, { blockOn: ['failed'], warnOn: ['partial', 'stale', 'unavailable'] });
 }
 
+async function assertAudienceAutomationAllowed(accountId) {
+  const health = await getDataHealthPolicy(accountId, [
+    { source: 'meta', dataset: 'leads' },
+    { source: 'ghl', dataset: 'contacts' },
+    { source: 'tracking', dataset: 'recovery' },
+  ]);
+  const decision = actionDecisionFromHealth(health, { blockOn: ['failed', 'partial', 'stale', 'unavailable'], warnOn: [] });
+  if (!decision.allowed) {
+    return {
+      ...decision,
+      reason_code: decision.reasons[0] || `automation_${health.state}`,
+    };
+  }
+  return {
+    ...decision,
+    reason_code: null,
+  };
+}
+
 async function getAiRecommendationPolicy(accountId) {
   const health = await getDataHealthPolicy(accountId, [
     { source: 'meta', dataset: 'warehouse_insights' },
@@ -172,6 +191,7 @@ async function getAiRecommendationPolicy(accountId) {
 
 module.exports = {
   assessVisitorIdentity,
+  assertAudienceAutomationAllowed,
   assertAudiencePushAllowed,
   assertRevisitAllowed,
   getAiRecommendationPolicy,

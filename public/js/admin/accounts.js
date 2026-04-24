@@ -12,6 +12,7 @@
               <th>Account</th>
               <th>Meta ID</th>
               <th>Currency</th>
+              <th>Mode</th>
               <th>Token</th>
               <th>Expires</th>
               <th>Default</th>
@@ -30,6 +31,7 @@
                   </td>
                   <td class="mono" style="font-size: 0.75rem;">${escapeHtml(a.meta_account_id)}</td>
                   <td>${escapeHtml(a.currency || 'USD')}</td>
+                  <td>${a.product_mode === 'lead_gen' ? '<span class="badge badge-active">Lead gen</span>' : '<span class="badge badge-low">General</span>'}${a.fast_sync_enabled ? '<div class="text-muted" style="font-size:0.68rem;">15m fast sync</div>' : ''}</td>
                   <td class="mono" style="font-size: 0.75rem;">${a.token_last4 ? `...${escapeHtml(a.token_last4)}` : 'stored'}</td>
                   <td>${tokenBadge}</td>
                   <td>${a.is_active ? '<span class="text-green">Default</span>' : '<span class="text-muted">—</span>'}</td>
@@ -38,6 +40,7 @@
                     <div class="btn-group">
                       <button class="btn btn-sm" onclick="setSessionAccount(${a.id})">Use</button>
                       <button class="btn btn-sm" onclick="checkAccountToken(${a.id})">Check</button>
+                      <button class="btn btn-sm" onclick="toggleAccountProductMode(${a.id}, '${escapeJs(a.product_mode || 'general')}')">${a.product_mode === 'lead_gen' ? 'General' : 'Lead Gen'}</button>
                       <button class="btn btn-sm" onclick="openGhlDrawer(${a.id}, '${escapeJs(a.label || a.name || '')}')">GHL</button>
                       ${a.is_active ? '' : `<button class="btn btn-sm" onclick="setDefaultAccount(${a.id})">Default</button>`}
                     </div>
@@ -144,6 +147,20 @@
       toast('Checking token…', 'info');
       await apiPost(`/accounts/${accountId}/token-check`, {});
       toast('Token checked', 'success');
+      loadAdminAccounts();
+    } catch (err) {
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
+    }
+  }
+
+  async function toggleAccountProductMode(accountId, currentMode) {
+    try {
+      const nextMode = currentMode === 'lead_gen' ? 'general' : 'lead_gen';
+      await apiPost(`/accounts/${accountId}/product-mode`, {
+        product_mode: nextMode,
+        fast_sync_enabled: nextMode === 'lead_gen',
+      });
+      toast(`Account mode set to ${nextMode.replace('_', ' ')}`, 'success');
       loadAdminAccounts();
     } catch (err) {
       toast(`Error: ${safeErrorMessage(err)}`, 'error');
@@ -326,6 +343,7 @@
     triggerGhlSync,
     presetGhlSyncRange,
     presetGhlSyncFull,
-    clearGhlCredentials,
+      clearGhlCredentials,
+      toggleAccountProductMode,
   });
 })();

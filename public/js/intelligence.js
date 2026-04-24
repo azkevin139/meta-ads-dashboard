@@ -10,6 +10,7 @@ let touchSequenceDefaults = [];
 let touchSequenceCache = [];
 let touchSequenceEditingId = null;
 let intelDataHealth = null;
+let audienceAutomationCatalog = { segments: [], thresholdTypes: [], actionTypes: [] };
 
 async function loadIntelligence(container) {
   container.innerHTML = `
@@ -38,6 +39,16 @@ async function loadIntelligence(container) {
     <div class="table-container mb-md">
       <div class="table-header"><span class="table-title">Audience Segments</span><span class="badge badge-active">RETARGETING</span></div>
       <div id="intel-audience-segments"><div class="loading">Loading audience segments</div></div>
+    </div>
+    <div class="table-container mb-md">
+      <div class="table-header">
+        <span class="table-title">Audience Automation</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="openAudienceAutomationEditor()">Create Rule</button>
+          <button class="btn btn-sm" onclick="runAudienceAutomationEvaluator()">Run Evaluator</button>
+        </div>
+      </div>
+      <div id="intel-audience-automation"><div class="loading">Loading audience automation</div></div>
     </div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
@@ -103,6 +114,7 @@ async function loadIntelligence(container) {
     loadDecisionQueues(),
     loadTouchSequences(),
     loadAudienceSegments(),
+    loadAudienceAutomation(),
     loadLifecycleSummary(),
     loadIdentityHealth(),
     loadIdentityCollisions(),
@@ -114,6 +126,197 @@ async function loadIntelligence(container) {
     loadJourneys(),
   ]);
   await loadIntelDataHealth();
+}
+
+async function loadAudienceAutomation() {
+  const el = document.getElementById('intel-audience-automation');
+  if (!el) return;
+  try {
+    const [rulesRes, runsRes] = await Promise.all([
+      apiGet('/intelligence/audience-automation/rules'),
+      apiGet('/intelligence/audience-automation/runs?limit=12'),
+    ]);
+    const rows = rulesRes.data || [];
+    const runs = runsRes.data || [];
+    window.__intelAudienceAutomationRows = rows;
+    audienceAutomationCatalog = {
+      segments: rulesRes.available_segments || [],
+      thresholdTypes: rulesRes.threshold_types || [],
+      actionTypes: rulesRes.action_types || [],
+    };
+    el.innerHTML = `
+      <div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">Lead-gen automation runs every 15 minutes on fast-sync accounts. Thresholds use matchable identifiers by default so audiences only trigger when Meta customer match can actually use them.</div>
+      ${rows.length ? `<div style="overflow:auto;"><table>
+        <thead><tr><th>Segment</th><th class="right">Eligible</th><th class="right">Matchable</th><th>Threshold</th><th>Action</th><th>Status</th><th>Audience</th><th>Last Run</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${rows.map((row) => {
+            const latest = row.latest_run || null;
+            const audienceId = row.audience_push?.meta_audience_id || '—';
+            const reason = row.current_reason || latest?.reason_code || '';
+            const status = row.current_status || 'waiting';
+            const badge = status === 'blocked' ? 'critical' : status === 'ready' ? 'active' : status === 'triggered' ? 'active' : status === 'disabled' ? 'warning' : 'low';
+            return `<tr>
+              <td class="name-cell">
+                <div style="font-weight:600;">${escapeHtml(row.segment_key)}</div>
+                ${reason ? `<div class="text-muted" style="font-size:0.72rem;">${escapeHtml(reason.replace(/_/g, ' '))}</div>` : ''}
+              </td>
+              <td class="right">${fmt(row.stats?.eligible_count || 0, 'integer')}</td>
+              <td class="right">${fmt(row.stats?.matchable_count || 0, 'integer')}</td>
+              <td><span class="mono">${escapeHtml(row.threshold_type)} ≥ ${fmt(row.threshold_value, 'integer')}</span></td>
+              <td>${escapeHtml(row.action_type)}</td>
+              <td><span class="badge badge-${badge}">${escapeHtml(status.replace(/_/g, ' '))}</span></td>
+              <td>${audienceId !== '—' ? `<span class="mono">${escapeHtml(audienceId)}</span>` : '<span class="text-muted">—</span>'}</td>
+              <td>${latest?.created_at ? `${fmtDateTime(latest.created_at)}<div class="text-muted" style="font-size:0.72rem;">${escapeHtml(latest.status)}${latest.reason_code ? ` · ${escapeHtml(latest.reason_code)}` : ''}</div>` : '<span class="text-muted">Never</span>'}</td>
+              <td><div class="btn-group">
+                <button class="btn btn-sm" onclick="openAudienceAutomationEditor(${row.id})">Edit</button>
+                <button class="btn btn-sm" onclick="toggleAudienceAutomationRule(${row.id}, ${row.enabled})">${row.enabled ? 'Disable' : 'Enable'}</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteAudienceAutomationRule(${row.id})">Delete</button>
+              </div></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>` : '<div class="empty-state"><div class="empty-state-text">No audience automation rules yet</div></div>'}
+      <div class="table-container" style="margin-top:12px;">
+        <div class="table-header"><span class="table-title">Recent Rule Runs</span><span class="badge badge-low">${fmt(runs.length, 'integer')}</span></div>
+        ${runs.length ? `<div style="overflow:auto;"><table>
+          <thead><tr><th>When</th><th>Segment</th><th>Status</th><th class="right">Eligible</th><th class="right">Matchable</th><th>Reason</th></tr></thead>
+          <tbody>${runs.map((run) => `<tr>
+            <td>${fmtDateTime(run.created_at)}</td>
+            <td class="name-cell">${escapeHtml(run.segment_key)}</td>
+            <td><span class="badge badge-${run.status === 'triggered' ? 'active' : run.status === 'blocked' || run.status === 'failed' ? 'critical' : 'warning'}">${escapeHtml(run.status)}</span></td>
+            <td class="right">${fmt(run.eligible_count || 0, 'integer')}</td>
+            <td class="right">${fmt(run.matchable_count || 0, 'integer')}</td>
+            <td>${escapeHtml(run.reason_code || '—')}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No automation runs recorded yet.</div>'}
+      </div>
+    `;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+function openAudienceAutomationEditor(ruleId = null) {
+  const rows = Array.isArray(audienceAutomationCatalog.segments) ? audienceAutomationCatalog.segments : [];
+  const existingRows = window.__intelAudienceAutomationRows || [];
+  const existing = existingRows.find((row) => Number(row.id) === Number(ruleId)) || null;
+  openDrawer(existing ? 'Edit Audience Rule' : 'Create Audience Rule', `
+    <div class="form-group">
+      <label class="form-label">Segment</label>
+      <select id="aud-automation-segment" class="form-select">
+        ${rows.map((segment) => `<option value="${escapeHtml(segment.key)}" ${existing?.segment_key === segment.key ? 'selected' : ''}>${escapeHtml(segment.key)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Threshold type</label>
+        <select id="aud-automation-threshold-type" class="form-select">
+          ${(audienceAutomationCatalog.thresholdTypes || ['matchable_count', 'eligible_count']).map((value) => `<option value="${escapeHtml(value)}" ${existing?.threshold_type === value || (!existing && value === 'matchable_count') ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Threshold value</label>
+        <input id="aud-automation-threshold-value" class="form-input" type="number" min="1" value="${existing?.threshold_value || 100}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Action</label>
+        <select id="aud-automation-action-type" class="form-select">
+          ${(audienceAutomationCatalog.actionTypes || ['create_audience', 'refresh_audience', 'notify_n8n']).map((value) => `<option value="${escapeHtml(value)}" ${existing?.action_type === value || (!existing && value === 'create_audience') ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Cooldown minutes</label>
+        <input id="aud-automation-cooldown" class="form-input" type="number" min="1" max="10080" value="${existing?.cooldown_minutes || 60}" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Webhook URL (notify_n8n only)</label>
+      <input id="aud-automation-webhook" class="form-input" type="url" value="${escapeHtml(existing?.config?.webhook_url || '')}" />
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; margin-top:6px;">
+      <input id="aud-automation-enabled" type="checkbox" ${existing?.enabled !== false ? 'checked' : ''} />
+      Enabled
+    </label>
+    <div style="display:flex; gap:8px; margin-top:18px;">
+      <button class="btn btn-primary" onclick="saveAudienceAutomationRule(${existing?.id || 'null'})">Save Rule</button>
+      <button class="btn" onclick="closeDrawer()">Cancel</button>
+    </div>
+  `);
+}
+
+async function saveAudienceAutomationRule(ruleId = null) {
+  try {
+    const actionType = document.getElementById('aud-automation-action-type').value;
+    const webhookUrl = document.getElementById('aud-automation-webhook').value.trim();
+    const payload = {
+      id: ruleId || undefined,
+      segment_key: document.getElementById('aud-automation-segment').value,
+      threshold_type: document.getElementById('aud-automation-threshold-type').value,
+      threshold_value: parseInt(document.getElementById('aud-automation-threshold-value').value, 10),
+      action_type: actionType,
+      cooldown_minutes: parseInt(document.getElementById('aud-automation-cooldown').value, 10),
+      enabled: document.getElementById('aud-automation-enabled').checked,
+      config: actionType === 'notify_n8n' && webhookUrl ? { webhook_url: webhookUrl } : {},
+    };
+    await apiPost('/intelligence/audience-automation/rules', payload);
+    toast('Audience automation rule saved', 'success');
+    closeDrawer();
+    loadAudienceAutomation();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
+}
+
+async function toggleAudienceAutomationRule(ruleId, currentlyEnabled) {
+  try {
+    const rows = window.__intelAudienceAutomationRows || [];
+    const existing = rows.find((row) => Number(row.id) === Number(ruleId));
+    if (!existing) return toast('Rule not found', 'error');
+    await apiPost('/intelligence/audience-automation/rules', {
+      id: existing.id,
+      segment_key: existing.segment_key,
+      threshold_type: existing.threshold_type,
+      threshold_value: existing.threshold_value,
+      action_type: existing.action_type,
+      cooldown_minutes: existing.cooldown_minutes,
+      enabled: !currentlyEnabled,
+      config: existing.config || {},
+    });
+    toast(`Rule ${!currentlyEnabled ? 'enabled' : 'disabled'}`, 'success');
+    loadAudienceAutomation();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
+}
+
+async function deleteAudienceAutomationRule(ruleId) {
+  if (!confirmAction('Delete this audience automation rule?')) return;
+  try {
+    await apiDelete(`/intelligence/audience-automation/rules/${ruleId}`);
+    toast('Audience automation rule deleted', 'success');
+    loadAudienceAutomation();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
+}
+
+async function runAudienceAutomationEvaluator() {
+  try {
+    const allowed = await confirmDegradedDataAction('Audience automation evaluation', [
+      { source: 'meta', dataset: 'leads' },
+      { source: 'ghl', dataset: 'contacts' },
+      { source: 'tracking', dataset: 'recovery' },
+    ]);
+    if (!allowed) return;
+    const res = await apiPost('/intelligence/audience-automation/evaluate-now', {});
+    const data = res.data || {};
+    toast(`Evaluated ${data.evaluated || 0} rule(s): ${data.triggered || 0} triggered, ${data.blocked || 0} blocked`, 'success');
+    loadAudienceAutomation();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
 }
 
 async function loadIntelDataHealth() {

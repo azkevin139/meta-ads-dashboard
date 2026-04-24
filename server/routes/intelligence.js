@@ -5,6 +5,7 @@ const intelligence = require('../services/intelligenceService');
 const tracking = require('../services/trackingService');
 const trackingRecovery = require('../services/trackingRecoveryService');
 const audiencePush = require('../services/audiencePushService');
+const audienceAutomation = require('../services/audienceAutomationService');
 const touchSequences = require('../services/touchSequenceService');
 const revisitAutomation = require('../services/revisitAutomationService');
 const accountAccess = require('../services/accountAccessService');
@@ -271,6 +272,99 @@ router.get('/audience-pushes', async (req, res) => {
     if (!accountId) return res.json({ data: [] });
     const rows = await audiencePush.listPushes(accountId);
     res.json({ data: rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/audience-automation/rules', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    res.json({
+      data: await audienceAutomation.listRules(account.id),
+      available_segments: await audienceAutomation.listAvailableSegments(account.id),
+      threshold_types: audienceAutomation.THRESHOLD_TYPES,
+      action_types: audienceAutomation.ACTION_TYPES,
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/audience-automation/runs', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    res.json({
+      data: await audienceAutomation.listRuns(account.id, {
+        limit: optionalInteger(req.query.limit, 'limit must be a positive integer') || 50,
+      }),
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/audience-automation/rules', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const body = ensureObject(req.body || {});
+    const result = await audienceAutomation.saveRule(account.id, {
+      id: body.id,
+      segment_key: ensureNonEmptyString(body.segment_key || body.segmentKey, 'segment_key required'),
+      threshold_type: body.threshold_type || body.thresholdType,
+      threshold_value: body.threshold_value ?? body.thresholdValue,
+      action_type: body.action_type || body.actionType,
+      cooldown_minutes: body.cooldown_minutes ?? body.cooldownMinutes,
+      enabled: body.enabled,
+      config: body.config && typeof body.config === 'object' ? body.config : {},
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'audience_automation_rule.saved',
+      target_type: 'audience_automation_rule',
+      target_id: String(result.id),
+      account_id: account.id,
+      after_json: result,
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.delete('/audience-automation/rules/:id', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const ruleId = ensureInteger(req.params.id, 'id must be a positive integer');
+    await audienceAutomation.deleteRule(ruleId, account.id);
+    await securityAudit.fromRequest(req, {
+      action: 'audience_automation_rule.deleted',
+      target_type: 'audience_automation_rule',
+      target_id: String(ruleId),
+      account_id: account.id,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/audience-automation/evaluate-now', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const result = await audienceAutomation.evaluateRulesForAccount(account.id);
+    await securityAudit.fromRequest(req, {
+      action: 'audience_automation_rule.evaluate_now',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: {
+        evaluated: result.evaluated,
+        triggered: result.triggered,
+        blocked: result.blocked,
+        failed: result.failed,
+      },
+    });
+    res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
   }

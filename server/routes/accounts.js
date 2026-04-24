@@ -6,6 +6,7 @@ const tokenHealth = require('../services/tokenHealthService');
 const ghl = require('../services/ghlService');
 const securityAudit = require('../services/securityAuditService');
 const {
+  ensureBoolean,
   ensureInteger,
   ensureEnum,
   ensureNonEmptyString,
@@ -225,6 +226,30 @@ router.post('/:id/ghl/sync', adminOnly, async (req, res) => {
       after_json: { options: body, result },
     });
     res.json({ success: true, ...result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/:id/product-mode', adminOnly, async (req, res) => {
+  try {
+    const accountId = parseInt(req.params.id, 10);
+    const body = ensureObject(req.body || {});
+    const account = await accountService.updateProductMode(accountId, {
+      productMode: body.product_mode ? ensureEnum(body.product_mode, ['general', 'lead_gen'], 'product_mode must be general or lead_gen') : 'general',
+      fastSyncEnabled: body.fast_sync_enabled === undefined ? undefined : ensureBoolean(body.fast_sync_enabled, 'fast_sync_enabled must be true or false'),
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'account.product_mode_changed',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: {
+        product_mode: account.product_mode,
+        fast_sync_enabled: account.fast_sync_enabled,
+      },
+    });
+    res.json({ success: true, data: account });
   } catch (err) {
     sendError(res, err);
   }
