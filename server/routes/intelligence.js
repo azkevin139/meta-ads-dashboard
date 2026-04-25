@@ -280,8 +280,10 @@ router.get('/audience-pushes', async (req, res) => {
 router.get('/audience-automation/rules', async (req, res) => {
   try {
     const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const data = await audienceAutomation.listRules(account.id);
     res.json({
-      data: await audienceAutomation.listRules(account.id),
+      data,
+      readiness: audienceAutomation.buildAudienceReadiness(data),
       available_segments: await audienceAutomation.listAvailableSegments(account.id),
       threshold_types: audienceAutomation.THRESHOLD_TYPES,
       action_types: audienceAutomation.ACTION_TYPES,

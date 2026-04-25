@@ -8,6 +8,7 @@ const SEGMENT_KEYS = Object.keys(audiencePush.SEGMENT_SQL);
 const THRESHOLD_TYPES = ['eligible_count', 'matchable_count'];
 const ACTION_TYPES = ['create_audience', 'refresh_audience', 'notify_n8n'];
 const RUN_STATUSES = ['triggered', 'skipped', 'blocked', 'failed'];
+const URL_RE = /(https?:\/\/[^\s)]+)/i;
 
 function cleanText(value, max = 500) {
   if (value === undefined || value === null || value === '') return null;
@@ -18,6 +19,42 @@ function badRequest(message) {
   const err = new Error(message);
   err.httpStatus = 400;
   return err;
+}
+
+function extractUrl(text) {
+  const match = String(text || '').match(URL_RE);
+  return match ? match[1].replace(/[.,;:!?]+$/, '') : null;
+}
+
+function classifyExecutionError(err) {
+  const blockerUrl = extractUrl(err?.error_user_msg);
+  if (err?.code === 200 && err?.error_subcode === 1870090) {
+    return {
+      status: 'blocked',
+      reason_code: 'meta_custom_audience_terms_not_accepted',
+      payload: {
+        error: err.message,
+        error_code: err.code || null,
+        error_subcode: err.error_subcode || null,
+        error_type: err.type || null,
+        error_user_title: cleanText(err.error_user_title, 240),
+        error_user_msg: cleanText(err.error_user_msg, 2000),
+        blocker_url: cleanText(blockerUrl, 2000),
+      },
+    };
+  }
+  return {
+    status: 'failed',
+    reason_code: 'execution_failed',
+    payload: {
+      error: err.message,
+      error_code: err.code || null,
+      error_subcode: err.error_subcode || null,
+      error_type: err.type || null,
+      error_user_title: cleanText(err.error_user_title, 240),
+      error_user_msg: cleanText(err.error_user_msg, 2000),
+    },
+  };
 }
 
 function validateRuleInput(input = {}) {
@@ -107,6 +144,7 @@ async function listRules(accountId) {
     const stats = await getSegmentStats(accountId, row.segment_key);
     const gate = await trustPolicy.assertAudienceAutomationAllowed(accountId);
     const thresholdMetric = row.threshold_type === 'eligible_count' ? stats.eligible_count : stats.matchable_count;
+    const latestRun = runByRule[String(row.id)] || null;
     let currentStatus = thresholdMetric >= row.threshold_value ? 'ready' : 'waiting';
     let currentReason = null;
     if (!row.enabled) {
@@ -115,6 +153,9 @@ async function listRules(accountId) {
     } else if (!gate.allowed) {
       currentStatus = 'blocked';
       currentReason = gate.reason_code || gate.reasons?.[0] || 'health_blocked';
+    } else if (latestRun?.status === 'blocked' || latestRun?.status === 'failed' || latestRun?.status === 'triggered') {
+      currentStatus = latestRun.status;
+      currentReason = latestRun.reason_code || null;
     }
 
     hydrated.push({
@@ -123,11 +164,35 @@ async function listRules(accountId) {
       threshold_metric_value: thresholdMetric,
       current_status: currentStatus,
       current_reason: currentReason,
-      latest_run: runByRule[String(row.id)] || null,
+      latest_run: latestRun,
       audience_push: pushBySegment[row.segment_key] || null,
     });
   }
   return hydrated;
+}
+
+function buildAudienceReadiness(rows = []) {
+  const termBlocked = rows.find((row) => row.latest_run?.reason_code === 'meta_custom_audience_terms_not_accepted');
+  if (termBlocked) {
+    return {
+      status: 'blocked',
+      reason_code: 'meta_custom_audience_terms_not_accepted',
+      blocker_url: termBlocked.latest_run?.payload?.blocker_url || null,
+      message: termBlocked.latest_run?.payload?.error_user_msg || 'Meta Custom Audience terms must be accepted for this ad account before uploaded customer-list audiences can be created.',
+      source_rule_id: termBlocked.id,
+      source_segment_key: termBlocked.segment_key,
+      observed_at: termBlocked.latest_run?.created_at || null,
+    };
+  }
+  return {
+    status: 'ready',
+    reason_code: null,
+    blocker_url: null,
+    message: null,
+    source_rule_id: null,
+    source_segment_key: null,
+    observed_at: null,
+  };
 }
 
 async function getRule(ruleId, accountId) {
@@ -309,10 +374,9 @@ async function evaluateRule(rule, account) {
       result,
     };
   } catch (err) {
+    const classified = classifyExecutionError(err);
     return {
-      run: await recordRun(rule, stats, 'failed', 'execution_failed', {
-        error: err.message,
-      }),
+      run: await recordRun(rule, stats, classified.status, classified.reason_code, classified.payload),
       stats,
       error: err,
     };
@@ -397,6 +461,7 @@ module.exports = {
   getSegmentStats,
   listAvailableSegments,
   listRules,
+  buildAudienceReadiness,
   getRule,
   saveRule,
   deleteRule,

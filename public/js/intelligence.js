@@ -138,14 +138,23 @@ async function loadAudienceAutomation() {
     ]);
     const rows = rulesRes.data || [];
     const runs = runsRes.data || [];
+    const readiness = rulesRes.readiness || { status: 'ready' };
     window.__intelAudienceAutomationRows = rows;
     audienceAutomationCatalog = {
       segments: rulesRes.available_segments || [],
       thresholdTypes: rulesRes.threshold_types || [],
       actionTypes: rulesRes.action_types || [],
     };
+    const readinessBanner = readiness.status === 'blocked' && readiness.reason_code === 'meta_custom_audience_terms_not_accepted'
+      ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">
+          <div style="font-weight:600; margin-bottom:4px;">Meta audience validation required for this ad account</div>
+          <div style="font-size:0.78rem; line-height:1.45;">${escapeHtml(readiness.message || 'Meta requires Custom Audience terms acceptance before uploaded customer-list audiences can be created for this ad account.')}</div>
+          ${readiness.blocker_url ? `<div style="margin-top:8px;"><a class="btn btn-sm" href="${escapeHtml(readiness.blocker_url)}" target="_blank" rel="noopener">Open Meta Terms</a></div>` : ''}
+        </div>`
+      : '';
     el.innerHTML = `
       <div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">Lead-gen automation runs every 15 minutes on fast-sync accounts. Thresholds use matchable identifiers by default so audiences only trigger when Meta customer match can actually use them.</div>
+      ${readinessBanner}
       ${rows.length ? `<div style="overflow:auto;"><table>
         <thead><tr><th>Segment</th><th class="right">Eligible</th><th class="right">Matchable</th><th>Threshold</th><th>Action</th><th>Status</th><th>Audience</th><th>Last Run</th><th>Actions</th></tr></thead>
         <tbody>
@@ -155,10 +164,11 @@ async function loadAudienceAutomation() {
             const reason = row.current_reason || latest?.reason_code || '';
             const status = row.current_status || 'waiting';
             const badge = status === 'blocked' ? 'critical' : status === 'ready' ? 'active' : status === 'triggered' ? 'active' : status === 'disabled' ? 'warning' : 'low';
+            const blockerLink = latest?.payload?.blocker_url ? `<div style="margin-top:6px;"><a href="${escapeHtml(latest.payload.blocker_url)}" target="_blank" rel="noopener" style="font-size:0.72rem;">Open Meta terms</a></div>` : '';
             return `<tr>
               <td class="name-cell">
                 <div style="font-weight:600;">${escapeHtml(row.segment_key)}</div>
-                ${reason ? `<div class="text-muted" style="font-size:0.72rem;">${escapeHtml(reason.replace(/_/g, ' '))}</div>` : ''}
+                ${reason ? `<div class="text-muted" style="font-size:0.72rem;">${escapeHtml(reason.replace(/_/g, ' '))}</div>${blockerLink}` : ''}
               </td>
               <td class="right">${fmt(row.stats?.eligible_count || 0, 'integer')}</td>
               <td class="right">${fmt(row.stats?.matchable_count || 0, 'integer')}</td>

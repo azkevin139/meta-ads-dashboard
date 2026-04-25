@@ -66,6 +66,9 @@ async function parseResponse(res, context) {
     err.code = data.error.code;
     err.type = data.error.type;
     err.error_subcode = data.error.error_subcode || null;
+    err.error_user_title = data.error.error_user_title || null;
+    err.error_user_msg = data.error.error_user_msg || null;
+    err.error_data = data.error.error_data || null;
     if (isUserRateLimitError(data.error)) {
       const retryHeader = res.headers && res.headers.get ? parseInt(res.headers.get('retry-after'), 10) : 0;
       err.httpStatus = 429;

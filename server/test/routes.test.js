@@ -865,6 +865,7 @@ test('audience automation routes validate and return rule data', async () => {
       THRESHOLD_TYPES: ['eligible_count', 'matchable_count'],
       ACTION_TYPES: ['create_audience', 'refresh_audience', 'notify_n8n'],
       listRules: async () => ([{ id: 9, segment_key: 'landing_page_leads', threshold_type: 'matchable_count', threshold_value: 100, action_type: 'create_audience', enabled: true, stats: { eligible_count: 130, matchable_count: 112 } }]),
+      buildAudienceReadiness: () => ({ status: 'ready', reason_code: null }),
       listAvailableSegments: async () => ([{ key: 'landing_page_leads' }]),
       listRuns: async () => ([{ id: 1, segment_key: 'landing_page_leads', status: 'triggered' }]),
       saveRule: async (_accountId, input) => {
@@ -905,6 +906,7 @@ test('audience automation routes validate and return rule data', async () => {
     const listRes = await invoke(app, { method: 'GET', url: '/audience-automation/rules' });
     assert.equal(listRes.status, 200);
     assert.equal(listRes.json.data[0].segment_key, 'landing_page_leads');
+    assert.equal(listRes.json.readiness.status, 'ready');
 
     const saveRes = await invoke(app, {
       method: 'POST',
