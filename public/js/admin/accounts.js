@@ -13,6 +13,7 @@
               <th>Meta ID</th>
               <th>Currency</th>
               <th>Mode</th>
+              <th>MCP</th>
               <th>Token</th>
               <th>Expires</th>
               <th>Default</th>
@@ -32,6 +33,7 @@
                   <td class="mono" style="font-size: 0.75rem;">${escapeHtml(a.meta_account_id)}</td>
                   <td>${escapeHtml(a.currency || 'USD')}</td>
                   <td>${a.product_mode === 'lead_gen' ? '<span class="badge badge-active">Lead gen</span>' : '<span class="badge badge-low">General</span>'}${a.fast_sync_enabled ? '<div class="text-muted" style="font-size:0.68rem;">15m fast sync</div>' : ''}</td>
+                  <td>${mcpBadge(a)}</td>
                   <td class="mono" style="font-size: 0.75rem;">${a.token_last4 ? `...${escapeHtml(a.token_last4)}` : 'stored'}</td>
                   <td>${tokenBadge}</td>
                   <td>${a.is_active ? '<span class="text-green">Default</span>' : '<span class="text-muted">—</span>'}</td>
@@ -42,6 +44,7 @@
                       <button class="btn btn-sm" onclick="checkAccountToken(${a.id})">Check</button>
                       <button class="btn btn-sm" onclick="toggleAccountProductMode(${a.id}, '${escapeJs(a.product_mode || 'general')}')">${a.product_mode === 'lead_gen' ? 'General' : 'Lead Gen'}</button>
                       <button class="btn btn-sm" onclick="openGhlDrawer(${a.id}, '${escapeJs(a.label || a.name || '')}')">GHL</button>
+                      <button class="btn btn-sm" onclick="openMcpDrawer(${a.id}, '${escapeJs(a.label || a.name || '')}')">MCP</button>
                       ${a.is_active ? '' : `<button class="btn btn-sm" onclick="setDefaultAccount(${a.id})">Default</button>`}
                     </div>
                   </td>
@@ -178,6 +181,16 @@
     return `<span class="badge badge-low" title="${fmtDateTime(h.expires_at)}">${days}d</span>`;
   }
 
+  function mcpBadge(account) {
+    if (!account?.ghl_mcp_enabled) return '<span class="badge badge-low">disabled</span>';
+    const status = String(account.ghl_mcp_last_status || 'unknown');
+    if (status === 'ok') return `<span class="badge badge-active">connected</span>${account.ghl_mcp_last_test_at ? `<div class="text-muted" style="font-size:0.68rem;">${fmtDateTime(account.ghl_mcp_last_test_at)}</div>` : ''}`;
+    if (status === 'partial') return `<span class="badge badge-warning">partial</span>`;
+    if (status === 'failed') return `<span class="badge badge-critical">failed</span>`;
+    if (status === 'disabled') return '<span class="badge badge-low">disabled</span>';
+    return `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
+  }
+
   function escapeJs(value) {
     return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, ' ');
   }
@@ -247,6 +260,73 @@
         </div>
         <div class="text-muted" style="font-size:0.72rem; margin-top:14px; line-height:1.5;">
           Contacts are pulled every 6 hours. Each GHL contact gets matched back to a visitor by their custom <code>client_id</code> field first, then by hashed email or phone. Historical sync now supports incremental, range, and full bootstrap modes.
+        </div>
+      `);
+    } catch (err) {
+      setDrawerBody(`<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`);
+    }
+  }
+
+  async function openMcpDrawer(accountId, label) {
+    openDrawer(`HighLevel MCP — ${label}`, '<div class="loading">Loading</div>');
+    try {
+      const status = await apiGet(`/accounts/${accountId}/mcp-status`);
+      const allowedTools = Array.isArray(status.allowed_tools) ? status.allowed_tools : [];
+      const availableTools = Array.isArray(status.available_tools) ? status.available_tools : [];
+      const missingTools = Array.isArray(status.missing_tools) ? status.missing_tools : [];
+      const recentRuns = Array.isArray(status.recent_runs) ? status.recent_runs : [];
+      setDrawerBody(`
+        <div class="mb-md" style="font-size:0.82rem;">
+          <div><span class="text-muted">Status:</span> ${status.status === 'ok' ? '<span class="text-green">Connected</span>' : status.status === 'partial' ? '<span class="text-orange">Partial</span>' : status.status === 'failed' ? '<span class="text-red">Failed</span>' : '<span class="text-muted">Disabled</span>'}</div>
+          <div><span class="text-muted">Mode:</span> ${escapeHtml(status.mode || 'disabled')}</div>
+          <div><span class="text-muted">Auth source:</span> ${escapeHtml(status.auth_source || 'ghl_connection')}</div>
+          <div><span class="text-muted">Location ID:</span> <span class="mono">${escapeHtml(status.location_id || '—')}</span></div>
+          <div><span class="text-muted">Last test:</span> ${status.last_test_at ? fmtDateTime(status.last_test_at) : 'never'}</div>
+          ${status.last_error ? `<div class="alert-banner alert-warning" style="margin-top:8px;">${escapeHtml(status.last_error)}</div>` : ''}
+        </div>
+        <div class="form-group">
+          <label class="form-label">MCP enabled</label>
+          <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem;">
+            <input id="ghl-mcp-enabled" type="checkbox" ${status.enabled ? 'checked' : ''} />
+            Enable account-scoped HighLevel MCP
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Mode</label>
+          <select id="ghl-mcp-mode" class="form-select">
+            <option value="disabled" ${status.mode === 'disabled' ? 'selected' : ''}>disabled</option>
+            <option value="read_only" ${status.mode === 'read_only' ? 'selected' : ''}>read_only</option>
+          </select>
+        </div>
+        <div class="reco-card" style="padding:10px 12px; margin-top:8px;">
+          <div class="reco-entity mb-sm" style="font-size:0.8rem;">Connection source</div>
+          <div class="text-muted" style="font-size:0.76rem; line-height:1.5;">
+            MCP reuses the existing GHL connection for this account. Update the GHL token or location in the GHL drawer if this account is not mapped correctly.
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:16px; flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="saveMcpConfig(${accountId}, '${escapeJs(label || '')}')">Save MCP Config</button>
+          <button class="btn" onclick="testMcpConfig(${accountId}, '${escapeJs(label || '')}')">Test Connection</button>
+          <button class="btn" onclick="closeDrawer()">Close</button>
+        </div>
+        <div class="reco-card" style="padding:10px 12px; margin-top:14px;">
+          <div class="reco-entity mb-sm" style="font-size:0.8rem;">Read-only tool coverage</div>
+          <div><span class="text-muted">Allowed tools:</span> ${allowedTools.length ? allowedTools.map((tool) => `<span class="badge badge-low" style="margin:2px 4px 2px 0;">${escapeHtml(tool)}</span>`).join('') : '<span class="text-muted">—</span>'}</div>
+          <div style="margin-top:8px;"><span class="text-muted">Available probes:</span> ${availableTools.length ? availableTools.map((tool) => `<span class="badge badge-active" style="margin:2px 4px 2px 0;">${escapeHtml(tool)}</span>`).join('') : '<span class="text-muted">none yet</span>'}</div>
+          <div style="margin-top:8px;"><span class="text-muted">Missing probes:</span> ${missingTools.length ? missingTools.map((tool) => `<span class="badge badge-warning" style="margin:2px 4px 2px 0;">${escapeHtml(tool)}</span>`).join('') : '<span class="text-muted">none</span>'}</div>
+        </div>
+        <div class="table-container" style="margin-top:14px;">
+          <div class="table-header"><span class="table-title">Recent MCP runs</span></div>
+          ${recentRuns.length ? `<div style="overflow:auto;"><table>
+            <thead><tr><th>When</th><th>Type</th><th>Tool</th><th>Status</th><th>Reason</th></tr></thead>
+            <tbody>${recentRuns.map((run) => `<tr>
+              <td>${fmtDateTime(run.created_at)}</td>
+              <td>${escapeHtml(run.run_type || '—')}</td>
+              <td class="mono">${escapeHtml(run.tool_name || '—')}</td>
+              <td><span class="badge badge-${run.status === 'success' || run.status === 'ok' ? 'active' : run.status === 'partial' ? 'warning' : 'critical'}">${escapeHtml(run.status || 'unknown')}</span></td>
+              <td>${escapeHtml(run.reason_code || '—')}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No MCP runs yet.</div>'}
         </div>
       `);
     } catch (err) {
@@ -331,6 +411,33 @@
     }
   }
 
+  async function saveMcpConfig(accountId, label) {
+    try {
+      const payload = {
+        enabled: document.getElementById('ghl-mcp-enabled').checked,
+        mode: document.getElementById('ghl-mcp-mode').value,
+      };
+      await apiPatch(`/accounts/${accountId}/mcp-config`, payload);
+      toast('MCP config saved', 'success');
+      await openMcpDrawer(accountId, label);
+      loadAdminAccounts();
+    } catch (err) {
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
+    }
+  }
+
+  async function testMcpConfig(accountId, label) {
+    try {
+      toast('Testing MCP connection…', 'info');
+      await apiPost(`/accounts/${accountId}/mcp-test`, {});
+      toast('MCP test completed', 'success');
+      await openMcpDrawer(accountId, label);
+      loadAdminAccounts();
+    } catch (err) {
+      toast(`Error: ${safeErrorMessage(err)}`, 'error');
+    }
+  }
+
   Object.assign(window, {
     loadAdminAccounts,
     openAddAccountDrawer,
@@ -339,11 +446,14 @@
     setDefaultAccount,
     checkAccountToken,
     openGhlDrawer,
+    openMcpDrawer,
     saveGhlCredentials,
     triggerGhlSync,
     presetGhlSyncRange,
     presetGhlSyncFull,
-      clearGhlCredentials,
-      toggleAccountProductMode,
+    clearGhlCredentials,
+    toggleAccountProductMode,
+    saveMcpConfig,
+    testMcpConfig,
   });
 })();

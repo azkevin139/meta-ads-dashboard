@@ -5,6 +5,7 @@
 
 -- Clean slate (drop in reverse dependency order)
 DROP TABLE IF EXISTS action_log CASCADE;
+DROP TABLE IF EXISTS ghl_mcp_runs CASCADE;
 DROP TABLE IF EXISTS security_audit_log CASCADE;
 DROP TABLE IF EXISTS webhook_event_ledger CASCADE;
 DROP TABLE IF EXISTS known_contact_revisit_sends CASCADE;
@@ -60,6 +61,15 @@ CREATE TABLE accounts (
   ghl_last_bootstrap_at TIMESTAMPTZ,
   ghl_oldest_synced_at TIMESTAMPTZ,
   ghl_last_sync_error TEXT,
+  ghl_mcp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ghl_mcp_token_encrypted TEXT,
+  ghl_mcp_location_id TEXT,
+  ghl_mcp_mode TEXT NOT NULL DEFAULT 'disabled' CHECK (ghl_mcp_mode IN ('disabled', 'read_only', 'assistive_write', 'automated_write')),
+  ghl_mcp_scopes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ghl_mcp_tools_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ghl_mcp_last_test_at TIMESTAMPTZ,
+  ghl_mcp_last_status TEXT,
+  ghl_mcp_last_error TEXT,
   product_mode TEXT NOT NULL DEFAULT 'general' CHECK (product_mode IN ('general', 'lead_gen')),
   fast_sync_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   is_active       BOOLEAN DEFAULT TRUE,
@@ -145,6 +155,23 @@ CREATE INDEX idx_security_audit_log_created ON security_audit_log(created_at DES
 CREATE INDEX idx_security_audit_log_actor ON security_audit_log(actor_user_id, created_at DESC);
 CREATE INDEX idx_security_audit_log_account ON security_audit_log(account_id, created_at DESC);
 CREATE INDEX idx_security_audit_log_action ON security_audit_log(action, created_at DESC);
+
+CREATE TABLE ghl_mcp_runs (
+  id BIGSERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  run_type TEXT NOT NULL,
+  tool_name TEXT,
+  status TEXT NOT NULL,
+  reason_code TEXT,
+  request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  response_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  duration_ms INTEGER,
+  request_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_ghl_mcp_runs_account_created ON ghl_mcp_runs(account_id, created_at DESC);
+CREATE INDEX idx_ghl_mcp_runs_run_type ON ghl_mcp_runs(run_type, created_at DESC);
 
 -- ============================================================
 -- 2. CAMPAIGNS

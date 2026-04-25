@@ -4,6 +4,7 @@ const accountService = require('../services/accountService');
 const accountAccess = require('../services/accountAccessService');
 const tokenHealth = require('../services/tokenHealthService');
 const ghl = require('../services/ghlService');
+const ghlMcp = require('../services/ghlMcpService');
 const securityAudit = require('../services/securityAuditService');
 const {
   ensureBoolean,
@@ -226,6 +227,62 @@ router.post('/:id/ghl/sync', adminOnly, async (req, res) => {
       after_json: { options: body, result },
     });
     res.json({ success: true, ...result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/:id/mcp-status', adminOnly, async (req, res) => {
+  try {
+    const status = await ghlMcp.getConnectionStatus(parseInt(req.params.id, 10));
+    res.json(status);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.patch('/:id/mcp-config', adminOnly, async (req, res) => {
+  try {
+    const accountId = parseInt(req.params.id, 10);
+    const body = ensureObject(req.body || {});
+    const result = await ghlMcp.saveConfig(accountId, {
+      enabled: body.enabled === undefined ? undefined : ensureBoolean(body.enabled, 'enabled must be true or false'),
+      mode: body.mode === undefined ? undefined : ensureEnum(body.mode, ['disabled', 'read_only'], 'mode must be disabled or read_only'),
+    });
+    await securityAudit.fromRequest(req, {
+      action: 'ghl_mcp.config_saved',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+      after_json: {
+        enabled: result.enabled,
+        mode: result.mode,
+        location_id: result.location_id,
+      },
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/:id/mcp-test', adminOnly, async (req, res) => {
+  try {
+    const accountId = parseInt(req.params.id, 10);
+    const result = await ghlMcp.testConnection(accountId);
+    await securityAudit.fromRequest(req, {
+      action: 'ghl_mcp.test_triggered',
+      target_type: 'account',
+      target_id: String(accountId),
+      account_id: accountId,
+      after_json: {
+        status: result.status,
+        reason_code: result.reason_code,
+        available_tools: result.available_tools,
+        missing_tools: result.missing_tools,
+      },
+    });
+    res.json({ success: true, data: result });
   } catch (err) {
     sendError(res, err);
   }

@@ -51,6 +51,12 @@ function publicAccount(row) {
     timezone: row.timezone,
     product_mode: row.product_mode || 'general',
     fast_sync_enabled: row.fast_sync_enabled === true,
+    ghl_mcp_enabled: row.ghl_mcp_enabled === true,
+    ghl_mcp_mode: row.ghl_mcp_mode || 'disabled',
+    ghl_mcp_location_id: row.ghl_mcp_location_id || null,
+    ghl_mcp_last_test_at: row.ghl_mcp_last_test_at || null,
+    ghl_mcp_last_status: row.ghl_mcp_last_status || null,
+    ghl_mcp_last_error: row.ghl_mcp_last_error || null,
     is_active: row.is_active,
     token_last4: row.token_last4 || null,
     created_at: row.created_at,
@@ -120,7 +126,10 @@ async function discoverAccountsForToken(token) {
 
 async function listAccounts() {
   const rows = await queryAll(`
-    SELECT id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
+    SELECT id, meta_account_id, name, label, currency, timezone,
+           product_mode, fast_sync_enabled,
+           ghl_mcp_enabled, ghl_mcp_mode, ghl_mcp_location_id, ghl_mcp_last_test_at, ghl_mcp_last_status, ghl_mcp_last_error,
+           is_active, token_last4, created_at, updated_at
     FROM accounts
     ORDER BY is_active DESC, label NULLS LAST, name
   `);
@@ -187,7 +196,10 @@ async function createAccount(input = {}) {
       fast_sync_enabled = accounts.fast_sync_enabled,
       is_active = CASE WHEN EXCLUDED.is_active THEN true ELSE accounts.is_active END,
       updated_at = NOW()
-    RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
+    RETURNING id, meta_account_id, name, label, currency, timezone,
+              product_mode, fast_sync_enabled,
+              ghl_mcp_enabled, ghl_mcp_mode, ghl_mcp_location_id, ghl_mcp_last_test_at, ghl_mcp_last_status, ghl_mcp_last_error,
+              is_active, token_last4, created_at, updated_at
   `, [
     metaAccountId,
     name,
@@ -257,7 +269,10 @@ async function refreshAccountMetadata(accountId = null) {
             timezone = $4,
             updated_at = NOW()
         WHERE id = $1
-        RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
+        RETURNING id, meta_account_id, name, label, currency, timezone,
+                  product_mode, fast_sync_enabled,
+                  ghl_mcp_enabled, ghl_mcp_mode, ghl_mcp_location_id, ghl_mcp_last_test_at, ghl_mcp_last_status, ghl_mcp_last_error,
+                  is_active, token_last4, created_at, updated_at
       `, [
         row.id,
         details?.name || row.name,
@@ -297,7 +312,10 @@ async function updateProductMode(accountId, { productMode, fastSyncEnabled } = {
         fast_sync_enabled = $3,
         updated_at = NOW()
     WHERE id = $1
-    RETURNING id, meta_account_id, name, label, currency, timezone, product_mode, fast_sync_enabled, is_active, token_last4, created_at, updated_at
+    RETURNING id, meta_account_id, name, label, currency, timezone,
+              product_mode, fast_sync_enabled,
+              ghl_mcp_enabled, ghl_mcp_mode, ghl_mcp_location_id, ghl_mcp_last_test_at, ghl_mcp_last_status, ghl_mcp_last_error,
+              is_active, token_last4, created_at, updated_at
   `, [accountId, mode, fastSync]);
   if (!row) throw new Error('Account not found');
   return publicAccount(row);

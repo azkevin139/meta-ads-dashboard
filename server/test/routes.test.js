@@ -1133,11 +1133,13 @@ test('account GHL sync route validates mode and forwards sync options', async ()
   const accountServicePath = require.resolve('../services/accountService');
   const tokenHealthPath = require.resolve('../services/tokenHealthService');
   const ghlPath = require.resolve('../services/ghlService');
+  const ghlMcpPath = require.resolve('../services/ghlMcpService');
   const routePath = require.resolve('../routes/accounts');
   const originals = new Map([
     [accountServicePath, require.cache[accountServicePath]],
     [tokenHealthPath, require.cache[tokenHealthPath]],
     [ghlPath, require.cache[ghlPath]],
+    [ghlMcpPath, require.cache[ghlMcpPath]],
     [routePath, require.cache[routePath]],
   ]);
 
@@ -1156,6 +1158,13 @@ test('account GHL sync route validates mode and forwards sync options', async ()
     },
   };
   require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[ghlMcpPath] = {
+    exports: {
+      getConnectionStatus: async () => ({ status: 'disabled' }),
+      saveConfig: async () => ({ enabled: false, mode: 'disabled' }),
+      testConnection: async () => ({ status: 'disabled' }),
+    },
+  };
   require.cache[ghlPath] = {
     exports: {
       getStatus: async () => ({ configured: true }),
@@ -1210,12 +1219,14 @@ test('account product mode route updates lead gen fast sync settings', async () 
   const accountServicePath = require.resolve('../services/accountService');
   const tokenHealthPath = require.resolve('../services/tokenHealthService');
   const ghlPath = require.resolve('../services/ghlService');
+  const ghlMcpPath = require.resolve('../services/ghlMcpService');
   const securityAuditPath = require.resolve('../services/securityAuditService');
   const routePath = require.resolve('../routes/accounts');
   const originals = new Map([
     [accountServicePath, require.cache[accountServicePath]],
     [tokenHealthPath, require.cache[tokenHealthPath]],
     [ghlPath, require.cache[ghlPath]],
+    [ghlMcpPath, require.cache[ghlMcpPath]],
     [securityAuditPath, require.cache[securityAuditPath]],
     [routePath, require.cache[routePath]],
   ]);
@@ -1239,6 +1250,13 @@ test('account product mode route updates lead gen fast sync settings', async () 
     },
   };
   require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[ghlMcpPath] = {
+    exports: {
+      getConnectionStatus: async () => ({ status: 'disabled' }),
+      saveConfig: async () => ({ enabled: false, mode: 'disabled' }),
+      testConnection: async () => ({ status: 'disabled' }),
+    },
+  };
   require.cache[securityAuditPath] = { exports: { fromRequest: async () => {} } };
   require.cache[ghlPath] = {
     exports: {
@@ -1271,6 +1289,103 @@ test('account product mode route updates lead gen fast sync settings', async () 
         fastSyncEnabled: true,
       },
     });
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('account MCP routes save config and run readiness test', async () => {
+  const accountServicePath = require.resolve('../services/accountService');
+  const tokenHealthPath = require.resolve('../services/tokenHealthService');
+  const ghlPath = require.resolve('../services/ghlService');
+  const ghlMcpPath = require.resolve('../services/ghlMcpService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const routePath = require.resolve('../routes/accounts');
+  const originals = new Map([
+    [accountServicePath, require.cache[accountServicePath]],
+    [tokenHealthPath, require.cache[tokenHealthPath]],
+    [ghlPath, require.cache[ghlPath]],
+    [ghlMcpPath, require.cache[ghlMcpPath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let savedArgs = null;
+  let testedId = null;
+  delete require.cache[routePath];
+  require.cache[accountServicePath] = {
+    exports: {
+      listAccounts: async () => [],
+      publicAccount: (row) => row,
+      updateSessionAccount: async () => ({}),
+      createAccount: async () => ({}),
+      discoverAccountsForToken: async () => ([]),
+      importAccountsFromToken: async () => ([]),
+      refreshAccountMetadata: async () => ({}),
+      setDefaultAccount: async () => ({}),
+      updateProductMode: async () => ({}),
+    },
+  };
+  require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[ghlPath] = {
+    exports: {
+      getStatus: async () => ({ configured: true }),
+      saveGhlCredentials: async () => ({ success: true }),
+      clearGhlCredentials: async () => ({ success: true }),
+      syncAccountById: async () => ({ account_id: 1 }),
+    },
+  };
+  require.cache[ghlMcpPath] = {
+    exports: {
+      getConnectionStatus: async (accountId) => ({ account_id: accountId, status: 'partial', mode: 'read_only' }),
+      saveConfig: async (accountId, payload) => {
+        savedArgs = { accountId, payload };
+        return { account_id: accountId, enabled: payload.enabled, location_id: 'loc_123', mode: payload.mode, auth_source: 'ghl_connection' };
+      },
+      testConnection: async (accountId) => {
+        testedId = accountId;
+        return { account_id: accountId, status: 'ok', available_tools: ['contacts_get-contacts'], missing_tools: [] };
+      },
+    },
+  };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {} } };
+
+  try {
+    const router = require('../routes/accounts');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', session_token_hash: 'hash' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const statusRes = await invoke(app, { method: 'GET', url: '/55/mcp-status' });
+    assert.equal(statusRes.status, 200);
+    assert.equal(statusRes.json.status, 'partial');
+
+    const saveRes = await invoke(app, {
+      method: 'PATCH',
+      url: '/55/mcp-config',
+      headers: { 'content-type': 'application/json' },
+      body: { enabled: true, mode: 'read_only' },
+    });
+    assert.equal(saveRes.status, 200);
+    assert.deepEqual(savedArgs, {
+      accountId: 55,
+      payload: {
+        enabled: true,
+        mode: 'read_only',
+      },
+    });
+
+    const testRes = await invoke(app, {
+      method: 'POST',
+      url: '/55/mcp-test',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(testRes.status, 200);
+    assert.equal(testedId, 55);
+    assert.equal(testRes.json.data.status, 'ok');
   } finally {
     restoreCache(originals);
   }
