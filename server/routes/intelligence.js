@@ -9,6 +9,7 @@ const audienceAutomation = require('../services/audienceAutomationService');
 const touchSequences = require('../services/touchSequenceService');
 const revisitAutomation = require('../services/revisitAutomationService');
 const revenueCopilot = require('../services/revenueCopilotService');
+const actionProposals = require('../services/actionProposalService');
 const accountAccess = require('../services/accountAccessService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
@@ -17,12 +18,14 @@ const { queryAll } = require('../db');
 const {
   ensureArray,
   ensureBoolean,
+  ensureEnum,
   ensureInteger,
   ensureNonEmptyString,
   ensureObject,
   optionalInteger,
   optionalTrimmedString,
 } = require('../validation');
+const config = require('../config');
 
 function adminOrOperator(req, res, next) {
   if (!req.user || !['admin', 'operator'].includes(req.user.role)) {
@@ -203,6 +206,64 @@ router.get('/revenue-copilot', async (req, res) => {
     const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
     const forceRefresh = req.query.refresh === '1';
     res.json({ data: await revenueCopilot.getDashboardSnapshot(account.id, { forceRefresh }) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/proposed-actions', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const status = optionalTrimmedString(req.query.status, 30) || 'proposed';
+    const limit = optionalInteger(req.query.limit, 'limit must be a positive integer') || 12;
+    const result = await actionProposals.listProposals(account.id, { status, limit });
+    res.json({
+      data: result.rows,
+      latest_run: result.latestRun,
+      openai: {
+        configured: Boolean(config.openai.apiKey),
+      },
+    });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/proposed-actions/generate', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const result = await actionProposals.generateProposals(account.id, { forceRefresh: true });
+    await securityAudit.fromRequest(req, {
+      action: 'copilot_proposals.generated',
+      target_type: 'account',
+      target_id: String(account.id),
+      account_id: account.id,
+      after_json: {
+        proposal_count: result.proposals.length,
+        run_id: result.run.id,
+      },
+    });
+    res.json({ data: result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/proposed-actions/:id/status', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const proposalId = ensureInteger(req.params.id, 'id must be a positive integer');
+    const body = ensureObject(req.body);
+    const status = ensureEnum(body.status, ['approved', 'dismissed'], 'Invalid proposal status');
+    const updated = await actionProposals.updateProposalStatus(account.id, proposalId, status, req.user?.id);
+    await securityAudit.fromRequest(req, {
+      action: 'copilot_proposal.status_updated',
+      target_type: 'copilot_proposal',
+      target_id: String(proposalId),
+      account_id: account.id,
+      after_json: { status },
+    });
+    res.json({ data: updated });
   } catch (err) {
     sendError(res, err);
   }

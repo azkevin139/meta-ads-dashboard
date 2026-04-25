@@ -64,7 +64,8 @@ module.exports = {
 
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
-    model: 'gpt-4o',
+    projectId: process.env.OPENAI_PROJECT_ID || '',
+    model: process.env.OPENAI_MODEL || 'gpt-4o',
   },
 
   touchSequences: {
@@ -80,6 +81,7 @@ module.exports = {
     delaySeconds: parseInt(process.env.REVISIT_AUTOMATION_DELAY_SECONDS || '', 10) || 60,
     intervalMs: parseInt(process.env.REVISIT_AUTOMATION_INTERVAL_MS || '', 10) || 30 * 1000,
     maxAttempts: parseInt(process.env.REVISIT_AUTOMATION_MAX_ATTEMPTS || '', 10) || 3,
+    targetAdsetId: process.env.REVISIT_AUTOMATION_TARGET_ADSET_ID || '',
     keyPaths: String(process.env.REVISIT_AUTOMATION_KEY_PATHS || '')
       .split(',')
       .map((value) => value.trim())

@@ -11,6 +11,7 @@ let touchSequenceCache = [];
 let touchSequenceEditingId = null;
 let intelDataHealth = null;
 let audienceAutomationCatalog = { segments: [], thresholdTypes: [], actionTypes: [] };
+let proposedActionFilter = 'proposed';
 
 async function loadIntelligence(container) {
   container.innerHTML = `
@@ -58,6 +59,18 @@ async function loadIntelligence(container) {
         </div>
       </div>
       <div id="intel-revenue-copilot"><div class="loading">Loading revenue copilot</div></div>
+    </div>
+    <div class="table-container mb-md">
+      <div class="table-header">
+        <span class="table-title">Proposed Actions</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" id="intel-proposals-filter-proposed">Proposed</button>
+          <button class="btn btn-sm" id="intel-proposals-filter-approved">Approved</button>
+          <button class="btn btn-sm" id="intel-proposals-filter-dismissed">Dismissed</button>
+          <button class="btn btn-sm btn-primary" id="intel-proposals-generate">Generate</button>
+        </div>
+      </div>
+      <div id="intel-proposed-actions"><div class="loading">Loading proposed actions</div></div>
     </div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
@@ -120,6 +133,14 @@ async function loadIntelligence(container) {
   `;
   const revenueRefreshButton = document.getElementById('intel-revenue-copilot-refresh');
   if (revenueRefreshButton) revenueRefreshButton.onclick = () => loadRevenueCopilot(true);
+  const generateProposalsButton = document.getElementById('intel-proposals-generate');
+  if (generateProposalsButton) generateProposalsButton.onclick = () => generateProposedActions();
+  const proposedFilterButton = document.getElementById('intel-proposals-filter-proposed');
+  if (proposedFilterButton) proposedFilterButton.onclick = () => setProposalFilter('proposed');
+  const approvedFilterButton = document.getElementById('intel-proposals-filter-approved');
+  if (approvedFilterButton) approvedFilterButton.onclick = () => setProposalFilter('approved');
+  const dismissedFilterButton = document.getElementById('intel-proposals-filter-dismissed');
+  if (dismissedFilterButton) dismissedFilterButton.onclick = () => setProposalFilter('dismissed');
 
   await Promise.all([
     loadDecisionQueues(),
@@ -127,6 +148,7 @@ async function loadIntelligence(container) {
     loadAudienceSegments(),
     loadAudienceAutomation(),
     loadRevenueCopilot(),
+    loadProposedActions(),
     loadLifecycleSummary(),
     loadIdentityHealth(),
     loadIdentityCollisions(),
@@ -216,6 +238,102 @@ async function loadRevenueCopilot(forceRefresh = false) {
     `;
   } catch (err) {
     el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+function setProposalFilter(status) {
+  proposedActionFilter = status;
+  loadProposedActions();
+}
+
+async function loadProposedActions() {
+  const el = document.getElementById('intel-proposed-actions');
+  if (!el) return;
+  try {
+    const res = await apiGet(`/intelligence/proposed-actions?status=${encodeURIComponent(proposedActionFilter)}&limit=12`);
+    const rows = res.data || [];
+    const latestRun = res.latest_run || null;
+    const summary = latestRun?.output_summary?.summary || '';
+    const latestError = latestRun?.output_summary?.message || '';
+    const meta = latestRun
+      ? `<div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">Last run ${fmtDateTime(latestRun.created_at)} · ${escapeHtml(latestRun.status)}${latestRun.reason_code ? ` · ${escapeHtml(latestRun.reason_code)}` : ''}</div>`
+      : '<div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">No proposal run yet.</div>';
+    if (!rows.length) {
+      el.innerHTML = `
+        ${meta}
+        ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
+        ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
+        <div class="text-muted" style="font-size:0.78rem; padding:12px;">No ${escapeHtml(proposedActionFilter)} actions yet.</div>
+      `;
+      return;
+    }
+    el.innerHTML = `
+      ${meta}
+      ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
+      ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
+      <div style="display:grid; gap:12px;">
+        ${rows.map((row) => {
+          const payload = row.payload || {};
+          const dataUsed = Array.isArray(payload.data_used) ? payload.data_used : [];
+          const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+          const action = payload.recommended_action || {};
+          const badge = row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : row.priority === 'critical' ? 'critical' : row.priority === 'high' ? 'warning' : 'active';
+          return `
+            <div class="reco-card" style="padding:14px;">
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+                <div>
+                  <div style="font-weight:700; font-size:0.95rem;">${escapeHtml(row.title)}</div>
+                  <div class="text-muted" style="font-size:0.74rem; margin-top:4px;">${fmtDateTime(row.created_at)} · confidence ${fmt(Number(row.confidence || 0) * 100, 'integer')}%</div>
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                  <span class="badge badge-${badge}">${escapeHtml(row.priority)}</span>
+                  <span class="badge badge-${row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : 'warning'}">${escapeHtml(row.status)}</span>
+                </div>
+              </div>
+              <div style="margin-top:10px; display:grid; gap:8px;">
+                <div><div class="text-muted" style="font-size:0.72rem;">Why</div><div>${escapeHtml(row.why)}</div></div>
+                <div><div class="text-muted" style="font-size:0.72rem;">Why not another action</div><div>${escapeHtml(row.why_not_alternative || '—')}</div></div>
+                <div><div class="text-muted" style="font-size:0.72rem;">Expected impact</div><div>${escapeHtml(row.expected_impact || '—')}</div></div>
+                <div><div class="text-muted" style="font-size:0.72rem;">Recommended action</div><div>${escapeHtml(action.kind || 'review')} · ${escapeHtml(action.target_scope || 'account')}${action.note ? ` · ${escapeHtml(action.note)}` : ''}</div></div>
+                ${dataUsed.length ? `<div><div class="text-muted" style="font-size:0.72rem;">Data used</div><div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">${dataUsed.map((item) => `<span class="badge badge-low">${escapeHtml(item)}</span>`).join('')}</div></div>` : ''}
+                ${evidence.length ? `<div><div class="text-muted" style="font-size:0.72rem;">Evidence</div><ul style="margin:6px 0 0 18px;">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
+              </div>
+              ${row.status === 'proposed' ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn btn-sm btn-primary intel-proposal-status" data-id="${row.id}" data-status="approved">Approve</button>
+                <button class="btn btn-sm intel-proposal-status" data-id="${row.id}" data-status="dismissed">Dismiss</button>
+              </div>` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+    el.querySelectorAll('.intel-proposal-status').forEach((button) => {
+      button.onclick = () => updateProposalStatus(button.dataset.id, button.dataset.status);
+    });
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
+}
+
+async function generateProposedActions() {
+  try {
+    const res = await apiPost('/intelligence/proposed-actions/generate', {});
+    const count = res.data?.proposals?.length || 0;
+    toast(`Generated ${count} proposed action${count === 1 ? '' : 's'}.`);
+    proposedActionFilter = 'proposed';
+    await loadProposedActions();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
+}
+
+async function updateProposalStatus(proposalId, status) {
+  try {
+    await apiPost(`/intelligence/proposed-actions/${proposalId}/status`, { status });
+    toast(`Proposal ${status}.`);
+    await loadProposedActions();
+  } catch (err) {
+    toast(`Error: ${safeErrorMessage(err)}`, 'error');
   }
 }
 

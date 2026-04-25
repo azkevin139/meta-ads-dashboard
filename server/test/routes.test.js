@@ -782,12 +782,14 @@ test('touch sequence save requires steps and monitor route returns data', async 
   const intelligencePath = require.resolve('../services/intelligenceService');
   const trackingServicePath = require.resolve('../services/trackingService');
   const audiencePushPath = require.resolve('../services/audiencePushService');
+  const audienceAutomationPath = require.resolve('../services/audienceAutomationService');
   const touchSequencePath = require.resolve('../services/touchSequenceService');
   const routePath = require.resolve('../routes/intelligence');
   const originals = new Map([
     [intelligencePath, require.cache[intelligencePath]],
     [trackingServicePath, require.cache[trackingServicePath]],
     [audiencePushPath, require.cache[audiencePushPath]],
+    [audienceAutomationPath, require.cache[audienceAutomationPath]],
     [touchSequencePath, require.cache[touchSequencePath]],
     [routePath, require.cache[routePath]],
   ]);
@@ -796,6 +798,19 @@ test('touch sequence save requires steps and monitor route returns data', async 
   require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
   require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
   require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[audienceAutomationPath] = {
+    exports: {
+      THRESHOLD_TYPES: [],
+      ACTION_TYPES: [],
+      listRules: async () => ([]),
+      buildAudienceReadiness: () => ({ status: 'ready' }),
+      listAvailableSegments: async () => ([]),
+      listRuns: async () => ([]),
+      saveRule: async () => ({}),
+      deleteRule: async () => ({}),
+      evaluateRulesForAccount: async () => ({}),
+    },
+  };
   require.cache[touchSequencePath] = {
     exports: {
       DEFAULT_SEVEN_TOUCH_TEMPLATE: [{ step_number: 1, name: 'Discovery Engagers', audience_source_type: 'meta_engagement' }],
@@ -942,6 +957,7 @@ test('tracking recovery routes save window and run backfill', async () => {
   const intelligencePath = require.resolve('../services/intelligenceService');
   const trackingServicePath = require.resolve('../services/trackingService');
   const audiencePushPath = require.resolve('../services/audiencePushService');
+  const audienceAutomationPath = require.resolve('../services/audienceAutomationService');
   const touchSequencePath = require.resolve('../services/touchSequenceService');
   const recoveryPath = require.resolve('../services/trackingRecoveryService');
   const routePath = require.resolve('../routes/intelligence');
@@ -949,6 +965,7 @@ test('tracking recovery routes save window and run backfill', async () => {
     [intelligencePath, require.cache[intelligencePath]],
     [trackingServicePath, require.cache[trackingServicePath]],
     [audiencePushPath, require.cache[audiencePushPath]],
+    [audienceAutomationPath, require.cache[audienceAutomationPath]],
     [touchSequencePath, require.cache[touchSequencePath]],
     [recoveryPath, require.cache[recoveryPath]],
     [routePath, require.cache[routePath]],
@@ -958,6 +975,19 @@ test('tracking recovery routes save window and run backfill', async () => {
   require.cache[intelligencePath] = { exports: { readTargets: () => ({}), DEFAULT_TARGETS: {} } };
   require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
   require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[audienceAutomationPath] = {
+    exports: {
+      THRESHOLD_TYPES: [],
+      ACTION_TYPES: [],
+      listRules: async () => ([]),
+      buildAudienceReadiness: () => ({ status: 'ready' }),
+      listAvailableSegments: async () => ([]),
+      listRuns: async () => ([]),
+      saveRule: async () => ({}),
+      deleteRule: async () => ({}),
+      evaluateRulesForAccount: async () => ({}),
+    },
+  };
   require.cache[touchSequencePath] = {
     exports: {
       DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
@@ -1207,6 +1237,130 @@ test('revenue copilot route returns account-scoped diagnostics payload', async (
     assert.equal(res.json.data.forced, true);
     assert.equal(res.json.data.mcp_status.status, 'ok');
     assert.equal(res.json.data.lead_response_audit.metrics.new_leads_24h, 5);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('proposed actions routes list, generate, and update status', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const revenueCopilotPath = require.resolve('../services/revenueCopilotService');
+  const accountAccessPath = require.resolve('../services/accountAccessService');
+  const actionProposalPath = require.resolve('../services/actionProposalService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [revenueCopilotPath, require.cache[revenueCopilotPath]],
+    [accountAccessPath, require.cache[accountAccessPath]],
+    [actionProposalPath, require.cache[actionProposalPath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let generatedAccountId = null;
+  let updatedStatus = null;
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = {
+    exports: {
+      readTargets: () => ({}),
+      DEFAULT_TARGETS: {},
+    },
+  };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: null, buckets: [] }),
+      saveWindow: async () => ({}),
+      runBackfill: async () => ({}),
+      getAlerts: async () => ({ alerts: [] }),
+    },
+  };
+  require.cache[revenueCopilotPath] = {
+    exports: {
+      getDashboardSnapshot: async () => ({ mcp_status: { status: 'ok' } }),
+    },
+  };
+  require.cache[accountAccessPath] = {
+    exports: {
+      resolveAuthorizedAccount: async () => ({ id: 11 }),
+    },
+  };
+  require.cache[securityAuditPath] = {
+    exports: {
+      fromRequest: async () => {},
+    },
+  };
+  require.cache[actionProposalPath] = {
+    exports: {
+      listProposals: async () => ({
+        rows: [{ id: 91, title: 'Fix speed to lead', status: 'proposed' }],
+        latestRun: { id: 17, status: 'success' },
+      }),
+      generateProposals: async (accountId) => {
+        generatedAccountId = accountId;
+        return {
+          run: { id: 17, status: 'success' },
+          summary: '2 urgent issues detected',
+          proposals: [{ id: 91, title: 'Fix speed to lead' }],
+        };
+      },
+      updateProposalStatus: async (_accountId, proposalId, status) => {
+        updatedStatus = { proposalId, status };
+        return { id: proposalId, status };
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const listRes = await invoke(app, { method: 'GET', url: '/proposed-actions?status=proposed' });
+    assert.equal(listRes.status, 200);
+    assert.equal(listRes.json.data[0].id, 91);
+
+    const generateRes = await invoke(app, {
+      method: 'POST',
+      url: '/proposed-actions/generate',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(generateRes.status, 200);
+    assert.equal(generatedAccountId, 11);
+    assert.equal(generateRes.json.data.run.id, 17);
+
+    const updateRes = await invoke(app, {
+      method: 'POST',
+      url: '/proposed-actions/91/status',
+      headers: { 'content-type': 'application/json' },
+      body: { status: 'approved' },
+    });
+    assert.equal(updateRes.status, 200);
+    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'approved' });
   } finally {
     restoreCache(originals);
   }
