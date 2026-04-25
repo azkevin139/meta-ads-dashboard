@@ -1129,6 +1129,89 @@ test('intelligence lifecycle summary route returns data payload', async () => {
   }
 });
 
+test('revenue copilot route returns account-scoped diagnostics payload', async () => {
+  const intelligencePath = require.resolve('../services/intelligenceService');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const audiencePushPath = require.resolve('../services/audiencePushService');
+  const touchSequencePath = require.resolve('../services/touchSequenceService');
+  const recoveryPath = require.resolve('../services/trackingRecoveryService');
+  const revenueCopilotPath = require.resolve('../services/revenueCopilotService');
+  const accountAccessPath = require.resolve('../services/accountAccessService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [intelligencePath, require.cache[intelligencePath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [audiencePushPath, require.cache[audiencePushPath]],
+    [touchSequencePath, require.cache[touchSequencePath]],
+    [recoveryPath, require.cache[recoveryPath]],
+    [revenueCopilotPath, require.cache[revenueCopilotPath]],
+    [accountAccessPath, require.cache[accountAccessPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[intelligencePath] = {
+    exports: {
+      readTargets: () => ({}),
+      DEFAULT_TARGETS: {},
+    },
+  };
+  require.cache[trackingServicePath] = { exports: { getHealth: async () => ({}) } };
+  require.cache[audiencePushPath] = { exports: { setAutoRefresh: async () => ({}) } };
+  require.cache[touchSequencePath] = {
+    exports: {
+      DEFAULT_SEVEN_TOUCH_TEMPLATE: [],
+      listSequences: async () => [],
+      saveSequence: async () => ({}),
+      deleteSequence: async () => ({}),
+      runMonitorForAccount: async () => ([]),
+      runMonitorForSequence: async () => ({}),
+    },
+  };
+  require.cache[recoveryPath] = {
+    exports: {
+      getSummary: async () => ({ outage_window: null, buckets: [] }),
+      saveWindow: async () => ({}),
+      runBackfill: async () => ({}),
+      getAlerts: async () => ({ alerts: [] }),
+    },
+  };
+  require.cache[accountAccessPath] = {
+    exports: {
+      resolveAuthorizedAccount: async () => ({ id: 11 }),
+    },
+  };
+  require.cache[revenueCopilotPath] = {
+    exports: {
+      getDashboardSnapshot: async (accountId, opts) => ({
+        account_id: accountId,
+        refreshed_at: '2026-04-25T12:00:00.000Z',
+        forced: !!opts.forceRefresh,
+        mcp_status: { status: 'ok', mode: 'read_only' },
+        lead_response_audit: { status: 'ok', metrics: { new_leads_24h: 5 } },
+      }),
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const res = await invoke(app, { method: 'GET', url: '/revenue-copilot?accountId=11&refresh=1' });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.data.account_id, 11);
+    assert.equal(res.json.data.forced, true);
+    assert.equal(res.json.data.mcp_status.status, 'ok');
+    assert.equal(res.json.data.lead_response_audit.metrics.new_leads_24h, 5);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('account GHL sync route validates mode and forwards sync options', async () => {
   const accountServicePath = require.resolve('../services/accountService');
   const tokenHealthPath = require.resolve('../services/tokenHealthService');

@@ -50,6 +50,15 @@ async function loadIntelligence(container) {
       </div>
       <div id="intel-audience-automation"><div class="loading">Loading audience automation</div></div>
     </div>
+    <div class="table-container mb-md">
+      <div class="table-header">
+        <span class="table-title">Revenue Copilot</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" id="intel-revenue-copilot-refresh">Refresh</button>
+        </div>
+      </div>
+      <div id="intel-revenue-copilot"><div class="loading">Loading revenue copilot</div></div>
+    </div>
     <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
       <div class="table-container">
         <div class="table-header"><span class="table-title">Lifecycle Summary</span><span class="badge badge-active">CRM + TRACKING</span></div>
@@ -109,12 +118,15 @@ async function loadIntelligence(container) {
       <div id="intel-journeys"><div class="loading">Loading journeys</div></div>
     </div>
   `;
+  const revenueRefreshButton = document.getElementById('intel-revenue-copilot-refresh');
+  if (revenueRefreshButton) revenueRefreshButton.onclick = () => loadRevenueCopilot(true);
 
   await Promise.all([
     loadDecisionQueues(),
     loadTouchSequences(),
     loadAudienceSegments(),
     loadAudienceAutomation(),
+    loadRevenueCopilot(),
     loadLifecycleSummary(),
     loadIdentityHealth(),
     loadIdentityCollisions(),
@@ -126,6 +138,85 @@ async function loadIntelligence(container) {
     loadJourneys(),
   ]);
   await loadIntelDataHealth();
+}
+
+async function loadRevenueCopilot(forceRefresh = false) {
+  const el = document.getElementById('intel-revenue-copilot');
+  if (!el) return;
+  try {
+    const res = await apiGet(`/intelligence/revenue-copilot${forceRefresh ? '?refresh=1' : ''}`);
+    const data = res.data || {};
+    const mcp = data.mcp_status || {};
+    const lead = data.lead_response_audit || {};
+    const pipe = data.pipeline_leakage_audit || {};
+    const convo = data.conversation_health || {};
+    const revenue = data.revenue_feedback_summary || {};
+    const topCampaigns = revenue.metrics?.top_campaigns || [];
+    const stageCounts = pipe.metrics?.stage_counts || [];
+    el.innerHTML = `
+      <div class="grid-two" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,0.9fr); gap:16px;">
+        <div>
+          <div class="reco-card" style="padding:12px; margin-bottom:12px;">
+            <div class="reco-entity" style="font-size:0.84rem; margin-bottom:6px;">MCP status</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <span class="badge badge-${mcp.status === 'ok' ? 'active' : mcp.status === 'partial' ? 'warning' : mcp.status === 'disabled' ? 'low' : 'critical'}">${escapeHtml(mcp.status || 'unknown')}</span>
+              <span class="text-muted" style="font-size:0.76rem;">${escapeHtml(mcp.mode || 'disabled')}</span>
+              ${data.refreshed_at ? `<span class="text-muted" style="font-size:0.76rem;">${fmtDateTime(data.refreshed_at)}</span>` : ''}
+            </div>
+            ${mcp.last_error ? `<div class="alert-banner alert-warning" style="margin-top:8px;">${escapeHtml(mcp.last_error)}</div>` : ''}
+          </div>
+          <div style="overflow:auto;"><table>
+            <thead><tr><th>Lead response</th><th class="right">Value</th></tr></thead>
+            <tbody>
+              <tr><td>New leads 24h</td><td class="right">${fmt(lead.metrics?.new_leads_24h || 0, 'integer')}</td></tr>
+              <tr><td>Zero response</td><td class="right">${fmt(lead.metrics?.zero_response_count || 0, 'integer')}</td></tr>
+              <tr><td>Stale new leads</td><td class="right">${fmt(lead.metrics?.stale_new_leads || 0, 'integer')}</td></tr>
+              <tr><td>Avg first response</td><td class="right">${lead.metrics?.avg_first_response_minutes === null || lead.metrics?.avg_first_response_minutes === undefined ? '—' : `${fmt(lead.metrics.avg_first_response_minutes, 'integer')}m`}</td></tr>
+              <tr><td>Contacted within 15m</td><td class="right">${fmt(lead.metrics?.contacted_within_15m_pct || 0, 'integer')}%</td></tr>
+              <tr><td>Contacted within 60m</td><td class="right">${fmt(lead.metrics?.contacted_within_60m_pct || 0, 'integer')}%</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <div>
+          <div style="overflow:auto;"><table>
+            <thead><tr><th>Pipeline leakage</th><th class="right">Value</th></tr></thead>
+            <tbody>
+              <tr><td>New lead >24h</td><td class="right">${fmt(pipe.metrics?.stuck?.new_lead_over_24h || 0, 'integer')}</td></tr>
+              <tr><td>Contacted >72h</td><td class="right">${fmt(pipe.metrics?.stuck?.contacted_over_72h || 0, 'integer')}</td></tr>
+              <tr><td>Qualified >7d</td><td class="right">${fmt(pipe.metrics?.stuck?.qualified_over_7d || 0, 'integer')}</td></tr>
+              <tr><td>Booked >2d</td><td class="right">${fmt(pipe.metrics?.stuck?.booked_over_2d || 0, 'integer')}</td></tr>
+              <tr><td>Pipelines (MCP)</td><td class="right">${pipe.metrics?.pipeline_count === null || pipe.metrics?.pipeline_count === undefined ? '—' : fmt(pipe.metrics.pipeline_count, 'integer')}</td></tr>
+              <tr><td>Unread convos (sample)</td><td class="right">${convo.metrics?.unread_conversations === null || convo.metrics?.unread_conversations === undefined ? '—' : fmt(convo.metrics.unread_conversations, 'integer')}</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="grid-two" style="display:grid; grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr); gap:16px; margin-top:12px;">
+        <div class="table-container">
+          <div class="table-header"><span class="table-title">Stage Counts</span></div>
+          ${stageCounts.length ? `<div style="overflow:auto;"><table>
+            <thead><tr><th>Stage</th><th class="right">Count</th></tr></thead>
+            <tbody>${stageCounts.map((row) => `<tr><td>${escapeHtml(row.stage)}</td><td class="right">${fmt(row.count || 0, 'integer')}</td></tr>`).join('')}</tbody>
+          </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No stage data yet.</div>'}
+        </div>
+        <div class="table-container">
+          <div class="table-header"><span class="table-title">Top Revenue Sources</span></div>
+          ${topCampaigns.length ? `<div style="overflow:auto;"><table>
+            <thead><tr><th>Campaign</th><th class="right">Leads</th><th class="right">Booked %</th><th class="right">Won %</th><th class="right">Rev/Lead</th></tr></thead>
+            <tbody>${topCampaigns.map((row) => `<tr>
+              <td class="name-cell"><span class="mono">${escapeHtml(row.campaign_id)}</span></td>
+              <td class="right">${fmt(row.leads || 0, 'integer')}</td>
+              <td class="right">${fmt(row.booked_rate_pct || 0, 'integer')}%</td>
+              <td class="right">${fmt(row.won_rate_pct || 0, 'integer')}%</td>
+              <td class="right">${fmt(row.revenue_per_lead || 0, 'currency')}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No revenue source data yet.</div>'}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+  }
 }
 
 async function loadAudienceAutomation() {

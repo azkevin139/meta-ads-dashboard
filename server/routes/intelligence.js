@@ -8,6 +8,7 @@ const audiencePush = require('../services/audiencePushService');
 const audienceAutomation = require('../services/audienceAutomationService');
 const touchSequences = require('../services/touchSequenceService');
 const revisitAutomation = require('../services/revisitAutomationService');
+const revenueCopilot = require('../services/revenueCopilotService');
 const accountAccess = require('../services/accountAccessService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
@@ -192,6 +193,16 @@ router.get('/audience-segments', async (req, res) => {
 router.get('/lifecycle-summary', async (req, res) => {
   try {
     res.json({ data: await intelligence.getLifecycleSummary(req.query, req.metaAccount) });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/revenue-copilot', async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const forceRefresh = req.query.refresh === '1';
+    res.json({ data: await revenueCopilot.getDashboardSnapshot(account.id, { forceRefresh }) });
   } catch (err) {
     sendError(res, err);
   }
