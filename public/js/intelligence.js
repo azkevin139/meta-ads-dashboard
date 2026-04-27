@@ -12,6 +12,7 @@ let touchSequenceEditingId = null;
 let intelDataHealth = null;
 let audienceAutomationCatalog = { segments: [], thresholdTypes: [], actionTypes: [] };
 let proposedActionFilter = 'proposed';
+let proposedActionTypeFilter = 'all';
 let intelShellState = {
   proposals: null,
   revenueCopilot: null,
@@ -426,6 +427,34 @@ function syncIntelProposalFilterButtons() {
   });
 }
 
+function proposalTypeLabel(type) {
+  return String(type || 'general').replace(/_/g, ' ');
+}
+
+function proposalCanGenerateDraft(row) {
+  const action = row?.payload?.recommended_action || {};
+  return row?.proposal_type === 'lead_followup' || /followup|message|outreach/i.test(String(action.kind || ''));
+}
+
+function getProposalApprovalPreview(row) {
+  const action = row?.payload?.recommended_action || {};
+  const type = row?.proposal_type || 'general';
+  const consequences = [];
+  if (type === 'lead_followup' || /followup|message|outreach/i.test(String(action.kind || ''))) {
+    consequences.push('Marks this recommendation as approved for operator follow-up.');
+    consequences.push('Does not send any CRM message yet. Execution remains manual.');
+    consequences.push('Keeps the proposal visible in approved history for accountability.');
+  } else if (type === 'campaign_change' || type === 'budget_change') {
+    consequences.push('Marks the ad-change recommendation as approved for operator execution.');
+    consequences.push('Does not change campaign budget or status automatically.');
+    consequences.push('Keeps the change in approved history so operators can track whether it was actually applied.');
+  } else {
+    consequences.push('Marks this recommendation as approved for human execution.');
+    consequences.push('Does not trigger downstream systems automatically in the current read-only phase.');
+  }
+  return consequences;
+}
+
 function setIntelWorkspaceTab(workspace, tab) {
   if (!workspace || !tab) return;
   intelWorkspaceState[workspace] = tab;
@@ -657,18 +686,52 @@ async function loadProposedActions() {
   const el = document.getElementById('intel-proposed-actions');
   if (!el) return;
   try {
-    const res = await apiGet(`/intelligence/proposed-actions?status=${encodeURIComponent(proposedActionFilter)}&limit=12`);
-    const rows = res.data || [];
+    const res = await apiGet('/intelligence/proposed-actions?status=all&limit=36');
+    const allRows = res.data || [];
     const latestRun = res.latest_run || null;
-    intelShellState.proposals = { rows, latestRun };
+    intelShellState.proposals = { rows: allRows, latestRun };
     renderIntelSummary();
     const summary = latestRun?.output_summary?.summary || '';
     const latestError = latestRun?.output_summary?.message || '';
+    const counts = {
+      proposed: allRows.filter((row) => row.status === 'proposed').length,
+      approved: allRows.filter((row) => row.status === 'approved').length,
+      dismissed: allRows.filter((row) => row.status === 'dismissed').length,
+      urgent: allRows.filter((row) => row.status === 'proposed' && ['critical', 'high'].includes(row.priority)).length,
+    };
+    const typeCounts = new Map();
+    allRows.forEach((row) => {
+      const key = row.proposal_type || 'general';
+      typeCounts.set(key, (typeCounts.get(key) || 0) + 1);
+    });
+    const typeFilterBar = `
+      <div class="intel-workspace-tabs" style="margin-bottom:10px;">
+        <button class="btn btn-sm ${proposedActionTypeFilter === 'all' ? 'btn-primary' : ''}" onclick="setProposalTypeFilter('all')">All types ${fmt(allRows.length, 'integer')}</button>
+        ${Array.from(typeCounts.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([type, count]) => `
+          <button class="btn btn-sm ${proposedActionTypeFilter === type ? 'btn-primary' : ''}" onclick="setProposalTypeFilter('${escapeJs(type)}')">${escapeHtml(proposalTypeLabel(type))} ${fmt(count, 'integer')}</button>
+        `).join('')}
+      </div>
+    `;
+    const rows = allRows.filter((row) => (proposedActionFilter === 'all' ? true : row.status === proposedActionFilter)
+      && (proposedActionTypeFilter === 'all' ? true : (row.proposal_type || 'general') === proposedActionTypeFilter));
+    const proposedFilterButton = document.getElementById('intel-proposals-filter-proposed');
+    if (proposedFilterButton) proposedFilterButton.textContent = `Proposed ${fmt(counts.proposed, 'integer')}`;
+    const approvedFilterButton = document.getElementById('intel-proposals-filter-approved');
+    if (approvedFilterButton) approvedFilterButton.textContent = `Approved ${fmt(counts.approved, 'integer')}`;
+    const dismissedFilterButton = document.getElementById('intel-proposals-filter-dismissed');
+    if (dismissedFilterButton) dismissedFilterButton.textContent = `Dismissed ${fmt(counts.dismissed, 'integer')}`;
     const meta = latestRun
       ? `<div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">Last run ${fmtDateTime(latestRun.created_at)} · ${escapeHtml(latestRun.status)}${latestRun.reason_code ? ` · ${escapeHtml(latestRun.reason_code)}` : ''}</div>`
       : '<div class="text-muted" style="font-size:0.76rem; margin-bottom:10px;">No proposal run yet.</div>';
     if (!rows.length) {
       el.innerHTML = `
+        <div class="intel-proposal-review-bar" style="margin-bottom:10px;">
+          <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.proposed, 'integer')}</div><div class="intel-proposal-review-label">Open</div></div>
+          <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.urgent, 'integer')}</div><div class="intel-proposal-review-label">Urgent</div></div>
+          <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.approved, 'integer')}</div><div class="intel-proposal-review-label">Approved</div></div>
+          <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.dismissed, 'integer')}</div><div class="intel-proposal-review-label">Dismissed</div></div>
+        </div>
+        ${typeFilterBar}
         ${meta}
         ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
         ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
@@ -676,12 +739,32 @@ async function loadProposedActions() {
       `;
       return;
     }
+    const groupedRows = rows.reduce((acc, row) => {
+      const key = row.proposal_type || 'general';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(row);
+      return acc;
+    }, {});
     el.innerHTML = `
+      <div class="intel-proposal-review-bar" style="margin-bottom:10px;">
+        <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.proposed, 'integer')}</div><div class="intel-proposal-review-label">Open</div></div>
+        <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.urgent, 'integer')}</div><div class="intel-proposal-review-label">Urgent</div></div>
+        <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.approved, 'integer')}</div><div class="intel-proposal-review-label">Approved</div></div>
+        <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.dismissed, 'integer')}</div><div class="intel-proposal-review-label">Dismissed</div></div>
+      </div>
+      ${typeFilterBar}
       ${meta}
       ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
       ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
       <div class="intel-proposals-grid">
-        ${rows.map((row) => {
+        ${Object.entries(groupedRows).sort((a, b) => a[0].localeCompare(b[0])).map(([groupType, groupRows]) => `
+          <div class="table-container">
+            <div class="table-header">
+              <span class="table-title">${escapeHtml(proposalTypeLabel(groupType))}</span>
+              <span class="badge badge-low">${fmt(groupRows.length, 'integer')}</span>
+            </div>
+            <div style="display:grid; gap:12px; padding:12px;">
+        ${groupRows.map((row) => {
           const payload = row.payload || {};
           const dataUsed = Array.isArray(payload.data_used) ? payload.data_used : [];
           const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
@@ -736,17 +819,35 @@ async function loadProposedActions() {
                   <ul class="intel-proposal-evidence">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
                 </div>` : ''}
               </div>
-              ${row.status === 'proposed' ? `<div class="intel-proposal-actions">
-                <button class="btn btn-sm btn-primary intel-proposal-status" data-id="${row.id}" data-status="approved">Approve</button>
+              <div class="intel-proposal-actions">
+                <button class="btn btn-sm intel-proposal-review" data-id="${row.id}">Review</button>
+                ${proposalCanGenerateDraft(row) ? `<button class="btn btn-sm intel-proposal-draft" data-id="${row.id}">Generate Draft</button>` : ''}
+                ${row.status === 'proposed' ? `
+                <button class="btn btn-sm btn-primary intel-proposal-preview" data-id="${row.id}">Preview Approval</button>
                 <button class="btn btn-sm intel-proposal-status" data-id="${row.id}" data-status="dismissed">Dismiss</button>
-              </div>` : ''}
+                ` : `
+                <button class="btn btn-sm intel-proposal-status" data-id="${row.id}" data-status="proposed">Reopen</button>
+                `}
+              </div>
             </div>
           `;
         }).join('')}
+            </div>
+          </div>
+        `).join('')}
       </div>
     `;
     el.querySelectorAll('.intel-proposal-status').forEach((button) => {
       button.onclick = () => updateProposalStatus(button.dataset.id, button.dataset.status);
+    });
+    el.querySelectorAll('.intel-proposal-review').forEach((button) => {
+      button.onclick = () => openProposalReviewDrawer(button.dataset.id);
+    });
+    el.querySelectorAll('.intel-proposal-preview').forEach((button) => {
+      button.onclick = () => openProposalReviewDrawer(button.dataset.id, { previewApproval: true });
+    });
+    el.querySelectorAll('.intel-proposal-draft').forEach((button) => {
+      button.onclick = () => openProposalReviewDrawer(button.dataset.id, { generateDraft: true });
     });
   } catch (err) {
     el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
@@ -768,10 +869,152 @@ async function generateProposedActions() {
 async function updateProposalStatus(proposalId, status) {
   try {
     await apiPost(`/intelligence/proposed-actions/${proposalId}/status`, { status });
-    toast(`Proposal ${status}.`);
+    toast(status === 'proposed' ? 'Proposal reopened.' : `Proposal ${status}.`);
     await loadProposedActions();
   } catch (err) {
     toast(`Error: ${safeErrorMessage(err)}`, 'error');
+  }
+}
+
+function setProposalTypeFilter(type) {
+  proposedActionTypeFilter = type || 'all';
+  loadProposedActions();
+}
+
+function openProposalReviewDrawer(proposalId, options = {}) {
+  const rows = intelShellState.proposals?.rows || [];
+  const row = rows.find((item) => String(item.id) === String(proposalId));
+  if (!row) {
+    toast('Proposal not found', 'error');
+    return;
+  }
+  const payload = row.payload || {};
+  const action = payload.recommended_action || {};
+  const dataUsed = Array.isArray(payload.data_used) ? payload.data_used : [];
+  const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+  const targetIds = Array.isArray(action.target_ids) ? action.target_ids : [];
+  const consequences = getProposalApprovalPreview(row);
+  const footer = row.status === 'proposed'
+    ? `
+      ${proposalCanGenerateDraft(row) ? `<button class="btn" onclick="loadProposalDraft(${row.id})">Generate Draft</button>` : ''}
+      <button class="btn btn-primary" onclick="approveProposalFromDrawer(${row.id})">Approve</button>
+      <button class="btn" onclick="dismissProposalFromDrawer(${row.id})">Dismiss</button>
+      <button class="btn" onclick="closeDrawer()">Close</button>
+    `
+    : `
+      ${proposalCanGenerateDraft(row) ? `<button class="btn" onclick="loadProposalDraft(${row.id})">Generate Draft</button>` : ''}
+      <button class="btn" onclick="reopenProposalFromDrawer(${row.id})">Reopen</button>
+      <button class="btn" onclick="closeDrawer()">Close</button>
+    `;
+  openDrawer(`Action Review · ${escapeHtml(row.title)}`, `
+    <div class="intel-proposal-review-detail">
+      <div class="intel-proposal-review-detail-meta">
+        <span class="badge badge-${row.priority === 'critical' ? 'critical' : row.priority === 'high' ? 'warning' : 'low'}">${escapeHtml(row.priority)}</span>
+        <span class="badge badge-${row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : 'warning'}">${escapeHtml(row.status)}</span>
+        <span class="text-muted" style="font-size:0.76rem;">${fmtDateTime(row.created_at)}</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Why this</label>
+        <div class="intel-review-copy">${escapeHtml(row.why || '—')}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Why not another action</label>
+        <div class="intel-review-copy">${escapeHtml(row.why_not_alternative || '—')}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Expected impact</label>
+        <div class="intel-review-copy">${escapeHtml(row.expected_impact || '—')}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Approval consequences</label>
+        <ul class="intel-proposal-evidence">${consequences.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Action</label>
+          <div class="intel-review-copy">${escapeHtml(action.kind || 'review')}</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Scope</label>
+          <div class="intel-review-copy">${escapeHtml(action.target_scope || 'account')}</div>
+        </div>
+      </div>
+      ${action.note ? `<div class="form-group">
+        <label class="form-label">Execution note</label>
+        <div class="intel-review-copy">${escapeHtml(action.note)}</div>
+      </div>` : ''}
+      ${targetIds.length ? `<div class="form-group">
+        <label class="form-label">Target IDs</label>
+        <div class="intel-proposal-chip-row">${targetIds.map((item) => `<span class="badge badge-low">${escapeHtml(item)}</span>`).join('')}</div>
+      </div>` : ''}
+      ${dataUsed.length ? `<div class="form-group">
+        <label class="form-label">Data used</label>
+        <div class="intel-proposal-chip-row">${dataUsed.map((item) => `<span class="badge badge-low">${escapeHtml(item)}</span>`).join('')}</div>
+      </div>` : ''}
+      ${evidence.length ? `<div class="form-group">
+        <label class="form-label">Evidence</label>
+        <ul class="intel-proposal-evidence">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+      </div>` : ''}
+      <div id="proposal-draft-slot"></div>
+    </div>
+  `, footer);
+  if (options.previewApproval) {
+    const slot = document.getElementById('proposal-draft-slot');
+    if (slot) {
+      slot.innerHTML = `<div class="alert-banner alert-info" style="margin-top:8px;">Approving now only marks this action as operator-approved. No CRM or ads execution happens automatically in the current phase.</div>`;
+    }
+  }
+  if (options.generateDraft && proposalCanGenerateDraft(row)) {
+    loadProposalDraft(row.id);
+  }
+}
+
+async function approveProposalFromDrawer(proposalId) {
+  await updateProposalStatus(proposalId, 'approved');
+  closeDrawer();
+}
+
+async function dismissProposalFromDrawer(proposalId) {
+  await updateProposalStatus(proposalId, 'dismissed');
+  closeDrawer();
+}
+
+async function reopenProposalFromDrawer(proposalId) {
+  await updateProposalStatus(proposalId, 'proposed');
+  closeDrawer();
+}
+
+async function loadProposalDraft(proposalId) {
+  const slot = document.getElementById('proposal-draft-slot');
+  if (!slot) return;
+  slot.innerHTML = '<div class="loading" style="padding:24px;">Generating follow-up draft</div>';
+  try {
+    const res = await apiPost(`/intelligence/proposed-actions/${proposalId}/draft`, {});
+    const draft = res.data || {};
+    slot.innerHTML = `
+      <div class="form-group">
+        <label class="form-label">Draft channel</label>
+        <div class="intel-review-copy">${escapeHtml(draft.channel || 'follow-up')}</div>
+      </div>
+      ${draft.subject ? `<div class="form-group">
+        <label class="form-label">Subject</label>
+        <div class="intel-review-copy">${escapeHtml(draft.subject)}</div>
+      </div>` : ''}
+      <div class="form-group">
+        <label class="form-label">Draft message</label>
+        <div class="intel-review-copy">${escapeHtml(draft.message || '—')}</div>
+      </div>
+      ${draft.cta ? `<div class="form-group">
+        <label class="form-label">CTA</label>
+        <div class="intel-review-copy">${escapeHtml(draft.cta)}</div>
+      </div>` : ''}
+      ${draft.notes ? `<div class="form-group">
+        <label class="form-label">Operator notes</label>
+        <div class="intel-review-copy">${escapeHtml(draft.notes)}</div>
+      </div>` : ''}
+    `;
+  } catch (err) {
+    slot.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 

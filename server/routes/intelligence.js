@@ -10,6 +10,7 @@ const touchSequences = require('../services/touchSequenceService');
 const revisitAutomation = require('../services/revisitAutomationService');
 const revenueCopilot = require('../services/revenueCopilotService');
 const actionProposals = require('../services/actionProposalService');
+const openaiCopilot = require('../services/openaiCopilotService');
 const accountAccess = require('../services/accountAccessService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
@@ -254,7 +255,7 @@ router.post('/proposed-actions/:id/status', adminOrOperator, async (req, res) =>
     const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
     const proposalId = ensureInteger(req.params.id, 'id must be a positive integer');
     const body = ensureObject(req.body);
-    const status = ensureEnum(body.status, ['approved', 'dismissed'], 'Invalid proposal status');
+    const status = ensureEnum(body.status, ['approved', 'dismissed', 'proposed'], 'Invalid proposal status');
     const updated = await actionProposals.updateProposalStatus(account.id, proposalId, status, req.user?.id);
     await securityAudit.fromRequest(req, {
       action: 'copilot_proposal.status_updated',
@@ -264,6 +265,26 @@ router.post('/proposed-actions/:id/status', adminOrOperator, async (req, res) =>
       after_json: { status },
     });
     res.json({ data: updated });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/proposed-actions/:id/draft', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.body?.accountId, { allowAdminOverride: true });
+    const proposalId = ensureInteger(req.params.id, 'id must be a positive integer');
+    const proposal = await actionProposals.getProposal(account.id, proposalId);
+    const payload = proposal.payload || {};
+    const action = payload.recommended_action || {};
+    const isFollowup = proposal.proposal_type === 'lead_followup'
+      || /followup|message|outreach/i.test(String(action.kind || ''));
+    if (!isFollowup) {
+      return res.status(400).json({ error: 'Draft generation is only available for follow-up style proposals' });
+    }
+    const snapshot = await actionProposals.buildSnapshot(account.id, { forceRefresh: false });
+    const draft = await openaiCopilot.generateFollowupDraft({ proposal, snapshot });
+    res.json({ data: draft });
   } catch (err) {
     sendError(res, err);
   }

@@ -219,13 +219,26 @@ async function listProposals(accountId, { status = 'proposed', limit = 12 } = {}
   return { rows, latestRun };
 }
 
+async function getProposal(accountId, proposalId) {
+  const row = await queryOne(`
+    SELECT *
+    FROM copilot_proposals
+    WHERE id = $1 AND account_id = $2
+    LIMIT 1
+  `, [proposalId, accountId]);
+  if (!row) throw notFound('Proposal not found');
+  return row;
+}
+
 async function updateProposalStatus(accountId, proposalId, status, userId) {
-  if (!['approved', 'dismissed'].includes(status)) {
+  if (!['approved', 'dismissed', 'proposed'].includes(status)) {
     throw badRequest('Invalid proposal status');
   }
   const field = status === 'approved'
     ? 'status = $3, approved_at = NOW(), approved_by = $4'
-    : 'status = $3, dismissed_at = NOW(), dismissed_by = $4';
+    : status === 'dismissed'
+      ? 'status = $3, dismissed_at = NOW(), dismissed_by = $4'
+      : 'status = $3, approved_at = NULL, approved_by = NULL, dismissed_at = NULL, dismissed_by = NULL';
   const result = await query(`
     UPDATE copilot_proposals
     SET ${field}
@@ -241,6 +254,6 @@ module.exports = {
   buildSnapshot,
   generateProposals,
   listProposals,
+  getProposal,
   updateProposalStatus,
 };
-

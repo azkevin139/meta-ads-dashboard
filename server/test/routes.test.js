@@ -1251,6 +1251,7 @@ test('proposed actions routes list, generate, and update status', async () => {
   const revenueCopilotPath = require.resolve('../services/revenueCopilotService');
   const accountAccessPath = require.resolve('../services/accountAccessService');
   const actionProposalPath = require.resolve('../services/actionProposalService');
+  const openaiCopilotPath = require.resolve('../services/openaiCopilotService');
   const securityAuditPath = require.resolve('../services/securityAuditService');
   const routePath = require.resolve('../routes/intelligence');
   const originals = new Map([
@@ -1262,12 +1263,14 @@ test('proposed actions routes list, generate, and update status', async () => {
     [revenueCopilotPath, require.cache[revenueCopilotPath]],
     [accountAccessPath, require.cache[accountAccessPath]],
     [actionProposalPath, require.cache[actionProposalPath]],
+    [openaiCopilotPath, require.cache[openaiCopilotPath]],
     [securityAuditPath, require.cache[securityAuditPath]],
     [routePath, require.cache[routePath]],
   ]);
 
   let generatedAccountId = null;
   let updatedStatus = null;
+  let draftProposalId = null;
   delete require.cache[routePath];
   require.cache[intelligencePath] = {
     exports: {
@@ -1328,6 +1331,32 @@ test('proposed actions routes list, generate, and update status', async () => {
         updatedStatus = { proposalId, status };
         return { id: proposalId, status };
       },
+      getProposal: async (_accountId, proposalId) => ({
+        id: proposalId,
+        proposal_type: 'lead_followup',
+        payload: {
+          recommended_action: {
+            kind: 'suggest_followup_message',
+            target_scope: 'lead_queue',
+            note: 'Reply within 15 minutes.',
+          },
+        },
+      }),
+      buildSnapshot: async () => ({ account_id: 11, diagnostics: {} }),
+    },
+  };
+  require.cache[openaiCopilotPath] = {
+    exports: {
+      generateFollowupDraft: async ({ proposal }) => {
+        draftProposalId = proposal.id;
+        return {
+          channel: 'whatsapp',
+          subject: '',
+          message: 'Quick follow-up draft',
+          cta: 'Reply here',
+          notes: 'Manual send only',
+        };
+      },
     },
   };
 
@@ -1361,6 +1390,25 @@ test('proposed actions routes list, generate, and update status', async () => {
     });
     assert.equal(updateRes.status, 200);
     assert.deepEqual(updatedStatus, { proposalId: 91, status: 'approved' });
+
+    const reopenRes = await invoke(app, {
+      method: 'POST',
+      url: '/proposed-actions/91/status',
+      headers: { 'content-type': 'application/json' },
+      body: { status: 'proposed' },
+    });
+    assert.equal(reopenRes.status, 200);
+    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'proposed' });
+
+    const draftRes = await invoke(app, {
+      method: 'POST',
+      url: '/proposed-actions/91/draft',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(draftRes.status, 200);
+    assert.equal(draftProposalId, 91);
+    assert.equal(draftRes.json.data.channel, 'whatsapp');
   } finally {
     restoreCache(originals);
   }
@@ -1623,6 +1671,122 @@ test('account MCP routes save config and run readiness test', async () => {
     assert.equal(testRes.status, 200);
     assert.equal(testedId, 55);
     assert.equal(testRes.json.data.status, 'ok');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('account AI backend routes return status and test result', async () => {
+  const accountServicePath = require.resolve('../services/accountService');
+  const tokenHealthPath = require.resolve('../services/tokenHealthService');
+  const ghlPath = require.resolve('../services/ghlService');
+  const ghlMcpPath = require.resolve('../services/ghlMcpService');
+  const openaiCopilotPath = require.resolve('../services/openaiCopilotService');
+  const aiBackendSettingsPath = require.resolve('../services/aiBackendSettingsService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const routePath = require.resolve('../routes/accounts');
+  const originals = new Map([
+    [accountServicePath, require.cache[accountServicePath]],
+    [tokenHealthPath, require.cache[tokenHealthPath]],
+    [ghlPath, require.cache[ghlPath]],
+    [ghlMcpPath, require.cache[ghlMcpPath]],
+    [openaiCopilotPath, require.cache[openaiCopilotPath]],
+    [aiBackendSettingsPath, require.cache[aiBackendSettingsPath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let savedBackendArgs = null;
+  delete require.cache[routePath];
+  require.cache[accountServicePath] = {
+    exports: {
+      listAccounts: async () => [],
+      publicAccount: (row) => row,
+      updateSessionAccount: async () => ({}),
+      createAccount: async () => ({}),
+      discoverAccountsForToken: async () => ([]),
+      importAccountsFromToken: async () => ([]),
+      refreshAccountMetadata: async () => ({}),
+      setDefaultAccount: async () => ({}),
+      updateProductMode: async () => ({}),
+    },
+  };
+  require.cache[tokenHealthPath] = { exports: { getAccountsHealthSummary: async () => [] } };
+  require.cache[ghlPath] = {
+    exports: {
+      getStatus: async () => ({ configured: true }),
+      saveGhlCredentials: async () => ({ success: true }),
+      clearGhlCredentials: async () => ({ success: true }),
+      syncAccountById: async () => ({ account_id: 1 }),
+    },
+  };
+  require.cache[ghlMcpPath] = {
+    exports: {
+      getConnectionStatus: async () => ({ status: 'disabled' }),
+      saveConfig: async () => ({ enabled: false, mode: 'disabled' }),
+      testConnection: async () => ({ status: 'disabled' }),
+    },
+  };
+  require.cache[openaiCopilotPath] = {
+    exports: {
+      getBackendStatus: async () => ({
+        configured: true,
+        source: 'db_override',
+        project_configured: false,
+        model: 'gpt-4o',
+        latest_run: { status: 'failed', reason_code: 'openai_auth_failed' },
+      }),
+      testBackendConnection: async () => ({ status: 'ok', model: 'gpt-4o' }),
+    },
+  };
+  require.cache[aiBackendSettingsPath] = {
+    exports: {
+      saveSettings: async (payload) => {
+        savedBackendArgs = payload;
+        return { openai_project_id: payload.projectId || null, openai_model: payload.model || 'gpt-4o', updated_at: '2026-04-25T00:00:00.000Z' };
+      },
+    },
+  };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {} } };
+
+  try {
+    const router = require('../routes/accounts');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', session_token_hash: 'hash' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11' };
+      next();
+    });
+
+    const statusRes = await invoke(app, { method: 'GET', url: '/ai-backend-status' });
+    assert.equal(statusRes.status, 200);
+    assert.equal(statusRes.json.model, 'gpt-4o');
+    assert.equal(statusRes.json.latest_run.reason_code, 'openai_auth_failed');
+
+    const testRes = await invoke(app, {
+      method: 'POST',
+      url: '/ai-backend-test',
+      headers: { 'content-type': 'application/json' },
+      body: {},
+    });
+    assert.equal(testRes.status, 200);
+    assert.equal(testRes.json.data.status, 'ok');
+
+    const saveRes = await invoke(app, {
+      method: 'PATCH',
+      url: '/ai-backend-config',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        apiKey: 'sk-proj-test',
+        projectId: 'proj_test',
+        model: 'gpt-4o-mini',
+      },
+    });
+    assert.equal(saveRes.status, 200);
+    assert.deepEqual(savedBackendArgs, {
+      apiKey: 'sk-proj-test',
+      projectId: 'proj_test',
+      model: 'gpt-4o-mini',
+    });
   } finally {
     restoreCache(originals);
   }
