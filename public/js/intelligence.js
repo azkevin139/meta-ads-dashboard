@@ -436,6 +436,23 @@ function proposalCanGenerateDraft(row) {
   return row?.proposal_type === 'lead_followup' || /followup|message|outreach/i.test(String(action.kind || ''));
 }
 
+function proposalTargetActions(row) {
+  const action = row?.payload?.recommended_action || {};
+  const targetScope = String(action.target_scope || '').toLowerCase();
+  const targetIds = Array.isArray(action.target_ids) ? action.target_ids.filter(Boolean) : [];
+  const buttons = [];
+  if ((targetScope.includes('campaign') || row?.proposal_type === 'campaign_change' || row?.proposal_type === 'budget_change') && targetIds[0]) {
+    buttons.push(`<button class="btn btn-sm" onclick="openProposalTargetCampaign('${escapeJs(targetIds[0])}')">Open Campaign</button>`);
+  }
+  if (targetScope.includes('adset') && targetIds[0]) {
+    buttons.push(`<button class="btn btn-sm" onclick="openProposalTargetAdSet('${escapeJs(targetIds[0])}')">Open Ad Set</button>`);
+  }
+  if (targetScope.includes('audience') && targetIds[0]) {
+    buttons.push(`<button class="btn btn-sm" onclick="copyAudienceId('${escapeJs(targetIds[0])}')">Copy Audience ID</button>`);
+  }
+  return buttons.join('');
+}
+
 function getProposalApprovalPreview(row) {
   const action = row?.payload?.recommended_action || {};
   const type = row?.proposal_type || 'general';
@@ -866,9 +883,9 @@ async function generateProposedActions() {
   }
 }
 
-async function updateProposalStatus(proposalId, status) {
+async function updateProposalStatus(proposalId, status, note = '') {
   try {
-    await apiPost(`/intelligence/proposed-actions/${proposalId}/status`, { status });
+    await apiPost(`/intelligence/proposed-actions/${proposalId}/status`, { status, note });
     toast(status === 'proposed' ? 'Proposal reopened.' : `Proposal ${status}.`);
     await loadProposedActions();
   } catch (err) {
@@ -893,6 +910,8 @@ function openProposalReviewDrawer(proposalId, options = {}) {
   const dataUsed = Array.isArray(payload.data_used) ? payload.data_used : [];
   const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
   const targetIds = Array.isArray(action.target_ids) ? action.target_ids : [];
+  const reviewNote = String(payload.review_note || '').trim();
+  const targetButtons = proposalTargetActions(row);
   const consequences = getProposalApprovalPreview(row);
   const footer = row.status === 'proposed'
     ? `
@@ -939,6 +958,10 @@ function openProposalReviewDrawer(proposalId, options = {}) {
           <div class="intel-review-copy">${escapeHtml(action.target_scope || 'account')}</div>
         </div>
       </div>
+      ${targetButtons ? `<div class="form-group">
+        <label class="form-label">Open target</label>
+        <div class="btn-group">${targetButtons}</div>
+      </div>` : ''}
       ${action.note ? `<div class="form-group">
         <label class="form-label">Execution note</label>
         <div class="intel-review-copy">${escapeHtml(action.note)}</div>
@@ -955,6 +978,10 @@ function openProposalReviewDrawer(proposalId, options = {}) {
         <label class="form-label">Evidence</label>
         <ul class="intel-proposal-evidence">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
       </div>` : ''}
+      <div class="form-group">
+        <label class="form-label">Operator note</label>
+        <textarea id="proposal-review-note" class="form-textarea" rows="3" placeholder="Why you approved, dismissed, or reopened this proposal.">${escapeHtml(reviewNote)}</textarea>
+      </div>
       <div id="proposal-draft-slot"></div>
     </div>
   `, footer);
@@ -970,17 +997,17 @@ function openProposalReviewDrawer(proposalId, options = {}) {
 }
 
 async function approveProposalFromDrawer(proposalId) {
-  await updateProposalStatus(proposalId, 'approved');
+  await updateProposalStatus(proposalId, 'approved', document.getElementById('proposal-review-note')?.value || '');
   closeDrawer();
 }
 
 async function dismissProposalFromDrawer(proposalId) {
-  await updateProposalStatus(proposalId, 'dismissed');
+  await updateProposalStatus(proposalId, 'dismissed', document.getElementById('proposal-review-note')?.value || '');
   closeDrawer();
 }
 
 async function reopenProposalFromDrawer(proposalId) {
-  await updateProposalStatus(proposalId, 'proposed');
+  await updateProposalStatus(proposalId, 'proposed', document.getElementById('proposal-review-note')?.value || '');
   closeDrawer();
 }
 
@@ -1016,6 +1043,14 @@ async function loadProposalDraft(proposalId) {
   } catch (err) {
     slot.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
+}
+
+function openProposalTargetCampaign(campaignId) {
+  navigateTo('adsets', { metaCampaignId: campaignId, campaignName: '' });
+}
+
+function openProposalTargetAdSet(adsetId) {
+  navigateTo('ads', { metaAdsetId: adsetId, adsetName: '', metaCampaignId: '', campaignName: '' });
 }
 
 async function loadAudienceAutomation() {

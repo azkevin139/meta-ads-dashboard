@@ -256,13 +256,14 @@ router.post('/proposed-actions/:id/status', adminOrOperator, async (req, res) =>
     const proposalId = ensureInteger(req.params.id, 'id must be a positive integer');
     const body = ensureObject(req.body);
     const status = ensureEnum(body.status, ['approved', 'dismissed', 'proposed'], 'Invalid proposal status');
-    const updated = await actionProposals.updateProposalStatus(account.id, proposalId, status, req.user?.id);
+    const note = optionalTrimmedString(body.note, 2000) || '';
+    const updated = await actionProposals.updateProposalStatus(account.id, proposalId, status, req.user?.id, note);
     await securityAudit.fromRequest(req, {
       action: 'copilot_proposal.status_updated',
       target_type: 'copilot_proposal',
       target_id: String(proposalId),
       account_id: account.id,
-      after_json: { status },
+      after_json: { status, note },
     });
     res.json({ data: updated });
   } catch (err) {

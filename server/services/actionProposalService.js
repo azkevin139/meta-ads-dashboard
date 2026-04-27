@@ -230,7 +230,7 @@ async function getProposal(accountId, proposalId) {
   return row;
 }
 
-async function updateProposalStatus(accountId, proposalId, status, userId) {
+async function updateProposalStatus(accountId, proposalId, status, userId, note = null) {
   if (!['approved', 'dismissed', 'proposed'].includes(status)) {
     throw badRequest('Invalid proposal status');
   }
@@ -241,10 +241,15 @@ async function updateProposalStatus(accountId, proposalId, status, userId) {
       : 'status = $3, approved_at = NULL, approved_by = NULL, dismissed_at = NULL, dismissed_by = NULL';
   const result = await query(`
     UPDATE copilot_proposals
-    SET ${field}
+    SET ${field},
+        payload = COALESCE(payload, '{}'::jsonb) || jsonb_build_object(
+          'review_note', $5,
+          'review_note_updated_at', NOW()::text,
+          'review_note_status', $3
+        )
     WHERE id = $1 AND account_id = $2
     RETURNING *
-  `, [proposalId, accountId, status, userId || null]);
+  `, [proposalId, accountId, status, userId || null, note ? String(note).trim() : '']);
   if (!result.rows[0]) throw notFound('Proposal not found');
   return result.rows[0];
 }

@@ -1327,8 +1327,8 @@ test('proposed actions routes list, generate, and update status', async () => {
           proposals: [{ id: 91, title: 'Fix speed to lead' }],
         };
       },
-      updateProposalStatus: async (_accountId, proposalId, status) => {
-        updatedStatus = { proposalId, status };
+      updateProposalStatus: async (_accountId, proposalId, status, _userId, note) => {
+        updatedStatus = { proposalId, status, note };
         return { id: proposalId, status };
       },
       getProposal: async (_accountId, proposalId) => ({
@@ -1386,19 +1386,19 @@ test('proposed actions routes list, generate, and update status', async () => {
       method: 'POST',
       url: '/proposed-actions/91/status',
       headers: { 'content-type': 'application/json' },
-      body: { status: 'approved' },
+      body: { status: 'approved', note: 'Reviewed by operator' },
     });
     assert.equal(updateRes.status, 200);
-    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'approved' });
+    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'approved', note: 'Reviewed by operator' });
 
     const reopenRes = await invoke(app, {
       method: 'POST',
       url: '/proposed-actions/91/status',
       headers: { 'content-type': 'application/json' },
-      body: { status: 'proposed' },
+      body: { status: 'proposed', note: 'Bring back into queue' },
     });
     assert.equal(reopenRes.status, 200);
-    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'proposed' });
+    assert.deepEqual(updatedStatus, { proposalId: 91, status: 'proposed', note: 'Bring back into queue' });
 
     const draftRes = await invoke(app, {
       method: 'POST',
