@@ -861,6 +861,30 @@ tbody td.name-cell a:hover {
   padding: 16px 18px 18px;
 }
 
+.intel-section .table-container:last-child,
+.intel-section .reco-card:last-child {
+  margin-bottom: 0;
+}
+
+.intel-section .table-container thead th {
+  padding: 9px 12px;
+}
+
+.intel-section .table-container tbody td {
+  padding: 10px 12px;
+}
+
+.intel-section .table-container tbody td.name-cell {
+  max-width: 260px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.intel-section .table-container tbody td.name-cell .mono,
+.intel-section .table-container tbody td.name-cell div {
+  overflow-wrap: anywhere;
+}
+
 .intel-section:not(.is-expanded) .intel-section-header {
   border-bottom: none;
 }
@@ -1006,6 +1030,58 @@ tbody td.name-cell a:hover {
   border-top: 1px solid var(--border-light);
 }
 
+.intel-proposal-review-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.intel-proposal-review-stat {
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.intel-proposal-review-count {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.intel-proposal-review-label {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+.intel-proposal-review-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.intel-proposal-review-detail-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.intel-review-copy {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.intel-section .reco-card {
+  border-radius: var(--radius);
+}
+
 /* ─── RESPONSIVE ───────────────────────────────────────── */
 @media (max-width: 1024px) {
   .sidebar { display: none; }
@@ -1023,7 +1099,9 @@ tbody td.name-cell a:hover {
   .intel-proposal-card { padding: 14px 16px; }
   .intel-copilot-layout,
   .intel-copilot-two-up,
-  .intel-metrics-grid { grid-template-columns: 1fr; }
+  .intel-metrics-grid,
+  .intel-proposal-review-bar { grid-template-columns: 1fr; }
+  .intel-section .table-container tbody td.name-cell { max-width: none; }
 
   /* Drawer full-width on mobile */
   .drawer { width: 100%; max-width: 100%; right: -100%; }
@@ -1061,6 +1139,8 @@ tbody td.name-cell a:hover {
   .intel-proposal-title { font-size: 0.92rem; }
   .intel-workspace-tabs { overflow-x: auto; flex-wrap: nowrap; white-space: nowrap; scrollbar-width: none; }
   .intel-workspace-tabs::-webkit-scrollbar { display: none; }
+  .intel-section .table-container thead th { padding: 10px 10px; }
+  .intel-section .table-container tbody td { padding: 11px 10px; }
 
   /* Drawer takes the whole screen under 640px */
   .drawer { width: 100vw; max-width: 100vw; border-left: none; }
