@@ -12,127 +12,310 @@ let touchSequenceEditingId = null;
 let intelDataHealth = null;
 let audienceAutomationCatalog = { segments: [], thresholdTypes: [], actionTypes: [] };
 let proposedActionFilter = 'proposed';
+let intelShellState = {
+  proposals: null,
+  revenueCopilot: null,
+  trueRoas: null,
+  dataHealthSummary: null,
+  creativeRows: null,
+};
+let intelActiveNavTarget = 'intel-section-overview';
+let intelSectionState = {
+  overview: true,
+  proposals: true,
+  revenue: true,
+  audiences: false,
+  touch: false,
+  lifecycle: false,
+  identity: false,
+  performance: false,
+  creative: false,
+  journeys: false,
+};
+let intelWorkspaceState = {
+  audiences: 'segments',
+  performance: 'funnel',
+  creative: 'library',
+};
 
 async function loadIntelligence(container) {
   container.innerHTML = `
-    <div class="flex-between mb-md" style="flex-wrap:wrap; gap:10px;">
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-sm ${intelPreset === 'today' ? 'btn-primary' : ''}" onclick="setIntelPreset('today')">Today</button>
-        <button class="btn btn-sm ${intelPreset === 'yesterday' ? 'btn-primary' : ''}" onclick="setIntelPreset('yesterday')">Yesterday</button>
-        <button class="btn btn-sm ${intelPreset === '7d' ? 'btn-primary' : ''}" onclick="setIntelPreset('7d')">7d</button>
-        <button class="btn btn-sm ${intelPreset === '30d' ? 'btn-primary' : ''}" onclick="setIntelPreset('30d')">30d</button>
-        <button class="btn btn-sm ${intelPreset === 'custom' ? 'btn-primary' : ''}" onclick="openIntelDateRange()">Custom</button>
-      </div>
-      <button class="btn btn-sm" onclick="openTargetSettings()">Targets</button>
-    </div>
-    <div id="intel-freshness" class="mb-md"></div>
-    <div id="intel-rules" class="mb-md"><div class="loading">Loading decision queues</div></div>
-    <div class="table-container mb-md">
-      <div class="table-header">
-        <span class="table-title">Touch Sequences</span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" onclick="openTouchSequenceEditor()">Create Sequence</button>
-          <button class="btn btn-sm" onclick="runTouchSequenceMonitor()">Run Monitor</button>
+    <div class="intel-shell">
+      <div class="intel-hero mb-md">
+        <div class="intel-hero-copy">
+          <div class="intel-eyebrow">Decision Center</div>
+          <div class="intel-hero-title">Revenue, response speed, and retargeting actions in one workspace.</div>
+          <div class="intel-hero-subtitle">The page now starts with what needs attention first: health, urgent actions, and the sections where operators actually make decisions.</div>
+        </div>
+        <div class="intel-hero-actions">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm ${intelPreset === 'today' ? 'btn-primary' : ''}" onclick="setIntelPreset('today')">Today</button>
+            <button class="btn btn-sm ${intelPreset === 'yesterday' ? 'btn-primary' : ''}" onclick="setIntelPreset('yesterday')">Yesterday</button>
+            <button class="btn btn-sm ${intelPreset === '7d' ? 'btn-primary' : ''}" onclick="setIntelPreset('7d')">7d</button>
+            <button class="btn btn-sm ${intelPreset === '30d' ? 'btn-primary' : ''}" onclick="setIntelPreset('30d')">30d</button>
+            <button class="btn btn-sm ${intelPreset === 'custom' ? 'btn-primary' : ''}" onclick="openIntelDateRange()">Custom</button>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="intel-shell-refresh">Refresh</button>
+            <button class="btn btn-sm" onclick="openTargetSettings()">Targets</button>
+            <button class="btn btn-sm" data-intel-nav="settings">Settings</button>
+          </div>
         </div>
       </div>
-      <div id="intel-touch-sequences"><div class="loading">Loading touch sequences</div></div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header"><span class="table-title">Audience Segments</span><span class="badge badge-active">RETARGETING</span></div>
-      <div id="intel-audience-segments"><div class="loading">Loading audience segments</div></div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header">
-        <span class="table-title">Audience Automation</span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" onclick="openAudienceAutomationEditor()">Create Rule</button>
-          <button class="btn btn-sm" onclick="runAudienceAutomationEvaluator()">Run Evaluator</button>
+      <div id="intel-summary" class="mb-md"><div class="loading">Loading top summary</div></div>
+      <div class="intel-nav-shell mb-md">
+        <button class="btn btn-sm" data-intel-nav="intel-section-overview">Overview</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-proposals">Proposed Actions</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-audiences">Audiences</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-touch">Touch</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-revenue">Revenue</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-lifecycle">Lifecycle</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-identity">Identity</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-performance">Performance</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-creative">Creative</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-journeys">Journeys</button>
+        <button class="btn btn-sm" data-intel-nav="settings">Settings</button>
+      </div>
+
+      <section id="intel-section-overview" class="intel-section is-expanded">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Overview</div>
+            <div class="intel-section-subtitle">Decision queues, data health, and account-level operating context.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="overview">Collapse</button>
         </div>
-      </div>
-      <div id="intel-audience-automation"><div class="loading">Loading audience automation</div></div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header">
-        <span class="table-title">Revenue Copilot</span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" id="intel-revenue-copilot-refresh">Refresh</button>
+        <div class="intel-section-body" data-intel-section-body="overview">
+          <div id="intel-freshness" class="mb-md"></div>
+          <div id="intel-rules"><div class="loading">Loading decision queues</div></div>
         </div>
-      </div>
-      <div id="intel-revenue-copilot"><div class="loading">Loading revenue copilot</div></div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header">
-        <span class="table-title">Proposed Actions</span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" id="intel-proposals-filter-proposed">Proposed</button>
-          <button class="btn btn-sm" id="intel-proposals-filter-approved">Approved</button>
-          <button class="btn btn-sm" id="intel-proposals-filter-dismissed">Dismissed</button>
-          <button class="btn btn-sm btn-primary" id="intel-proposals-generate">Generate</button>
+      </section>
+
+      <section id="intel-section-proposals" class="intel-section is-expanded">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Proposed Actions</div>
+            <div class="intel-section-subtitle">Prioritized operator actions with justification, tradeoff, and confidence.</div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="intel-proposals-filter-proposed">Proposed</button>
+            <button class="btn btn-sm" id="intel-proposals-filter-approved">Approved</button>
+            <button class="btn btn-sm" id="intel-proposals-filter-dismissed">Dismissed</button>
+            <button class="btn btn-sm btn-primary" id="intel-proposals-generate">Generate</button>
+            <button class="btn btn-sm intel-section-toggle" data-intel-toggle="proposals">Collapse</button>
+          </div>
         </div>
-      </div>
-      <div id="intel-proposed-actions"><div class="loading">Loading proposed actions</div></div>
-    </div>
-    <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
-      <div class="table-container">
-        <div class="table-header"><span class="table-title">Lifecycle Summary</span><span class="badge badge-active">CRM + TRACKING</span></div>
-        <div id="intel-lifecycle-summary"><div class="loading">Loading lifecycle summary</div></div>
-      </div>
-      <div class="table-container">
-        <div class="table-header"><span class="table-title">Lifecycle Events</span><span class="badge badge-active">LEDGER</span></div>
-        <div id="intel-lifecycle-events"><div class="loading">Loading lifecycle events</div></div>
-      </div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header"><span class="table-title">Identity Stitching</span><span class="badge badge-warning">CONFIDENCE</span></div>
-      <div id="intel-identity-health"><div class="loading">Loading identity health</div></div>
-    </div>
-    <div class="table-container mb-md">
-      <div class="table-header">
-        <span class="table-title">Collision Review</span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" onclick="loadIdentityCollisions('open')">Open</button>
-          <button class="btn btn-sm" onclick="loadIdentityCollisions('ignored')">Ignored</button>
-          <button class="btn btn-sm" onclick="loadIdentityCollisions('resolved')">Resolved</button>
+        <div class="intel-section-body" data-intel-section-body="proposals">
+          <div id="intel-proposed-actions"><div class="loading">Loading proposed actions</div></div>
         </div>
-      </div>
-      <div id="intel-identity-collisions"><div class="loading">Loading collision review queue</div></div>
-    </div>
-    <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1.2fr) minmax(320px,0.8fr); gap:16px;">
-      <div class="table-container">
-        <div class="table-header"><span class="table-title">First-Party Funnel</span><span class="badge badge-active">META + TRACKING</span></div>
-        <div id="intel-funnel"><div class="loading">Loading funnel</div></div>
-      </div>
-      <div class="table-container">
-        <div class="table-header">
-          <span class="table-title">Breakdowns</span>
-          <select class="form-select" style="max-width:180px; padding:6px 8px; font-size:0.78rem;" onchange="setIntelBreakdown(this.value)">
-            ${['publisher_platform','platform_position','impression_device','age','gender','country','region'].map(b => `<option value="${b}" ${intelBreakdown === b ? 'selected' : ''}>${b.replace(/_/g,' ')}</option>`).join('')}
-          </select>
+      </section>
+
+      <section id="intel-section-revenue" class="intel-section is-expanded">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Revenue Copilot</div>
+            <div class="intel-section-subtitle">Lead response, pipeline leakage, conversation health, and revenue feedback.</div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="intel-revenue-copilot-refresh">Refresh</button>
+            <button class="btn btn-sm intel-section-toggle" data-intel-toggle="revenue">Collapse</button>
+          </div>
         </div>
-        <div id="intel-breakdowns"><div class="loading">Loading breakdown</div></div>
-      </div>
-    </div>
-    <div class="table-container">
-      <div class="table-header"><span class="table-title">Creative Library</span><span class="badge badge-active">GROUPED</span></div>
-      <div id="intel-creatives"><div class="loading">Loading creatives</div></div>
-    </div>
-    <div class="grid-two mt-md" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
-      <div class="table-container">
-        <div class="table-header"><span class="table-title">True ROAS</span><span class="badge badge-active">FIRST PARTY</span></div>
-        <div id="intel-roas"><div class="loading">Loading ROAS</div></div>
-      </div>
-      <div class="table-container">
-        <div class="table-header"><span class="table-title">Audience Health</span><span class="badge badge-active">META</span></div>
-        <div id="intel-audiences"><div class="loading">Loading audiences</div></div>
-      </div>
-    </div>
-    <div class="table-container mt-md">
-      <div class="table-header"><span class="table-title">Recent Journeys</span><span class="badge badge-active">TRACKING</span></div>
-      <div id="intel-journeys"><div class="loading">Loading journeys</div></div>
+        <div class="intel-section-body" data-intel-section-body="revenue">
+          <div id="intel-revenue-copilot"><div class="loading">Loading revenue copilot</div></div>
+        </div>
+      </section>
+
+      <section id="intel-section-audiences" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Audiences</div>
+            <div class="intel-section-subtitle">Segment readiness, automation thresholds, and touch progression.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="audiences">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="audiences">
+          <div class="intel-workspace-tabs mb-md">
+            <button class="btn btn-sm" data-intel-workspace="audiences" data-intel-workspace-tab="segments">Segments</button>
+            <button class="btn btn-sm" data-intel-workspace="audiences" data-intel-workspace-tab="automation">Automation</button>
+          </div>
+          <div data-intel-workspace-panel="audiences:segments">
+            <div class="table-container mb-md">
+              <div class="table-header">
+                <span class="table-title">Audience Segments</span><span class="badge badge-active">RETARGETING</span>
+              </div>
+              <div id="intel-audience-segments"><div class="loading">Loading audience segments</div></div>
+            </div>
+          </div>
+          <div data-intel-workspace-panel="audiences:automation">
+            <div class="table-container">
+              <div class="table-header">
+                <span class="table-title">Audience Automation</span>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <button class="btn btn-sm" onclick="openAudienceAutomationEditor()">Create Rule</button>
+                  <button class="btn btn-sm" onclick="runAudienceAutomationEvaluator()">Run Evaluator</button>
+                </div>
+              </div>
+              <div id="intel-audience-automation"><div class="loading">Loading audience automation</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="intel-section-touch" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Touch Sequences</div>
+            <div class="intel-section-subtitle">Audience-size triggered retargeting sequences and next-touch control.</div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="openTouchSequenceEditor()">Create Sequence</button>
+            <button class="btn btn-sm" onclick="runTouchSequenceMonitor()">Run Monitor</button>
+            <button class="btn btn-sm intel-section-toggle" data-intel-toggle="touch">Expand</button>
+          </div>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="touch">
+          <div id="intel-touch-sequences"><div class="loading">Loading touch sequences</div></div>
+        </div>
+      </section>
+
+      <section id="intel-section-lifecycle" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Lifecycle</div>
+            <div class="intel-section-subtitle">Stage progression, lifecycle events, and CRM-side movement.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="lifecycle">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="lifecycle">
+          <div class="grid-two mb-md" style="display:grid; grid-template-columns: minmax(0,1fr) minmax(320px,0.8fr); gap:16px;">
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">Lifecycle Summary</span><span class="badge badge-active">CRM + TRACKING</span></div>
+              <div id="intel-lifecycle-summary"><div class="loading">Loading lifecycle summary</div></div>
+            </div>
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">Lifecycle Events</span><span class="badge badge-active">LEDGER</span></div>
+              <div id="intel-lifecycle-events"><div class="loading">Loading lifecycle events</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="intel-section-identity" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Identity Integrity</div>
+            <div class="intel-section-subtitle">Confidence, collisions, and trust boundaries for stitched contacts.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="identity">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="identity">
+          <div class="table-container mb-md">
+            <div class="table-header"><span class="table-title">Identity Stitching</span><span class="badge badge-warning">CONFIDENCE</span></div>
+            <div id="intel-identity-health"><div class="loading">Loading identity health</div></div>
+          </div>
+          <div class="table-container">
+            <div class="table-header">
+              <span class="table-title">Collision Review</span>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-sm" onclick="loadIdentityCollisions('open')">Open</button>
+                <button class="btn btn-sm" onclick="loadIdentityCollisions('ignored')">Ignored</button>
+                <button class="btn btn-sm" onclick="loadIdentityCollisions('resolved')">Resolved</button>
+              </div>
+            </div>
+            <div id="intel-identity-collisions"><div class="loading">Loading collision review queue</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="intel-section-performance" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Performance</div>
+            <div class="intel-section-subtitle">Funnels, breakdowns, true ROAS, and audience health.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="performance">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="performance">
+          <div class="intel-workspace-tabs mb-md">
+            <button class="btn btn-sm" data-intel-workspace="performance" data-intel-workspace-tab="funnel">Funnel</button>
+            <button class="btn btn-sm" data-intel-workspace="performance" data-intel-workspace-tab="roas">ROAS</button>
+            <button class="btn btn-sm" data-intel-workspace="performance" data-intel-workspace-tab="audience-health">Audience Health</button>
+            <button class="btn btn-sm" data-intel-workspace="performance" data-intel-workspace-tab="breakdowns">Breakdowns</button>
+          </div>
+          <div data-intel-workspace-panel="performance:funnel">
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">First-Party Funnel</span><span class="badge badge-active">META + TRACKING</span></div>
+              <div id="intel-funnel"><div class="loading">Loading funnel</div></div>
+            </div>
+          </div>
+          <div data-intel-workspace-panel="performance:roas">
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">True ROAS</span><span class="badge badge-active">FIRST PARTY</span></div>
+              <div id="intel-roas"><div class="loading">Loading ROAS</div></div>
+            </div>
+          </div>
+          <div data-intel-workspace-panel="performance:audience-health">
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">Audience Health</span><span class="badge badge-active">META</span></div>
+              <div id="intel-audiences"><div class="loading">Loading audiences</div></div>
+            </div>
+          </div>
+          <div data-intel-workspace-panel="performance:breakdowns">
+            <div class="table-container">
+              <div class="table-header">
+                <span class="table-title">Breakdowns</span>
+                <select class="form-select" style="max-width:180px; padding:6px 8px; font-size:0.78rem;" onchange="setIntelBreakdown(this.value)">
+                  ${['publisher_platform','platform_position','impression_device','age','gender','country','region'].map(b => `<option value="${b}" ${intelBreakdown === b ? 'selected' : ''}>${b.replace(/_/g,' ')}</option>`).join('')}
+                </select>
+              </div>
+              <div id="intel-breakdowns"><div class="loading">Loading breakdown</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="intel-section-creative" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Creative</div>
+            <div class="intel-section-subtitle">Larger creative cards with metrics visible on first scan.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="creative">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="creative">
+          <div class="intel-workspace-tabs mb-md">
+            <button class="btn btn-sm" data-intel-workspace="creative" data-intel-workspace-tab="library">Library</button>
+            <button class="btn btn-sm" data-intel-workspace="creative" data-intel-workspace-tab="winners">Winners</button>
+          </div>
+          <div class="table-container">
+            <div class="table-header"><span class="table-title">Creative Workspace</span><span class="badge badge-active">GROUPED</span></div>
+            <div id="intel-creatives"><div class="loading">Loading creatives</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="intel-section-journeys" class="intel-section">
+        <div class="intel-section-header">
+          <div>
+            <div class="intel-section-title">Journeys</div>
+            <div class="intel-section-subtitle">Recent visitor journeys and contact-level timelines.</div>
+          </div>
+          <button class="btn btn-sm intel-section-toggle" data-intel-toggle="journeys">Expand</button>
+        </div>
+        <div class="intel-section-body" data-intel-section-body="journeys">
+          <div class="table-container">
+            <div class="table-header"><span class="table-title">Recent Journeys</span><span class="badge badge-active">TRACKING</span></div>
+            <div id="intel-journeys"><div class="loading">Loading journeys</div></div>
+          </div>
+        </div>
+      </section>
     </div>
   `;
   const revenueRefreshButton = document.getElementById('intel-revenue-copilot-refresh');
   if (revenueRefreshButton) revenueRefreshButton.onclick = () => loadRevenueCopilot(true);
+  const shellRefreshButton = document.getElementById('intel-shell-refresh');
+  if (shellRefreshButton) shellRefreshButton.onclick = () => loadIntelligence(container);
   const generateProposalsButton = document.getElementById('intel-proposals-generate');
   if (generateProposalsButton) generateProposalsButton.onclick = () => generateProposedActions();
   const proposedFilterButton = document.getElementById('intel-proposals-filter-proposed');
@@ -141,6 +324,21 @@ async function loadIntelligence(container) {
   if (approvedFilterButton) approvedFilterButton.onclick = () => setProposalFilter('approved');
   const dismissedFilterButton = document.getElementById('intel-proposals-filter-dismissed');
   if (dismissedFilterButton) dismissedFilterButton.onclick = () => setProposalFilter('dismissed');
+  syncIntelProposalFilterButtons();
+  document.querySelectorAll('[data-intel-nav]').forEach((button) => {
+    button.onclick = () => handleIntelNav(button.dataset.intelNav);
+  });
+  document.querySelectorAll('[data-intel-toggle]').forEach((button) => {
+    button.onclick = () => toggleIntelSection(button.dataset.intelToggle);
+  });
+  document.querySelectorAll('[data-intel-workspace][data-intel-workspace-tab]').forEach((button) => {
+    button.onclick = () => setIntelWorkspaceTab(button.dataset.intelWorkspace, button.dataset.intelWorkspaceTab);
+  });
+  applyIntelSectionState();
+  syncIntelNavButtons();
+  applyIntelWorkspaceState();
+  bindIntelSectionObserver();
+  renderIntelSummary();
 
   await Promise.all([
     loadDecisionQueues(),
@@ -162,12 +360,180 @@ async function loadIntelligence(container) {
   await loadIntelDataHealth();
 }
 
+function handleIntelNav(targetId) {
+  if (targetId === 'settings') {
+    navigateTo('settings');
+    return;
+  }
+  intelActiveNavTarget = targetId;
+  syncIntelNavButtons();
+  const target = document.getElementById(targetId);
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function toggleIntelSection(key) {
+  if (!Object.prototype.hasOwnProperty.call(intelSectionState, key)) return;
+  intelSectionState[key] = !intelSectionState[key];
+  applyIntelSectionState();
+}
+
+function applyIntelSectionState() {
+  Object.entries(intelSectionState).forEach(([key, expanded]) => {
+    const section = document.getElementById(`intel-section-${key}`);
+    const body = document.querySelector(`[data-intel-section-body="${key}"]`);
+    const button = document.querySelector(`[data-intel-toggle="${key}"]`);
+    if (section) section.classList.toggle('is-expanded', expanded);
+    if (body) body.style.display = expanded ? '' : 'none';
+    if (button) button.textContent = expanded ? 'Collapse' : 'Expand';
+  });
+}
+
+function syncIntelNavButtons() {
+  document.querySelectorAll('[data-intel-nav]').forEach((button) => {
+    const target = button.dataset.intelNav;
+    button.classList.toggle('btn-primary', target !== 'settings' && target === intelActiveNavTarget);
+  });
+}
+
+function bindIntelSectionObserver() {
+  if (!('IntersectionObserver' in window)) return;
+  const sections = Array.from(document.querySelectorAll('.intel-section[id]'));
+  if (!sections.length) return;
+  const observer = new IntersectionObserver((entries) => {
+    const visible = entries
+      .filter((entry) => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+    if (!visible.length) return;
+    const nextTarget = visible[0].target.id;
+    if (nextTarget && nextTarget !== intelActiveNavTarget) {
+      intelActiveNavTarget = nextTarget;
+      syncIntelNavButtons();
+    }
+  }, {
+    root: null,
+    rootMargin: '-96px 0px -55% 0px',
+    threshold: [0.15, 0.35, 0.6],
+  });
+  sections.forEach((section) => observer.observe(section));
+}
+
+function syncIntelProposalFilterButtons() {
+  const filters = ['proposed', 'approved', 'dismissed'];
+  filters.forEach((status) => {
+    const button = document.getElementById(`intel-proposals-filter-${status}`);
+    if (!button) return;
+    button.classList.toggle('btn-primary', proposedActionFilter === status);
+  });
+}
+
+function setIntelWorkspaceTab(workspace, tab) {
+  if (!workspace || !tab) return;
+  intelWorkspaceState[workspace] = tab;
+  applyIntelWorkspaceState();
+  if (workspace === 'creative') loadCreativeLibrary();
+}
+
+function applyIntelWorkspaceState() {
+  Object.entries(intelWorkspaceState).forEach(([workspace, activeTab]) => {
+    document.querySelectorAll(`[data-intel-workspace="${workspace}"][data-intel-workspace-tab]`).forEach((button) => {
+      button.classList.toggle('btn-primary', button.dataset.intelWorkspaceTab === activeTab);
+    });
+    document.querySelectorAll(`[data-intel-workspace-panel^="${workspace}:"]`).forEach((panel) => {
+      panel.style.display = panel.dataset.intelWorkspacePanel === `${workspace}:${activeTab}` ? '' : 'none';
+    });
+  });
+}
+
+function sumBy(rows, key) {
+  return (rows || []).reduce((sum, row) => sum + (Number(row?.[key]) || 0), 0);
+}
+
+function renderIntelSummary() {
+  const el = document.getElementById('intel-summary');
+  if (!el) return;
+  const health = intelShellState.dataHealthSummary || { state: 'unavailable', summary: 'Loading account health' };
+  const revenue = intelShellState.revenueCopilot || {};
+  const lead = revenue.lead_response_audit?.metrics || {};
+  const topCampaigns = revenue.revenue_feedback_summary?.metrics?.top_campaigns || [];
+  const trueRoasRows = intelShellState.trueRoas || [];
+  const proposalRows = intelShellState.proposals?.rows || [];
+  const latestProposalRun = intelShellState.proposals?.latestRun || null;
+  const spend = sumBy(trueRoasRows, 'spend');
+  const firstPartyRevenue = sumBy(trueRoasRows, 'first_party_revenue');
+  const booked = sumBy(topCampaigns, 'booked');
+  const urgentActions = proposalRows.filter((row) => row.status === 'proposed' && ['critical', 'high'].includes(row.priority)).length;
+  const openActions = proposalRows.filter((row) => row.status === 'proposed').length;
+  const trueRoas = spend > 0 ? Number((firstPartyRevenue / spend).toFixed(2)) : null;
+  const stateBadge = health.state === 'ready'
+    ? 'active'
+    : health.state === 'warning' || health.state === 'partial' || health.state === 'stale'
+      ? 'warning'
+      : 'critical';
+
+  const topAlert = latestProposalRun?.reason_code === 'openai_auth_failed'
+    ? `<div class="alert-banner alert-critical" style="margin-top:12px;">AI proposal generation is blocked by backend OpenAI auth. Fix the platform OpenAI key in Admin before using Proposed Actions.</div>`
+    : urgentActions > 0
+      ? `<div class="alert-banner alert-warning" style="margin-top:12px;">${fmt(urgentActions, 'integer')} urgent proposed action${urgentActions === 1 ? '' : 's'} need review before traffic or retargeting changes.</div>`
+      : '';
+
+  el.innerHTML = `
+    <div class="intel-summary-shell">
+      <div class="intel-summary-header">
+        <div>
+          <div class="intel-section-title">Top Summary</div>
+          <div class="intel-section-subtitle">${escapeHtml(health.summary || 'Loading data health')}</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <span class="badge badge-${stateBadge}">Health ${escapeHtml(health.state || 'unknown')}</span>
+          <span class="badge badge-${urgentActions ? 'warning' : 'active'}">${fmt(openActions, 'integer')} open actions</span>
+          <span class="badge badge-low">${fmt(urgentActions, 'integer')} urgent actions</span>
+        </div>
+      </div>
+      <div class="intel-summary-grid">
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Spend</div>
+          <div class="intel-summary-value">${spend ? fmt(spend, 'currency') : '—'}</div>
+          <div class="intel-summary-note">Current range</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">True ROAS</div>
+          <div class="intel-summary-value">${trueRoas === null ? '—' : `${fmt(trueRoas, 'decimal')}x`}</div>
+          <div class="intel-summary-note">First-party revenue / spend</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Revenue</div>
+          <div class="intel-summary-value">${firstPartyRevenue ? fmt(firstPartyRevenue, 'currency') : '—'}</div>
+          <div class="intel-summary-note">Attributed first-party revenue</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Booked Calls</div>
+          <div class="intel-summary-value">${fmt(booked, 'integer')}</div>
+          <div class="intel-summary-note">From Revenue Copilot source mix</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Uncontacted Leads</div>
+          <div class="intel-summary-value">${fmt(lead.zero_response_count || 0, 'integer')}</div>
+          <div class="intel-summary-note">${fmt(lead.new_leads_24h || 0, 'integer')} new leads in 24h</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Stale New Leads</div>
+          <div class="intel-summary-value">${fmt(lead.stale_new_leads || 0, 'integer')}</div>
+          <div class="intel-summary-note">Leads aging without enough follow-up</div>
+        </div>
+      </div>
+      ${topAlert}
+    </div>
+  `;
+}
+
 async function loadRevenueCopilot(forceRefresh = false) {
   const el = document.getElementById('intel-revenue-copilot');
   if (!el) return;
   try {
     const res = await apiGet(`/intelligence/revenue-copilot${forceRefresh ? '?refresh=1' : ''}`);
     const data = res.data || {};
+    intelShellState.revenueCopilot = data;
+    renderIntelSummary();
     const mcp = data.mcp_status || {};
     const lead = data.lead_response_audit || {};
     const pipe = data.pipeline_leakage_audit || {};
@@ -175,10 +541,76 @@ async function loadRevenueCopilot(forceRefresh = false) {
     const revenue = data.revenue_feedback_summary || {};
     const topCampaigns = revenue.metrics?.top_campaigns || [];
     const stageCounts = pipe.metrics?.stage_counts || [];
+    const leadMetrics = lead.metrics || {};
+    const pipelineMetrics = pipe.metrics || {};
+    const convoMetrics = convo.metrics || {};
     el.innerHTML = `
-      <div class="grid-two" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,0.9fr); gap:16px;">
-        <div>
-          <div class="reco-card" style="padding:12px; margin-bottom:12px;">
+      <div class="intel-metrics-grid">
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">New Leads 24h</div>
+          <div class="intel-summary-value">${fmt(leadMetrics.new_leads_24h || 0, 'integer')}</div>
+          <div class="intel-summary-note">Lead flow entering the CRM in the current window.</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Zero Response</div>
+          <div class="intel-summary-value">${fmt(leadMetrics.zero_response_count || 0, 'integer')}</div>
+          <div class="intel-summary-note">Leads with no outbound follow-up yet.</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Unread Conversations</div>
+          <div class="intel-summary-value">${convoMetrics.unread_conversations === null || convoMetrics.unread_conversations === undefined ? '—' : fmt(convoMetrics.unread_conversations, 'integer')}</div>
+          <div class="intel-summary-note">Sampled unread CRM threads from MCP.</div>
+        </div>
+        <div class="intel-summary-card">
+          <div class="intel-summary-label">Pipeline Count</div>
+          <div class="intel-summary-value">${pipelineMetrics.pipeline_count === null || pipelineMetrics.pipeline_count === undefined ? '—' : fmt(pipelineMetrics.pipeline_count, 'integer')}</div>
+          <div class="intel-summary-note">Number of MCP pipelines visible to this account.</div>
+        </div>
+      </div>
+      <div class="intel-copilot-layout">
+        <div class="intel-copilot-main">
+          <div class="table-container">
+            <div class="table-header"><span class="table-title">Lead Response Audit</span><span class="badge badge-warning">SPEED TO LEAD</span></div>
+            <div style="overflow:auto;"><table>
+              <thead><tr><th>Metric</th><th class="right">Value</th></tr></thead>
+              <tbody>
+                <tr><td>New leads 24h</td><td class="right">${fmt(leadMetrics.new_leads_24h || 0, 'integer')}</td></tr>
+                <tr><td>Zero response</td><td class="right">${fmt(leadMetrics.zero_response_count || 0, 'integer')}</td></tr>
+                <tr><td>Stale new leads</td><td class="right">${fmt(leadMetrics.stale_new_leads || 0, 'integer')}</td></tr>
+                <tr><td>Avg first response</td><td class="right">${leadMetrics.avg_first_response_minutes === null || leadMetrics.avg_first_response_minutes === undefined ? '—' : `${fmt(leadMetrics.avg_first_response_minutes, 'integer')}m`}</td></tr>
+                <tr><td>Contacted within 15m</td><td class="right">${fmt(leadMetrics.contacted_within_15m_pct || 0, 'integer')}%</td></tr>
+                <tr><td>Contacted within 60m</td><td class="right">${fmt(leadMetrics.contacted_within_60m_pct || 0, 'integer')}%</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="intel-copilot-two-up">
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">Pipeline Leakage</span><span class="badge badge-warning">STUCK</span></div>
+              <div style="overflow:auto;"><table>
+                <thead><tr><th>Leak</th><th class="right">Value</th></tr></thead>
+                <tbody>
+                  <tr><td>New lead >24h</td><td class="right">${fmt(pipelineMetrics.stuck?.new_lead_over_24h || 0, 'integer')}</td></tr>
+                  <tr><td>Contacted >72h</td><td class="right">${fmt(pipelineMetrics.stuck?.contacted_over_72h || 0, 'integer')}</td></tr>
+                  <tr><td>Qualified >7d</td><td class="right">${fmt(pipelineMetrics.stuck?.qualified_over_7d || 0, 'integer')}</td></tr>
+                  <tr><td>Booked >2d</td><td class="right">${fmt(pipelineMetrics.stuck?.booked_over_2d || 0, 'integer')}</td></tr>
+                </tbody>
+              </table></div>
+            </div>
+            <div class="table-container">
+              <div class="table-header"><span class="table-title">Conversation Health</span><span class="badge badge-low">MCP</span></div>
+              <div style="overflow:auto;"><table>
+                <thead><tr><th>Signal</th><th class="right">Value</th></tr></thead>
+                <tbody>
+                  <tr><td>Unread convos</td><td class="right">${convoMetrics.unread_conversations === null || convoMetrics.unread_conversations === undefined ? '—' : fmt(convoMetrics.unread_conversations, 'integer')}</td></tr>
+                  <tr><td>High-intent stale</td><td class="right">${convoMetrics.high_intent_stale === null || convoMetrics.high_intent_stale === undefined ? '—' : fmt(convoMetrics.high_intent_stale, 'integer')}</td></tr>
+                  <tr><td>Inbound no reply</td><td class="right">${convoMetrics.inbound_without_reply === null || convoMetrics.inbound_without_reply === undefined ? '—' : fmt(convoMetrics.inbound_without_reply, 'integer')}</td></tr>
+                </tbody>
+              </table></div>
+            </div>
+          </div>
+        </div>
+        <div class="intel-copilot-side">
+          <div class="reco-card intel-copilot-status-card">
             <div class="reco-entity" style="font-size:0.84rem; margin-bottom:6px;">MCP status</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
               <span class="badge badge-${mcp.status === 'ok' ? 'active' : mcp.status === 'partial' ? 'warning' : mcp.status === 'disabled' ? 'low' : 'critical'}">${escapeHtml(mcp.status || 'unknown')}</span>
@@ -187,52 +619,26 @@ async function loadRevenueCopilot(forceRefresh = false) {
             </div>
             ${mcp.last_error ? `<div class="alert-banner alert-warning" style="margin-top:8px;">${escapeHtml(mcp.last_error)}</div>` : ''}
           </div>
-          <div style="overflow:auto;"><table>
-            <thead><tr><th>Lead response</th><th class="right">Value</th></tr></thead>
-            <tbody>
-              <tr><td>New leads 24h</td><td class="right">${fmt(lead.metrics?.new_leads_24h || 0, 'integer')}</td></tr>
-              <tr><td>Zero response</td><td class="right">${fmt(lead.metrics?.zero_response_count || 0, 'integer')}</td></tr>
-              <tr><td>Stale new leads</td><td class="right">${fmt(lead.metrics?.stale_new_leads || 0, 'integer')}</td></tr>
-              <tr><td>Avg first response</td><td class="right">${lead.metrics?.avg_first_response_minutes === null || lead.metrics?.avg_first_response_minutes === undefined ? '—' : `${fmt(lead.metrics.avg_first_response_minutes, 'integer')}m`}</td></tr>
-              <tr><td>Contacted within 15m</td><td class="right">${fmt(lead.metrics?.contacted_within_15m_pct || 0, 'integer')}%</td></tr>
-              <tr><td>Contacted within 60m</td><td class="right">${fmt(lead.metrics?.contacted_within_60m_pct || 0, 'integer')}%</td></tr>
-            </tbody>
-          </table></div>
-        </div>
-        <div>
-          <div style="overflow:auto;"><table>
-            <thead><tr><th>Pipeline leakage</th><th class="right">Value</th></tr></thead>
-            <tbody>
-              <tr><td>New lead >24h</td><td class="right">${fmt(pipe.metrics?.stuck?.new_lead_over_24h || 0, 'integer')}</td></tr>
-              <tr><td>Contacted >72h</td><td class="right">${fmt(pipe.metrics?.stuck?.contacted_over_72h || 0, 'integer')}</td></tr>
-              <tr><td>Qualified >7d</td><td class="right">${fmt(pipe.metrics?.stuck?.qualified_over_7d || 0, 'integer')}</td></tr>
-              <tr><td>Booked >2d</td><td class="right">${fmt(pipe.metrics?.stuck?.booked_over_2d || 0, 'integer')}</td></tr>
-              <tr><td>Pipelines (MCP)</td><td class="right">${pipe.metrics?.pipeline_count === null || pipe.metrics?.pipeline_count === undefined ? '—' : fmt(pipe.metrics.pipeline_count, 'integer')}</td></tr>
-              <tr><td>Unread convos (sample)</td><td class="right">${convo.metrics?.unread_conversations === null || convo.metrics?.unread_conversations === undefined ? '—' : fmt(convo.metrics.unread_conversations, 'integer')}</td></tr>
-            </tbody>
-          </table></div>
-        </div>
-      </div>
-      <div class="grid-two" style="display:grid; grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr); gap:16px; margin-top:12px;">
-        <div class="table-container">
-          <div class="table-header"><span class="table-title">Stage Counts</span></div>
-          ${stageCounts.length ? `<div style="overflow:auto;"><table>
-            <thead><tr><th>Stage</th><th class="right">Count</th></tr></thead>
-            <tbody>${stageCounts.map((row) => `<tr><td>${escapeHtml(row.stage)}</td><td class="right">${fmt(row.count || 0, 'integer')}</td></tr>`).join('')}</tbody>
-          </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No stage data yet.</div>'}
-        </div>
-        <div class="table-container">
-          <div class="table-header"><span class="table-title">Top Revenue Sources</span></div>
-          ${topCampaigns.length ? `<div style="overflow:auto;"><table>
-            <thead><tr><th>Campaign</th><th class="right">Leads</th><th class="right">Booked %</th><th class="right">Won %</th><th class="right">Rev/Lead</th></tr></thead>
-            <tbody>${topCampaigns.map((row) => `<tr>
-              <td class="name-cell"><span class="mono">${escapeHtml(row.campaign_id)}</span></td>
-              <td class="right">${fmt(row.leads || 0, 'integer')}</td>
-              <td class="right">${fmt(row.booked_rate_pct || 0, 'integer')}%</td>
-              <td class="right">${fmt(row.won_rate_pct || 0, 'integer')}%</td>
-              <td class="right">${fmt(row.revenue_per_lead || 0, 'currency')}</td>
-            </tr>`).join('')}</tbody>
-          </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No revenue source data yet.</div>'}
+          <div class="table-container" style="margin-top:12px;">
+            <div class="table-header"><span class="table-title">Stage Counts</span></div>
+            ${stageCounts.length ? `<div style="overflow:auto;"><table>
+              <thead><tr><th>Stage</th><th class="right">Count</th></tr></thead>
+              <tbody>${stageCounts.map((row) => `<tr><td>${escapeHtml(row.stage)}</td><td class="right">${fmt(row.count || 0, 'integer')}</td></tr>`).join('')}</tbody>
+            </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No stage data yet.</div>'}
+          </div>
+          <div class="table-container" style="margin-top:12px;">
+            <div class="table-header"><span class="table-title">Top Revenue Sources</span></div>
+            ${topCampaigns.length ? `<div style="overflow:auto;"><table>
+              <thead><tr><th>Campaign</th><th class="right">Leads</th><th class="right">Booked %</th><th class="right">Won %</th><th class="right">Rev/Lead</th></tr></thead>
+              <tbody>${topCampaigns.map((row) => `<tr>
+                <td class="name-cell"><span class="mono">${escapeHtml(row.campaign_id)}</span></td>
+                <td class="right">${fmt(row.leads || 0, 'integer')}</td>
+                <td class="right">${fmt(row.booked_rate_pct || 0, 'integer')}%</td>
+                <td class="right">${fmt(row.won_rate_pct || 0, 'integer')}%</td>
+                <td class="right">${fmt(row.revenue_per_lead || 0, 'currency')}</td>
+              </tr>`).join('')}</tbody>
+            </table></div>` : '<div class="text-muted" style="font-size:0.76rem; padding:12px;">No revenue source data yet.</div>'}
+          </div>
         </div>
       </div>
     `;
@@ -243,6 +649,7 @@ async function loadRevenueCopilot(forceRefresh = false) {
 
 function setProposalFilter(status) {
   proposedActionFilter = status;
+  syncIntelProposalFilterButtons();
   loadProposedActions();
 }
 
@@ -253,6 +660,8 @@ async function loadProposedActions() {
     const res = await apiGet(`/intelligence/proposed-actions?status=${encodeURIComponent(proposedActionFilter)}&limit=12`);
     const rows = res.data || [];
     const latestRun = res.latest_run || null;
+    intelShellState.proposals = { rows, latestRun };
+    renderIntelSummary();
     const summary = latestRun?.output_summary?.summary || '';
     const latestError = latestRun?.output_summary?.message || '';
     const meta = latestRun
@@ -271,34 +680,63 @@ async function loadProposedActions() {
       ${meta}
       ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
       ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
-      <div style="display:grid; gap:12px;">
+      <div class="intel-proposals-grid">
         ${rows.map((row) => {
           const payload = row.payload || {};
           const dataUsed = Array.isArray(payload.data_used) ? payload.data_used : [];
           const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
           const action = payload.recommended_action || {};
           const badge = row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : row.priority === 'critical' ? 'critical' : row.priority === 'high' ? 'warning' : 'active';
+          const confidencePct = fmt(Number(row.confidence || 0) * 100, 'integer');
           return `
-            <div class="reco-card" style="padding:14px;">
-              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+            <div class="reco-card intel-proposal-card urgency-${escapeHtml(row.priority || 'low')}">
+              <div class="intel-proposal-header">
                 <div>
-                  <div style="font-weight:700; font-size:0.95rem;">${escapeHtml(row.title)}</div>
-                  <div class="text-muted" style="font-size:0.74rem; margin-top:4px;">${fmtDateTime(row.created_at)} · confidence ${fmt(Number(row.confidence || 0) * 100, 'integer')}%</div>
+                  <div class="intel-proposal-title">${escapeHtml(row.title)}</div>
+                  <div class="intel-proposal-meta">${fmtDateTime(row.created_at)} · confidence ${confidencePct}%</div>
                 </div>
-                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <div class="intel-proposal-badges">
                   <span class="badge badge-${badge}">${escapeHtml(row.priority)}</span>
                   <span class="badge badge-${row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : 'warning'}">${escapeHtml(row.status)}</span>
                 </div>
               </div>
-              <div style="margin-top:10px; display:grid; gap:8px;">
-                <div><div class="text-muted" style="font-size:0.72rem;">Why</div><div>${escapeHtml(row.why)}</div></div>
-                <div><div class="text-muted" style="font-size:0.72rem;">Why not another action</div><div>${escapeHtml(row.why_not_alternative || '—')}</div></div>
-                <div><div class="text-muted" style="font-size:0.72rem;">Expected impact</div><div>${escapeHtml(row.expected_impact || '—')}</div></div>
-                <div><div class="text-muted" style="font-size:0.72rem;">Recommended action</div><div>${escapeHtml(action.kind || 'review')} · ${escapeHtml(action.target_scope || 'account')}${action.note ? ` · ${escapeHtml(action.note)}` : ''}</div></div>
-                ${dataUsed.length ? `<div><div class="text-muted" style="font-size:0.72rem;">Data used</div><div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">${dataUsed.map((item) => `<span class="badge badge-low">${escapeHtml(item)}</span>`).join('')}</div></div>` : ''}
-                ${evidence.length ? `<div><div class="text-muted" style="font-size:0.72rem;">Evidence</div><ul style="margin:6px 0 0 18px;">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
+              <div class="intel-proposal-pill-row">
+                <div class="intel-proposal-pill">
+                  <div class="intel-proposal-pill-label">Recommended action</div>
+                  <div class="intel-proposal-pill-value">${escapeHtml(action.kind || 'review')}</div>
+                </div>
+                <div class="intel-proposal-pill">
+                  <div class="intel-proposal-pill-label">Scope</div>
+                  <div class="intel-proposal-pill-value">${escapeHtml(action.target_scope || 'account')}</div>
+                </div>
+                <div class="intel-proposal-pill">
+                  <div class="intel-proposal-pill-label">Expected impact</div>
+                  <div class="intel-proposal-pill-value">${escapeHtml(row.expected_impact || '—')}</div>
+                </div>
               </div>
-              ${row.status === 'proposed' ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+              <div class="intel-proposal-body">
+                <div class="intel-proposal-panel">
+                  <div class="intel-proposal-panel-label">Why this</div>
+                  <div class="intel-proposal-panel-copy">${escapeHtml(row.why)}</div>
+                </div>
+                <div class="intel-proposal-panel">
+                  <div class="intel-proposal-panel-label">Why not another action</div>
+                  <div class="intel-proposal-panel-copy">${escapeHtml(row.why_not_alternative || '—')}</div>
+                </div>
+                ${action.note ? `<div class="intel-proposal-panel">
+                  <div class="intel-proposal-panel-label">Execution note</div>
+                  <div class="intel-proposal-panel-copy">${escapeHtml(action.note)}</div>
+                </div>` : ''}
+                ${dataUsed.length ? `<div class="intel-proposal-panel">
+                  <div class="intel-proposal-panel-label">Data used</div>
+                  <div class="intel-proposal-chip-row">${dataUsed.map((item) => `<span class="badge badge-low">${escapeHtml(item)}</span>`).join('')}</div>
+                </div>` : ''}
+                ${evidence.length ? `<div class="intel-proposal-panel">
+                  <div class="intel-proposal-panel-label">Evidence</div>
+                  <ul class="intel-proposal-evidence">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+                </div>` : ''}
+              </div>
+              ${row.status === 'proposed' ? `<div class="intel-proposal-actions">
                 <button class="btn btn-sm btn-primary intel-proposal-status" data-id="${row.id}" data-status="approved">Approve</button>
                 <button class="btn btn-sm intel-proposal-status" data-id="${row.id}" data-status="dismissed">Dismiss</button>
               </div>` : ''}
@@ -549,10 +987,17 @@ async function loadIntelDataHealth() {
       { source: 'ghl', dataset: 'contacts' },
       { source: 'tracking', dataset: 'recovery' },
     ]);
+    intelShellState.dataHealthSummary = summary;
+    renderIntelSummary();
     const range = intelDateFrom === intelDateTo ? intelDateFrom : `${intelDateFrom} to ${intelDateTo}`;
     el.innerHTML = window.DataHealth.panel(summary, `Decision Data Health · ${range}`);
     return intelDataHealth;
   } catch (err) {
+    intelShellState.dataHealthSummary = {
+      state: 'failed',
+      summary: `Data health unavailable: ${safeErrorMessage(err)}`,
+    };
+    renderIntelSummary();
     el.innerHTML = `<div class="alert-banner alert-warning">Data health unavailable: ${safeErrorMessage(err)}</div>`;
     return null;
   }
@@ -1270,10 +1715,14 @@ async function loadTrueRoas() {
   try {
     const res = await apiGet(`/intelligence/true-roas?${intelRangeQuery()}`);
     const rows = (res.data || []).slice(0, 12);
+    intelShellState.trueRoas = rows;
+    renderIntelSummary();
     el.innerHTML = rows.length ? `<div style="overflow:auto;"><table><thead><tr><th>Campaign</th><th class="right">Spend</th><th class="right">Meta ROAS</th><th class="right">Your ROAS</th><th class="right">Revenue</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td class="name-cell">${escapeHtml(r.name)}</td><td class="right">${fmt(r.spend,'currency')}</td><td class="right">${fmt(r.meta_reported_roas,'decimal')}x</td><td class="right">${fmt(r.true_roas,'decimal')}x</td><td class="right">${fmt(r.first_party_revenue,'currency')}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty-state"><div class="empty-state-text">No first-party revenue yet</div></div>';
   } catch (err) {
+    intelShellState.trueRoas = [];
+    renderIntelSummary();
     el.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
@@ -1402,7 +1851,14 @@ async function loadCreativeLibrary() {
   const el = document.getElementById('intel-creatives');
   try {
     const res = await apiGet(`/intelligence/creative-library?${intelRangeQuery()}`);
-    const rows = (res.data || []).slice(0, 30);
+    const sourceRows = (res.data || []).slice(0, 30);
+    intelShellState.creativeRows = sourceRows;
+    const rows = intelWorkspaceState.creative === 'winners'
+      ? sourceRows
+          .slice()
+          .sort((a, b) => ((Number(b.spend) || 0) * (Number(b.ctr) || 0)) - ((Number(a.spend) || 0) * (Number(a.ctr) || 0)))
+          .slice(0, 12)
+      : sourceRows;
     el.innerHTML = rows.length ? `<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:14px;">
       ${rows.map(c => `<div class="reco-card">
         <div style="height:150px; background:var(--bg-elevated); border-radius:6px; display:flex; align-items:center; justify-content:center; overflow:hidden; margin-bottom:10px;">
