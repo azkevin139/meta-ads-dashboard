@@ -1,15 +1,12 @@
 // Phase 1C of the qualification rebuild.
 //
-// V1 qualification rule (strict): a lead is qualified when
-//   1. visitor row exists for the contact and was acquired via Meta or website form
-//      (matches the D6 lead-source discriminator in reportingService),
-//   2. an inbound message arrives over a text-conversational channel
-//      (whatsapp, sms, email, facebook_messenger, instagram, live_chat),
-//   3. the inbound timestamp is strictly greater than the visitor's
-//      first_outbound_at.
+// V1 qualification rule: a tracked lead is qualified when the first inbound
+// reply arrives for its GHL contact. Outbound tracking and rich message
+// metadata are useful evidence, but not required for qualification.
 //
 // Events are stored durably in ghl_conversation_events so reporting can
-// read persisted facts. Idempotency is enforced by UNIQUE(message_id).
+// read persisted facts. Event idempotency uses message_id when available;
+// qualification itself is idempotent via visitors.qualified_at.
 const { query, queryOne } = require('../db');
 
 // GHL channel value (from webhook payload) -> canonical lowercase token.
@@ -43,7 +40,10 @@ function isQualifyingChannel(channel) {
 
 function pickFirst(...values) {
   for (const v of values) {
-    if (v !== undefined && v !== null && v !== '') return v;
+    if (v === undefined || v === null || v === '') continue;
+    const text = String(v).trim();
+    if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') continue;
+    return v;
   }
   return null;
 }
@@ -93,7 +93,14 @@ async function resolveAccountId(locationId, ghlContactId) {
 async function findVisitor(accountId, ghlContactId) {
   if (!accountId || !ghlContactId) return null;
   return queryOne(
-    'SELECT * FROM visitors WHERE account_id = $1 AND ghl_contact_id = $2 LIMIT 1',
+    `
+    SELECT *
+    FROM visitors
+    WHERE ghl_contact_id = $2
+      AND (account_id = $1 OR account_id IS NULL)
+    ORDER BY (account_id IS NULL) ASC, resolved_at DESC NULLS LAST, first_seen_at DESC NULLS LAST
+    LIMIT 1
+    `,
     [accountId, ghlContactId],
   );
 }
@@ -107,6 +114,7 @@ function visitorSatisfiesSourceGate(visitor) {
 }
 
 async function insertEvent({ accountId, fields, direction, payload }) {
+  const messageId = fields.messageId || cryptoMessageId(accountId, fields, direction);
   return queryOne(
     `
     INSERT INTO ghl_conversation_events (
@@ -120,7 +128,7 @@ async function insertEvent({ accountId, fields, direction, payload }) {
       accountId,
       fields.ghlContactId,
       fields.conversationId,
-      fields.messageId,
+      messageId,
       direction,
       fields.channel,
       fields.bodyPreview,
@@ -130,27 +138,36 @@ async function insertEvent({ accountId, fields, direction, payload }) {
   );
 }
 
+function cryptoMessageId(accountId, fields, direction) {
+  const crypto = require('crypto');
+  return `synthetic:${crypto.createHash('sha256').update(JSON.stringify({
+    accountId,
+    contactId: fields.ghlContactId,
+    conversationId: fields.conversationId,
+    direction,
+    eventAt: fields.eventAt,
+    channel: fields.channel,
+    bodyPreview: fields.bodyPreview,
+  })).digest('hex')}`;
+}
+
 async function processInboundMessage(payload) {
   const fields = extractCommonFields(payload);
-  if (!fields.messageId || !fields.ghlContactId) {
-    return { ok: false, reason: 'missing_message_or_contact_id' };
+  if (!fields.ghlContactId) {
+    return { ok: false, reason: 'missing_contact_id' };
   }
   const accountId = await resolveAccountId(fields.locationId, fields.ghlContactId);
   if (!accountId) return { ok: false, reason: 'unmapped_account' };
 
+  const eventAt = fields.eventAt || new Date().toISOString();
+  fields.eventAt = eventAt;
   const inserted = await insertEvent({ accountId, fields, direction: 'inbound', payload });
-  if (!inserted) return { ok: true, reason: 'duplicate' };
 
   const visitor = await findVisitor(accountId, fields.ghlContactId);
-  if (!visitor) return { ok: true, reason: 'event_logged_no_visitor' };
+  if (!visitor) return { ok: true, reason: inserted ? 'event_logged_no_visitor' : 'duplicate_no_visitor' };
 
-  const allowedChannel = isQualifyingChannel(fields.channel);
   const sourceOk = visitorSatisfiesSourceGate(visitor);
-  const hasOutbound = visitor.first_outbound_at != null;
-  const replyAfterOutbound = fields.eventAt
-    && hasOutbound
-    && new Date(fields.eventAt) > new Date(visitor.first_outbound_at);
-  const shouldQualify = !visitor.qualified_at && allowedChannel && sourceOk && replyAfterOutbound;
+  const shouldQualify = !visitor.qualified_at && sourceOk;
 
   await query(
     `
@@ -162,27 +179,29 @@ async function processInboundMessage(payload) {
       qualified_at      = CASE WHEN $3::boolean THEN $2::timestamptz ELSE qualified_at END,
       qualified_reason  = CASE WHEN $3::boolean THEN 'inbound_reply'  ELSE qualified_reason  END,
       qualified_channel = CASE WHEN $3::boolean THEN $4               ELSE qualified_channel END,
-      last_seen_at      = GREATEST(COALESCE(last_seen_at, $2::timestamptz), $2::timestamptz)
+      last_seen_at      = GREATEST(COALESCE(last_seen_at, $2::timestamptz), $2::timestamptz),
+      account_id        = COALESCE(account_id, $5::integer)
     WHERE client_id = $1
     `,
-    [visitor.client_id, fields.eventAt, shouldQualify, fields.channel],
+    [visitor.client_id, eventAt, shouldQualify, fields.channel, accountId],
   );
 
   return {
     ok: true,
-    reason: shouldQualify ? 'qualified' : 'event_logged',
+    reason: shouldQualify ? 'qualified' : inserted ? 'event_logged' : 'duplicate',
     client_id: visitor.client_id,
   };
 }
 
 async function processOutboundMessage(payload) {
   const fields = extractCommonFields(payload);
-  if (!fields.messageId || !fields.ghlContactId) {
-    return { ok: false, reason: 'missing_message_or_contact_id' };
+  if (!fields.ghlContactId) {
+    return { ok: false, reason: 'missing_contact_id' };
   }
   const accountId = await resolveAccountId(fields.locationId, fields.ghlContactId);
   if (!accountId) return { ok: false, reason: 'unmapped_account' };
 
+  fields.eventAt = fields.eventAt || new Date().toISOString();
   const inserted = await insertEvent({ accountId, fields, direction: 'outbound', payload });
   if (!inserted) return { ok: true, reason: 'duplicate' };
 
