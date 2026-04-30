@@ -119,6 +119,22 @@ async function getMetaMetrics(accountId, range) {
   };
 }
 
+async function getDailySpend(accountId, range) {
+  const rows = await queryAll(`
+    SELECT date, COALESCE(SUM(spend), 0) AS spend
+    FROM daily_insights
+    WHERE account_id = $1
+      AND level = 'account'
+      AND date BETWEEN $2::date AND $3::date
+    GROUP BY date
+    ORDER BY date
+  `, [accountId, range.since, range.until]);
+  return rows.map((row) => ({
+    date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+    spend: Number(row.spend) || 0,
+  }));
+}
+
 async function getLeadMetrics(accountId, range) {
   const row = await queryOne(`
     WITH lead_rows AS (
@@ -367,8 +383,9 @@ async function getLeadReport(accountId, params = {}) {
   const range = resolveRange(params);
   const previous = previousRange(range);
 
-  const [meta, leads, website, pipeline, creativePerformance, health] = await Promise.all([
+  const [meta, dailySpend, leads, website, pipeline, creativePerformance, health] = await Promise.all([
     getMetaMetrics(accountId, range),
+    getDailySpend(accountId, range),
     getLeadMetrics(accountId, range),
     getWebsiteMetrics(accountId, range),
     getPipeline(accountId, range),
@@ -405,6 +422,8 @@ async function getLeadReport(accountId, params = {}) {
     summary: currentFlat,
     previous_summary: previousFlat,
     deltas_pct: withComparisons(currentFlat, previousFlat),
+    dailySpend,
+    daily_spend: dailySpend,
     metaFunnel: {
       impressions: meta.impressions,
       reach: meta.reach,
