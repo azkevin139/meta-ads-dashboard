@@ -2,10 +2,16 @@ const crypto = require('crypto');
 const { query, queryOne, queryAll } = require('../db');
 
 const TOKEN_BYTES = 32;
+// 32 random bytes -> 43 base64url chars, [A-Za-z0-9_-].
+const TOKEN_FORMAT_RE = /^[A-Za-z0-9_-]{43}$/;
 const DEFAULT_ALLOWED_PRESETS = ['today', 'yesterday', '7d', '14d', '30d', '60d', 'this_month'];
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function isValidTokenFormat(token) {
+  return TOKEN_FORMAT_RE.test(String(token || ''));
 }
 
 function publicLink(row, { includeToken = false, token = null } = {}) {
@@ -161,7 +167,9 @@ async function recordView(link, req, params = {}) {
 
 module.exports = {
   DEFAULT_ALLOWED_PRESETS,
+  TOKEN_FORMAT_RE,
   hashToken,
+  isValidTokenFormat,
   createLink,
   listLinks,
   revokeLink,

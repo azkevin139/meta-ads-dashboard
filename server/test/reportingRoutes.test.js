@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { invoke, makeJsonApp } = require('./helpers');
 
+const VALID_TOKEN = 'a'.repeat(43);
+
 function restoreCache(entries) {
   for (const [key, value] of entries) {
     if (value) require.cache[key] = value;
@@ -88,6 +90,7 @@ test('public report route resolves token and returns read-only report payload', 
   let recorded = false;
   require.cache[reportLinksPath] = {
     exports: {
+      isValidTokenFormat: () => true,
       resolveToken: async () => ({
         id: 3,
         account_id: 11,
@@ -113,7 +116,7 @@ test('public report route resolves token and returns read-only report payload', 
   try {
     const router = require('../routes/publicReports');
     const app = makeJsonApp(router);
-    const res = await invoke(app, { url: '/abc/lead-summary?preset=7d' });
+    const res = await invoke(app, { url: `/${VALID_TOKEN}/lead-summary?preset=7d` });
     assert.equal(res.status, 200);
     assert.equal(res.headers['cache-control'], 'no-store');
     assert.equal(res.headers['x-robots-tag'], 'noindex, nofollow');
@@ -140,6 +143,7 @@ test('public report route rejects revoked tokens before report generation', asyn
   let generated = false;
   require.cache[reportLinksPath] = {
     exports: {
+      isValidTokenFormat: () => true,
       resolveToken: async () => {
         const err = new Error('Report link revoked');
         err.httpStatus = 403;
@@ -161,7 +165,7 @@ test('public report route rejects revoked tokens before report generation', asyn
   try {
     const router = require('../routes/publicReports');
     const app = makeJsonApp(router);
-    const res = await invoke(app, { url: '/revoked/lead-summary?preset=7d' });
+    const res = await invoke(app, { url: `/${VALID_TOKEN}/lead-summary?preset=7d` });
     assert.equal(res.status, 403);
     assert.match(res.json.error, /revoked/);
     assert.equal(generated, false);
@@ -184,6 +188,7 @@ test('public report route rejects expired tokens before report generation', asyn
   let generated = false;
   require.cache[reportLinksPath] = {
     exports: {
+      isValidTokenFormat: () => true,
       resolveToken: async () => {
         const err = new Error('Report link expired');
         err.httpStatus = 403;
@@ -205,7 +210,7 @@ test('public report route rejects expired tokens before report generation', asyn
   try {
     const router = require('../routes/publicReports');
     const app = makeJsonApp(router);
-    const res = await invoke(app, { url: '/expired/lead-summary?preset=7d' });
+    const res = await invoke(app, { url: `/${VALID_TOKEN}/lead-summary?preset=7d` });
     assert.equal(res.status, 403);
     assert.match(res.json.error, /expired/);
     assert.equal(generated, false);
@@ -228,6 +233,7 @@ test('public report route uses account from token, not request query', async () 
   let generatedAccountId = null;
   require.cache[reportLinksPath] = {
     exports: {
+      isValidTokenFormat: () => true,
       resolveToken: async () => ({
         id: 4,
         account_id: 11,
@@ -251,9 +257,87 @@ test('public report route uses account from token, not request query', async () 
   try {
     const router = require('../routes/publicReports');
     const app = makeJsonApp(router);
-    const res = await invoke(app, { url: '/abc/lead-summary?preset=7d&accountId=999' });
+    const res = await invoke(app, { url: `/${VALID_TOKEN}/lead-summary?preset=7d&accountId=999` });
     assert.equal(res.status, 200);
     assert.equal(generatedAccountId, 11);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('public report route fast-rejects malformed tokens before DB lookup', async () => {
+  const reportLinksPath = require.resolve('../services/reportLinkService');
+  const reportingPath = require.resolve('../services/reportingService');
+  const throttlePath = require.resolve('../services/reportLinkThrottle');
+  const routePath = require.resolve('../routes/publicReports');
+  const originals = new Map([
+    [reportLinksPath, require.cache[reportLinksPath]],
+    [reportingPath, require.cache[reportingPath]],
+    [throttlePath, require.cache[throttlePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  let resolveCalled = false;
+  require.cache[reportLinksPath] = {
+    exports: {
+      isValidTokenFormat: (token) => /^[A-Za-z0-9_-]{43}$/.test(String(token || '')),
+      resolveToken: async () => { resolveCalled = true; return {}; },
+      enforcePresetRestriction: () => {},
+      recordView: async () => {},
+    },
+  };
+  require.cache[reportingPath] = { exports: { getLeadReport: async () => ({}) } };
+  require.cache[throttlePath] = {
+    exports: { isBlocked: () => false, noteFailure: () => 1, reset: () => {} },
+  };
+
+  try {
+    const router = require('../routes/publicReports');
+    const app = makeJsonApp(router);
+    const res = await invoke(app, { url: '/garbage/lead-summary?preset=7d' });
+    assert.equal(res.status, 401);
+    assert.match(res.json.error, /Invalid report link/);
+    assert.equal(resolveCalled, false);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
+test('public report route 429s once invalid-token throttle is tripped', async () => {
+  const reportLinksPath = require.resolve('../services/reportLinkService');
+  const reportingPath = require.resolve('../services/reportingService');
+  const throttlePath = require.resolve('../services/reportLinkThrottle');
+  const routePath = require.resolve('../routes/publicReports');
+  const originals = new Map([
+    [reportLinksPath, require.cache[reportLinksPath]],
+    [reportingPath, require.cache[reportingPath]],
+    [throttlePath, require.cache[throttlePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  let resolveCalled = false;
+  require.cache[reportLinksPath] = {
+    exports: {
+      isValidTokenFormat: () => true,
+      resolveToken: async () => { resolveCalled = true; return {}; },
+      enforcePresetRestriction: () => {},
+      recordView: async () => {},
+    },
+  };
+  require.cache[reportingPath] = { exports: { getLeadReport: async () => ({}) } };
+  require.cache[throttlePath] = {
+    exports: { isBlocked: () => true, noteFailure: () => 11, reset: () => {} },
+  };
+
+  try {
+    const router = require('../routes/publicReports');
+    const app = makeJsonApp(router);
+    const res = await invoke(app, { url: `/${VALID_TOKEN}/lead-summary?preset=7d` });
+    assert.equal(res.status, 429);
+    assert.match(res.json.error, /Too many invalid report attempts/);
+    assert.equal(resolveCalled, false);
   } finally {
     restoreCache(originals);
   }
