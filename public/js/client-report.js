@@ -128,16 +128,52 @@
     `;
   }
 
-  function renderSpendBars(dailySpend) {
+  function shortDate(iso) {
+    if (!iso) return '';
+    const d = new Date(`${iso}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  function bucketLabel(row, granularity) {
+    if (granularity === 'weekly' && row.bucket_end && row.bucket_end !== row.date) {
+      return `${shortDate(row.date)}–${shortDate(row.bucket_end)}`;
+    }
+    return shortDate(row.date);
+  }
+
+  function compactMoney(value) {
+    const n = Number(value) || 0;
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 1000) return `${sign}${fmt.money(0).charAt(0)}${(abs / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
+    return fmt.money(n);
+  }
+
+  function renderSpendBars(dailySpend, granularity) {
     const rows = Array.isArray(dailySpend) ? dailySpend : [];
-    if (!rows.length) return '<div class="empty-panel">No daily spend data for this period.</div>';
+    if (!rows.length) {
+      return `<div class="empty-panel">No ${granularity === 'weekly' ? 'weekly' : 'daily'} spend data for this period.</div>`;
+    }
     const max = Math.max(...rows.map((row) => num(row.spend)), 1);
+    const compact = rows.length > 14 && granularity !== 'weekly';
     return `
-      <div class="bar-chart" aria-label="Daily ad spend chart">
-        ${rows.map((row) => {
-          const height = Math.max(2, (num(row.spend) / max) * 100);
-          return `<div class="bar" title="${escape(row.date)} · ${escape(fmt.money(row.spend))}" style="height:${height}%"></div>`;
-        }).join('')}
+      <div class="bar-chart-wrap">
+        <div class="bar-chart" aria-label="${granularity === 'weekly' ? 'Weekly' : 'Daily'} ad spend chart">
+          ${rows.map((row, idx) => {
+            const height = Math.max(2, (num(row.spend) / max) * 100);
+            const label = bucketLabel(row, granularity);
+            const value = fmt.money(row.spend);
+            const showLabel = !compact || idx % Math.ceil(rows.length / 8) === 0 || idx === rows.length - 1;
+            return `
+              <div class="bar-col" title="${escape(label)} · ${escape(value)}">
+                <div class="bar-value">${escape(compactMoney(row.spend))}</div>
+                <div class="bar-fill"><div class="bar" style="height:${height}%;"></div></div>
+                <div class="bar-label" style="${showLabel ? '' : 'visibility:hidden;'}">${escape(label)}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
       </div>
     `;
   }
@@ -250,6 +286,7 @@
     const pipeline = data.pipeline || [];
     const creatives = data.creativePerformance || data.creative_performance || [];
     const dailySpend = data.dailySpend || data.daily_spend || [];
+    const spendGranularity = data.dailySpendGranularity || data.daily_spend_granularity || 'daily';
     const range = data.range || {};
     const updatedAt = new Date().toLocaleString('en-AE', { timeZone: data.timezone || 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' });
     activeCurrency = account.currency || 'USD';
@@ -264,7 +301,9 @@
     const won = firstDefined(meta.wonCount, meta.won_count, summary.won_count);
     const wonBooked = num(summary.won_count) + num(summary.booked_count);
 
-    document.getElementById('clientTitle').textContent = account.name || 'Campaign Report';
+    const accountName = account.name || 'Campaign Report';
+    document.title = `${accountName} — Campaign Report`;
+    document.getElementById('clientTitle').textContent = accountName;
     document.getElementById('reportSubtitle').textContent = `${range.since || ''} to ${range.until || ''} · Dubai Time`;
     document.getElementById('lastUpdated').textContent = `Updated ${updatedAt}`;
 
@@ -281,10 +320,10 @@
         ${kpi('Won / Booked', fmt.int(wonBooked), deltas.booked_count, false)}
       </div>
 
-      <div class="section-label">Daily spend</div>
+      <div class="section-label">${spendGranularity === 'weekly' ? 'Weekly spend' : 'Daily spend'}</div>
       <div class="chart-card-full">
-        <div class="chart-title">Ad spend over period</div>
-        ${renderSpendBars(dailySpend)}
+        <div class="chart-title">${spendGranularity === 'weekly' ? 'Ad spend by week' : 'Ad spend by day'}</div>
+        ${renderSpendBars(dailySpend, spendGranularity)}
       </div>
 
       <div class="section-label">Acquisition funnels</div>
@@ -418,8 +457,14 @@
     });
   }
 
+  function bindDownloadPdf() {
+    const btn = document.getElementById('downloadPdfBtn');
+    if (btn) btn.addEventListener('click', () => window.print());
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     bindPresetButtons();
+    bindDownloadPdf();
     load();
   });
 })();

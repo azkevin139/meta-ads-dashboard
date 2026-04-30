@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex,nofollow">
   <meta name="referrer" content="no-referrer">
-  <title>E42 - Campaign Report</title>
+  <title>Campaign Report</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
@@ -67,9 +67,15 @@
 
     .chart-card-full, .chart-card { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius); padding: 20px; }
     .chart-title { font-size: 12px; color: var(--text-muted); font-weight: 400; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px; }
-    .bar-chart { min-height: 240px; display: grid; grid-template-columns: repeat(auto-fit, minmax(8px, 1fr)); align-items: end; gap: 4px; border-bottom: 0.5px solid var(--border-soft); padding-top: 12px; }
-    .bar { min-height: 2px; background: rgba(26,60,94,0.16); border: 1px solid rgba(26,60,94,0.22); border-radius: 3px 3px 0 0; }
+    .bar-chart-wrap { overflow-x: auto; }
+    .bar-chart { display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); gap: 6px; padding-top: 4px; padding-bottom: 4px; }
+    .bar-col { display: flex; flex-direction: column; height: 280px; min-width: 30px; }
+    .bar-value { font-size: 9px; color: var(--text-muted); text-align: center; height: 14px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .bar-fill { flex: 1; display: flex; align-items: flex-end; min-height: 0; }
+    .bar { width: 100%; min-height: 2px; background: rgba(26,60,94,0.16); border: 1px solid rgba(26,60,94,0.22); border-radius: 3px 3px 0 0; }
     .bar:hover { background: rgba(26,60,94,0.34); }
+    .bar-col:hover .bar-value { color: var(--accent); font-weight: 500; }
+    .bar-label { font-size: 9px; color: var(--text-dim); text-align: center; height: 14px; line-height: 14px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; border-top: 0.5px solid var(--border-soft); padding-top: 4px; }
 
     .funnels-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .funnel-card { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius); padding: 24px 20px; }
@@ -137,6 +143,13 @@
     .loading-state { text-align: center; padding: 80px 20px; color: var(--text-muted); font-size: 14px; }
     .loading-state .spinner { width: 24px; height: 24px; border: 2px solid rgba(26,60,94,0.16); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .cta-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 18px 0 0; flex-wrap: wrap; }
+    .cta-prefix { font-size: 12px; color: var(--text-muted); margin-right: 4px; }
+    .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; font-family: var(--font-body); color: var(--accent); background: var(--bg-card); border: 0.5px solid var(--border); border-radius: 999px; text-decoration: none; transition: all 0.15s; cursor: pointer; }
+    .cta-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .cta-pdf { color: var(--text-muted); border-color: var(--border-soft); }
+    .cta-pdf:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
     .error-banner { background: rgba(192,57,43,0.08); border: 0.5px solid rgba(192,57,43,0.3); border-radius: var(--radius-sm); padding: 12px 16px; font-size: 13px; color: var(--red); margin: 18px 0 0; display: none; }
     .empty-panel { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius); padding: 28px; color: var(--text-muted); font-size: 13px; }
     .footer { padding: 32px 0 0; border-top: 0.5px solid var(--border-soft); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 48px; }
@@ -151,6 +164,25 @@
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .kpi-value { font-size: 21px; }
       .funnel-block-inner { padding: 8px 10px; }
+    }
+
+    @media print {
+      @page { size: A4; margin: 14mm 12mm; }
+      html, body { background: #fff; color: #000; }
+      .shell { max-width: none; padding: 0; }
+      .no-print, .date-range-wrap, .cta-row, #errorBanner { display: none !important; }
+      .header { padding: 0 0 16px; border-bottom: 0.5px solid #000; }
+      .section-label { color: #000; margin-top: 22px; }
+      .section-label::after { background: #000; }
+      .kpi-card, .chart-card-full, .chart-card, .funnel-card, .quality-card, .pipeline-stage, .table-scroll, .definition-item {
+        border-color: #000 !important; box-shadow: none !important; break-inside: avoid; page-break-inside: avoid;
+      }
+      .funnels-row, .pipeline-grid, .kpi-grid, .quality-row, .definitions-grid { break-inside: avoid; page-break-inside: avoid; }
+      .compare-table th, .creative-table th { color: #000; }
+      .bar { background: #1A3C5E !important; border-color: #1A3C5E !important; }
+      .bar-label, .bar-value { color: #000; }
+      .footer { border-top: 0.5px solid #000; }
+      a { color: inherit; text-decoration: none; }
     }
   </style>
 </head>
@@ -174,6 +206,13 @@
         <div class="last-updated" id="lastUpdated">Fetching data...</div>
       </div>
     </header>
+
+    <div class="cta-row no-print">
+      <span class="cta-prefix">Questions about this report?</span>
+      <a class="cta-btn" href="https://emma42.slack.com/team/U02HJGH53HV" target="_blank" rel="noopener noreferrer">Speak to Kevin</a>
+      <a class="cta-btn" href="https://emma42.slack.com/team/U081PLKUHPV" target="_blank" rel="noopener noreferrer">Speak to Amine</a>
+      <button class="cta-btn cta-pdf" type="button" id="downloadPdfBtn">Download PDF</button>
+    </div>
 
     <div class="error-banner" id="errorBanner"></div>
 

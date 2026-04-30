@@ -171,21 +171,49 @@ async function getMetaMetrics(accountId, range) {
 }
 
 async function getDailySpend(accountId, range) {
-  // Zero-fill missing days so charts don't silently drop empty days.
-  const rows = await queryAll(`
-    SELECT d::date AS date, COALESCE(SUM(di.spend), 0) AS spend
-    FROM generate_series($2::date, $3::date, INTERVAL '1 day') d
-    LEFT JOIN daily_insights di
-      ON di.date = d::date
-      AND di.account_id = $1
-      AND di.level = 'account'
-    GROUP BY d
-    ORDER BY d
-  `, [accountId, range.since, range.until]);
+  const days = diffDaysInclusive(range.since, range.until);
+  const granularity = days > 30 ? 'weekly' : 'daily';
+  // Zero-fill missing buckets so charts don't silently drop empty periods.
+  const rows = granularity === 'weekly'
+    ? await queryAll(`
+        WITH weeks AS (
+          SELECT date_trunc('week', d::date)::date AS bucket_start
+          FROM generate_series($2::date, $3::date, INTERVAL '1 day') d
+          GROUP BY 1
+        )
+        SELECT
+          w.bucket_start AS date,
+          LEAST(w.bucket_start + INTERVAL '6 days', $3::date)::date AS bucket_end,
+          COALESCE(SUM(di.spend), 0) AS spend
+        FROM weeks w
+        LEFT JOIN daily_insights di
+          ON di.date >= w.bucket_start
+          AND di.date < w.bucket_start + INTERVAL '7 days'
+          AND di.date BETWEEN $2::date AND $3::date
+          AND di.account_id = $1
+          AND di.level = 'account'
+        GROUP BY w.bucket_start
+        ORDER BY w.bucket_start
+      `, [accountId, range.since, range.until])
+    : await queryAll(`
+        SELECT d::date AS date, d::date AS bucket_end, COALESCE(SUM(di.spend), 0) AS spend
+        FROM generate_series($2::date, $3::date, INTERVAL '1 day') d
+        LEFT JOIN daily_insights di
+          ON di.date = d::date
+          AND di.account_id = $1
+          AND di.level = 'account'
+        GROUP BY d
+        ORDER BY d
+      `, [accountId, range.since, range.until]);
   return rows.map((row) => ({
     date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+    bucket_end: row.bucket_end instanceof Date ? row.bucket_end.toISOString().slice(0, 10) : String(row.bucket_end).slice(0, 10),
     spend: Number(row.spend) || 0,
   }));
+}
+
+function spendGranularityFor(range) {
+  return diffDaysInclusive(range.since, range.until) > 30 ? 'weekly' : 'daily';
 }
 
 async function getLeadMetrics(accountId, range) {
@@ -484,6 +512,8 @@ async function getLeadReport(accountId, params = {}) {
     deltas_pct: withComparisons(currentFlat, previousFlat),
     dailySpend,
     daily_spend: dailySpend,
+    dailySpendGranularity: spendGranularityFor(range),
+    daily_spend_granularity: spendGranularityFor(range),
     metaFunnel: {
       impressions: meta.impressions,
       reach: meta.reach,
