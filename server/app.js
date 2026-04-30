@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const authMiddleware = require('./middleware/auth');
 const csrfMiddleware = require('./middleware/csrf');
 const metaUsage = require('./services/metaUsageService');
+const aiBackendSettings = require('./services/aiBackendSettingsService');
 
 let helmet, rateLimit;
 try { helmet = require('helmet'); } catch (e) { helmet = null; }
@@ -29,6 +30,8 @@ function createApp(config) {
   const createRoutes = require('./routes/create');
   const { pool } = require('./db');
   const cspService = require('./services/cspService');
+  const reportLinks = require('./services/reportLinkService');
+  const reportLinkThrottle = require('./services/reportLinkThrottle');
 
   const app = express();
   app.set('trust proxy', 1);
@@ -102,16 +105,62 @@ function createApp(config) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     next();
   });
-  app.get('/report/:token', (_req, res) => {
+  app.get('/report/:token', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     res.setHeader('Referrer-Policy', 'no-referrer');
+
+    const respondUnavailable = () => {
+      res.status(404).type('html').send(
+        '<!doctype html><html lang="en"><head><meta charset="UTF-8">'
+        + '<meta name="robots" content="noindex,nofollow">'
+        + '<meta name="referrer" content="no-referrer">'
+        + '<title>Report unavailable</title>'
+        + '<style>body{font-family:system-ui,sans-serif;background:#F7F8FA;color:#111;'
+        + 'display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}'
+        + '.box{max-width:420px;text-align:center;background:#fff;border:0.5px solid rgba(0,0,0,0.07);'
+        + 'border-radius:8px;padding:32px}h1{font-size:18px;margin:0 0 8px}'
+        + 'p{font-size:14px;color:#6B6A65;margin:0;line-height:1.5}</style></head>'
+        + '<body><div class="box"><h1>Report unavailable</h1>'
+        + '<p>This report link is no longer valid. Ask your account manager for a new one.</p>'
+        + '</div></body></html>'
+      );
+    };
+
+    if (reportLinkThrottle.isBlocked(req.ip)) {
+      res.status(429).type('text/plain').send('Too many invalid report attempts. Try again later.');
+      return;
+    }
+    if (!reportLinks.isValidTokenFormat(req.params.token)) {
+      reportLinkThrottle.noteFailure(req.ip);
+      respondUnavailable();
+      return;
+    }
+    try {
+      await reportLinks.resolveToken(req.params.token);
+    } catch (_err) {
+      reportLinkThrottle.noteFailure(req.ip);
+      respondUnavailable();
+      return;
+    }
     res.sendFile(path.join(__dirname, '..', 'public', 'client-report.html'));
   });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   if (rateLimit) {
-    app.use('/api/public/reports', rateLimit({ windowMs: 60 * 1000, max: 60, message: { error: 'Too many report requests. Try again later.' } }));
+    // Per (IP, token) so one noisy client cannot starve others; 30/min/IP/token.
+    app.use('/api/public/reports', rateLimit({
+      windowMs: 60 * 1000,
+      max: 30,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => {
+        const m = req.path.match(/^\/([^\/]+)\//);
+        const tokenKey = m ? m[1] : 'none';
+        return `${req.ip || 'unknown'}:${tokenKey}`;
+      },
+      message: { error: 'Too many report requests. Try again later.' },
+    }));
   }
   app.use('/api/public/reports', publicReportRoutes);
   app.use('/api', authMiddleware);
@@ -160,21 +209,23 @@ function createApp(config) {
   app.get('/api/health', async (_req, res) => {
     try {
       await pool.query('SELECT 1');
+      const aiStatus = await aiBackendSettings.getStatus().catch(() => ({ configured: Boolean(config.openai.apiKey) }));
       res.json({
         status: 'ok',
         uptime: process.uptime(),
         meta_configured: Boolean(config.meta.accessToken && config.meta.adAccountId),
-        openai_configured: Boolean(config.openai.apiKey),
+        openai_configured: Boolean(aiStatus.configured),
         time: new Date().toISOString(),
         env: config.nodeEnv,
         read_only: readOnly,
       });
     } catch (err) {
+      const aiStatus = await aiBackendSettings.getStatus().catch(() => ({ configured: Boolean(config.openai.apiKey) }));
       res.status(500).json({
         status: 'error',
         uptime: process.uptime(),
         meta_configured: Boolean(config.meta.accessToken && config.meta.adAccountId),
-        openai_configured: Boolean(config.openai.apiKey),
+        openai_configured: Boolean(aiStatus.configured),
         time: new Date().toISOString(),
         env: config.nodeEnv,
         read_only: readOnly,

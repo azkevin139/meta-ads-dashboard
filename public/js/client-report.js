@@ -327,7 +327,7 @@
       <div class="section-label">Lead quality</div>
       <div class="quality-row">${renderQuality(quality, summary)}</div>
 
-      <div class="section-label">Pipeline stages</div>
+      <div class="section-label">Current pipeline status for leads acquired in this period</div>
       <div class="pipeline-grid">${renderPipeline(pipeline)}</div>
 
       <div class="section-label">Which visual performs best</div>

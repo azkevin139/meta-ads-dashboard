@@ -2,6 +2,31 @@ const { queryOne, queryAll } = require('../db');
 
 const REPORTING_TIMEZONE = 'Asia/Dubai';
 const DEFAULT_PRESET = '7d';
+const REPORT_CACHE_TTL_MS = 60 * 1000;
+const REPORT_CACHE_MAX_ENTRIES = 256;
+const reportCache = new Map();
+
+function reportCacheKey(accountId, range) {
+  return `${accountId}|${range.since}|${range.until}|${range.preset}`;
+}
+
+function reportCacheGet(key) {
+  const entry = reportCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    reportCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function reportCachePut(key, value) {
+  if (reportCache.size >= REPORT_CACHE_MAX_ENTRIES) {
+    const oldest = reportCache.keys().next().value;
+    if (oldest !== undefined) reportCache.delete(oldest);
+  }
+  reportCache.set(key, { value, expiresAt: Date.now() + REPORT_CACHE_TTL_MS });
+}
 
 function parseDateOnly(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return null;
@@ -80,13 +105,39 @@ function cost(amount, count) {
 }
 
 function isQualifiedExpression(alias = 'lead_rows') {
-  return `
-    (
-      ${alias}.normalized_stage IN ('qualified', 'booked', 'showed', 'closed_won')
-      OR lower(COALESCE(${alias}.current_stage, '')) LIKE '%qualified%'
-      OR lower(COALESCE(${alias}.current_stage, '')) LIKE '%interested%'
-    )
-  `;
+  return `${alias}.normalized_stage IN ('qualified', 'booked', 'showed', 'closed_won')`;
+}
+
+// Canonical lead-acquisition timestamp. All report sections that scope by
+// "leads acquired in this period" must use this expression.
+function leadTimeExpression(alias = 'v') {
+  return `COALESCE(
+    NULLIF(${alias}.raw->'ghl'->>'dateAdded', '')::timestamptz,
+    NULLIF(${alias}.raw->'ghl'->>'createdAt', '')::timestamptz,
+    NULLIF(${alias}.raw->'metadata'->>'created_time', '')::timestamptz,
+    ${alias}.resolved_at,
+    ${alias}.first_seen_at
+  )`;
+}
+
+// Shared gating filter: row qualifies as a "lead" if it carries any identity.
+function leadIdentityFilter(alias = 'v') {
+  return `(
+    ${alias}.meta_lead_id IS NOT NULL
+    OR ${alias}.ghl_contact_id IS NOT NULL
+    OR ${alias}.email_hash IS NOT NULL
+    OR ${alias}.phone_hash IS NOT NULL
+  )`;
+}
+
+function dedupeKeyExpression(alias = 'v') {
+  return `COALESCE(
+    NULLIF(${alias}.ghl_contact_id, ''),
+    NULLIF(${alias}.phone_hash, ''),
+    NULLIF(${alias}.email_hash, ''),
+    NULLIF(${alias}.meta_lead_id, ''),
+    ${alias}.client_id
+  )`;
 }
 
 async function getMetaMetrics(accountId, range) {
@@ -120,14 +171,16 @@ async function getMetaMetrics(accountId, range) {
 }
 
 async function getDailySpend(accountId, range) {
+  // Zero-fill missing days so charts don't silently drop empty days.
   const rows = await queryAll(`
-    SELECT date, COALESCE(SUM(spend), 0) AS spend
-    FROM daily_insights
-    WHERE account_id = $1
-      AND level = 'account'
-      AND date BETWEEN $2::date AND $3::date
-    GROUP BY date
-    ORDER BY date
+    SELECT d::date AS date, COALESCE(SUM(di.spend), 0) AS spend
+    FROM generate_series($2::date, $3::date, INTERVAL '1 day') d
+    LEFT JOIN daily_insights di
+      ON di.date = d::date
+      AND di.account_id = $1
+      AND di.level = 'account'
+    GROUP BY d
+    ORDER BY d
   `, [accountId, range.since, range.until]);
   return rows.map((row) => ({
     date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
@@ -140,13 +193,7 @@ async function getLeadMetrics(accountId, range) {
     WITH lead_rows AS (
       SELECT
         v.*,
-        COALESCE(
-          NULLIF(v.ghl_contact_id, ''),
-          NULLIF(v.phone_hash, ''),
-          NULLIF(v.email_hash, ''),
-          NULLIF(v.meta_lead_id, ''),
-          v.client_id
-        ) AS dedupe_key,
+        ${dedupeKeyExpression('v')} AS dedupe_key,
         CASE
           WHEN v.meta_lead_id IS NOT NULL
             OR lower(COALESCE(v.source_event_type, '')) LIKE 'fb-lead%'
@@ -154,21 +201,10 @@ async function getLeadMetrics(accountId, range) {
           THEN 'meta_lead_form'
           ELSE 'website_form'
         END AS lead_source,
-        COALESCE(
-          NULLIF(v.raw->'ghl'->>'dateAdded', '')::timestamptz,
-          NULLIF(v.raw->'ghl'->>'createdAt', '')::timestamptz,
-          NULLIF(v.raw->'metadata'->>'created_time', '')::timestamptz,
-          v.resolved_at,
-          v.first_seen_at
-        ) AS lead_time
+        ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
       WHERE v.account_id = $1
-        AND (
-          v.meta_lead_id IS NOT NULL
-          OR v.ghl_contact_id IS NOT NULL
-          OR v.email_hash IS NOT NULL
-          OR v.phone_hash IS NOT NULL
-        )
+        AND ${leadIdentityFilter('v')}
     ),
     scoped AS (
       SELECT DISTINCT ON (dedupe_key) *
@@ -184,7 +220,8 @@ async function getLeadMetrics(accountId, range) {
       COUNT(*) FILTER (WHERE normalized_stage IN ('booked', 'showed'))::int AS booked_count,
       COUNT(*) FILTER (WHERE normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0)::int AS won_count,
       COUNT(*) FILTER (WHERE normalized_stage = 'closed_lost')::int AS lost_count,
-      COUNT(*) FILTER (WHERE normalized_stage IS NULL OR normalized_stage IN ('new_lead', 'contacted', 'closed_lost'))::int AS unqualified_leads
+      COUNT(*) FILTER (WHERE normalized_stage IS NULL OR normalized_stage IN ('new_lead', 'contacted'))::int AS unqualified_leads,
+      COUNT(*) FILTER (WHERE normalized_stage IS NULL)::int AS null_stage_count
     FROM scoped
   `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
   return {
@@ -196,6 +233,7 @@ async function getLeadMetrics(accountId, range) {
     booked_count: Number(row?.booked_count) || 0,
     won_count: Number(row?.won_count) || 0,
     lost_count: Number(row?.lost_count) || 0,
+    null_stage_count: Number(row?.null_stage_count) || 0,
   };
 }
 
@@ -215,14 +253,29 @@ async function getWebsiteMetrics(accountId, range) {
 }
 
 async function getPipeline(accountId, range) {
+  // Cohort: leads acquired in this period, grouped by their CURRENT
+  // normalized_stage. Same lead_time anchor + dedupe as getLeadMetrics so
+  // the funnel and pipeline counts reconcile.
   return queryAll(`
+    WITH lead_rows AS (
+      SELECT
+        v.*,
+        ${dedupeKeyExpression('v')} AS dedupe_key,
+        ${leadTimeExpression('v')} AS lead_time
+      FROM visitors v
+      WHERE v.account_id = $1
+        AND ${leadIdentityFilter('v')}
+    ),
+    scoped AS (
+      SELECT DISTINCT ON (dedupe_key) *
+      FROM lead_rows
+      WHERE (lead_time AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY dedupe_key, lead_time ASC
+    )
     SELECT
       COALESCE(normalized_stage, 'unknown') AS stage,
-      COUNT(DISTINCT COALESCE(NULLIF(ghl_contact_id, ''), NULLIF(phone_hash, ''), NULLIF(email_hash, ''), client_id))::int AS count
-    FROM visitors
-    WHERE account_id = $1
-      AND (last_seen_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
-      AND (ghl_contact_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL OR meta_lead_id IS NOT NULL)
+      COUNT(*)::int AS count
+    FROM scoped
     GROUP BY COALESCE(normalized_stage, 'unknown')
     ORDER BY count DESC, stage
   `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
@@ -254,31 +307,25 @@ async function getCreativePerformance(accountId, range) {
     lead_rows AS (
       SELECT
         v.ad_id,
-        COALESCE(
-          NULLIF(v.ghl_contact_id, ''),
-          NULLIF(v.phone_hash, ''),
-          NULLIF(v.email_hash, ''),
-          NULLIF(v.meta_lead_id, ''),
-          v.client_id
-        ) AS dedupe_key,
+        ${dedupeKeyExpression('v')} AS dedupe_key,
         ${isQualifiedExpression('v')} AS is_qualified,
         v.normalized_stage,
-        v.revenue
+        v.revenue,
+        ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
       WHERE v.account_id = $1
         AND v.ad_id IS NOT NULL
-        AND (
-          v.meta_lead_id IS NOT NULL
-          OR v.ghl_contact_id IS NOT NULL
-          OR v.email_hash IS NOT NULL
-          OR v.phone_hash IS NOT NULL
-        )
-        AND (COALESCE(v.resolved_at, v.first_seen_at) AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+        AND ${leadIdentityFilter('v')}
+    ),
+    scoped_leads AS (
+      SELECT *
+      FROM lead_rows
+      WHERE (lead_time AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
     ),
     deduped_leads AS (
       SELECT DISTINCT ON (ad_id, dedupe_key) *
-      FROM lead_rows
-      ORDER BY ad_id, dedupe_key
+      FROM scoped_leads
+      ORDER BY ad_id, dedupe_key, lead_time ASC
     ),
     lead_stats AS (
       SELECT
@@ -383,6 +430,10 @@ async function getLeadReport(accountId, params = {}) {
   const range = resolveRange(params);
   const previous = previousRange(range);
 
+  const cacheKey = reportCacheKey(accountId, range);
+  const cached = reportCacheGet(cacheKey);
+  if (cached) return cached;
+
   const [meta, dailySpend, leads, website, pipeline, creativePerformance, health] = await Promise.all([
     getMetaMetrics(accountId, range),
     getDailySpend(accountId, range),
@@ -398,10 +449,19 @@ async function getLeadReport(accountId, params = {}) {
     getWebsiteMetrics(accountId, previous),
   ]);
 
+  if (leads.total_leads > 0 && leads.null_stage_count / leads.total_leads > 0.05) {
+    console.warn('[reportingService] high NULL normalized_stage coverage', {
+      account_id: accountId,
+      range,
+      total_leads: leads.total_leads,
+      null_stage_count: leads.null_stage_count,
+    });
+  }
+
   const currentFlat = { ...meta, ...website, ...leads, ...buildDerived(meta, website, leads) };
   const previousFlat = { ...prevMeta, ...prevWebsite, ...prevLeads, ...buildDerived(prevMeta, prevWebsite, prevLeads) };
 
-  return {
+  const payload = {
     contract_version: 'lead-report.v1',
     timezone: REPORTING_TIMEZONE,
     range,
@@ -480,6 +540,8 @@ async function getLeadReport(accountId, params = {}) {
     freshness: health,
     health,
   };
+  reportCachePut(cacheKey, payload);
+  return payload;
 }
 
 module.exports = {

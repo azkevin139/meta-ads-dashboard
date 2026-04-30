@@ -2,6 +2,7 @@ const express = require('express');
 const { sendError } = require('../errorResponse');
 const reporting = require('../services/reportingService');
 const reportLinks = require('../services/reportLinkService');
+const reportLinkThrottle = require('../services/reportLinkThrottle');
 const { optionalTrimmedString } = require('../validation');
 
 const router = express.Router();
@@ -14,9 +15,25 @@ function setPublicReportHeaders(res) {
 }
 
 router.get('/:token/lead-summary', async (req, res) => {
+  setPublicReportHeaders(res);
+  if (reportLinkThrottle.isBlocked(req.ip)) {
+    res.status(429).json({ error: 'Too many invalid report attempts. Try again later.' });
+    return;
+  }
+  if (!reportLinks.isValidTokenFormat(req.params.token)) {
+    reportLinkThrottle.noteFailure(req.ip);
+    res.status(401).json({ error: 'Invalid report link' });
+    return;
+  }
+  let link;
   try {
-    setPublicReportHeaders(res);
-    const link = await reportLinks.resolveToken(req.params.token);
+    link = await reportLinks.resolveToken(req.params.token);
+  } catch (err) {
+    reportLinkThrottle.noteFailure(req.ip);
+    sendError(res, err);
+    return;
+  }
+  try {
     const params = {
       preset: optionalTrimmedString(req.query.preset, 30),
       since: optionalTrimmedString(req.query.since, 20),
@@ -39,7 +56,6 @@ router.get('/:token/lead-summary', async (req, res) => {
       data,
     });
   } catch (err) {
-    setPublicReportHeaders(res);
     sendError(res, err);
   }
 });
