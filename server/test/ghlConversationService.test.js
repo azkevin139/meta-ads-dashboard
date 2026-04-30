@@ -151,6 +151,8 @@ test('normalizeChannel maps GHL types to canonical tokens', () => {
   assert.equal(svc.normalizeChannel('SMS'), 'sms');
   assert.equal(svc.normalizeChannel('Email'), 'email');
   assert.equal(svc.normalizeChannel('WhatsApp'), 'whatsapp');
+  assert.equal(svc.normalizeChannel('TYPE_WHATSAPP'), 'whatsapp');
+  assert.equal(svc.normalizeChannel('TYPE_CALL'), 'phone');
   assert.equal(svc.normalizeChannel('FB'), 'facebook_messenger');
   assert.equal(svc.normalizeChannel('IG'), 'instagram');
   assert.equal(svc.normalizeChannel('Webchat'), 'live_chat');
