@@ -20,6 +20,14 @@ test('reporting previous period uses the same number of days', () => {
   });
 });
 
+test('reporting supports 60 day preset in Dubai timezone', () => {
+  const reporting = require('../services/reportingService');
+  const range = reporting.resolveRange({ preset: '60d' });
+  assert.equal(range.preset, '60d');
+  assert.equal(typeof range.since, 'string');
+  assert.equal(typeof range.until, 'string');
+});
+
 test('authenticated report route denies cross-account client access', async () => {
   const accountServicePath = require.resolve('../services/accountService');
   const dbPath = require.resolve('../db');

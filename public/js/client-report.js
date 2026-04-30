@@ -57,7 +57,7 @@
             <div class="report-subtitle">${escapeHtml(range.since || '')} to ${escapeHtml(range.until || '')} · ${escapeHtml(data.timezone || 'Asia/Dubai')}</div>
           </div>
           <div class="report-controls">
-            ${['today', 'yesterday', '7d', '14d', '30d', 'this_month'].map((item) => `
+            ${['today', 'yesterday', '7d', '14d', '30d', '60d', 'this_month'].map((item) => `
               <button class="btn btn-sm ${preset === item ? 'btn-primary' : ''}" data-client-report-preset="${item}">${item.replace('_', ' ')}</button>
             `).join('')}
           </div>

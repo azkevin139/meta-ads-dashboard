@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { query, queryOne, queryAll } = require('../db');
 
 const TOKEN_BYTES = 32;
-const DEFAULT_ALLOWED_PRESETS = ['today', 'yesterday', '7d', '14d', '30d', 'this_month'];
+const DEFAULT_ALLOWED_PRESETS = ['today', 'yesterday', '7d', '14d', '30d', '60d', 'this_month'];
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');

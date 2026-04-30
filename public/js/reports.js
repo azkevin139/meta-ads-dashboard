@@ -13,6 +13,7 @@ async function loadReports(container) {
           <button class="btn btn-sm btn-primary" data-report-preset="7d">7d</button>
           <button class="btn btn-sm" data-report-preset="14d">14d</button>
           <button class="btn btn-sm" data-report-preset="30d">30d</button>
+          <button class="btn btn-sm" data-report-preset="60d">60d</button>
           <button class="btn btn-sm" data-report-preset="this_month">This month</button>
         </div>
       </div>

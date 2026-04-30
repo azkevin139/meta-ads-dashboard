@@ -44,6 +44,7 @@ function resolveRange({ since, until, preset } = {}) {
   }
   if (selected === '14d') return { since: addDays(today, -14), until: addDays(today, -1), preset: selected };
   if (selected === '30d') return { since: addDays(today, -30), until: addDays(today, -1), preset: selected };
+  if (selected === '60d') return { since: addDays(today, -60), until: addDays(today, -1), preset: selected };
   if (selected === 'this_month') return { since: `${today.slice(0, 7)}-01`, until: today, preset: selected };
   return { since: addDays(today, -7), until: addDays(today, -1), preset: '7d' };
 }
