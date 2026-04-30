@@ -82,6 +82,7 @@ const localDateTimeToIso = editorUtils.localDateTimeToIso;
 
 const PAGES = {
   overview: { title: 'Overview', load: 'loadOverview', icon: 'grid' },
+  reports: { title: 'Client Report', load: 'loadReports', icon: 'chart' },
   intelligence: { title: 'Decision Center', load: 'loadIntelligence', icon: 'brain' },
   campaigns: { title: 'Campaigns', load: 'loadCampaigns', icon: 'list' },
   adsets: { title: 'Ad Sets', load: 'loadAdSets', icon: 'target' },

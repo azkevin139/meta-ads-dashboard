@@ -22,6 +22,8 @@ function createApp(config) {
   const actionsRoutes = require('./routes/actions');
   const logsRoutes = require('./routes/logs');
   const accountRoutes = require('./routes/accounts');
+  const reportRoutes = require('./routes/reports');
+  const publicReportRoutes = require('./routes/publicReports');
   const trackingRoutes = require('./routes/tracking');
   const webhookRoutes = require('./routes/webhooks');
   const createRoutes = require('./routes/create');
@@ -100,7 +102,18 @@ function createApp(config) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     next();
   });
+  app.get('/report/:token', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.sendFile(path.join(__dirname, '..', 'public', 'client-report.html'));
+  });
   app.use(express.static(path.join(__dirname, '..', 'public')));
+  if (rateLimit) {
+    app.use('/api/public/reports', rateLimit({ windowMs: 60 * 1000, max: 60, message: { error: 'Too many report requests. Try again later.' } }));
+  }
+  app.use('/api/public/reports', publicReportRoutes);
   app.use('/api', authMiddleware);
   app.use('/api', csrfMiddleware);
 
@@ -133,6 +146,7 @@ function createApp(config) {
   app.use('/api/webhooks', webhookRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/accounts', accountRoutes);
+  app.use('/api/reports', reportRoutes);
   app.use('/api/meta', metaRateRoutes);
   app.use('/api/meta', metaEntityRoutes);
   app.use('/api/meta', metaRoutes);
