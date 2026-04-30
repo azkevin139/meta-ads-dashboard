@@ -7,9 +7,13 @@ const csrfMiddleware = require('./middleware/csrf');
 const metaUsage = require('./services/metaUsageService');
 const aiBackendSettings = require('./services/aiBackendSettingsService');
 
-let helmet, rateLimit;
+let helmet, rateLimit, ipKeyGenerator;
 try { helmet = require('helmet'); } catch (e) { helmet = null; }
-try { rateLimit = require('express-rate-limit'); } catch (e) { rateLimit = null; }
+try {
+  const erl = require('express-rate-limit');
+  rateLimit = erl;
+  ipKeyGenerator = erl.ipKeyGenerator || ((ip) => String(ip || 'unknown'));
+} catch (e) { rateLimit = null; ipKeyGenerator = (ip) => String(ip || 'unknown'); }
 
 function createApp(config) {
   const authRoutes = require('./routes/auth');
@@ -157,7 +161,7 @@ function createApp(config) {
       keyGenerator: (req) => {
         const m = req.path.match(/^\/([^\/]+)\//);
         const tokenKey = m ? m[1] : 'none';
-        return `${req.ip || 'unknown'}:${tokenKey}`;
+        return `${ipKeyGenerator(req.ip || 'unknown')}:${tokenKey}`;
       },
       message: { error: 'Too many report requests. Try again later.' },
     }));
