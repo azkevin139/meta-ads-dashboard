@@ -184,6 +184,107 @@ test('meta webhook rejects unsigned requests in production when secret is missin
   }
 });
 
+test('ghl workflow webhook accepts static shared secret when hmac signature is unavailable', async () => {
+  const configPath = require.resolve('../config');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const webhookSecurityPath = require.resolve('../services/webhookSecurityService');
+  const ghlConversationPath = require.resolve('../services/ghlConversationService');
+  const routePath = require.resolve('../routes/webhooks');
+  const originals = new Map([
+    [configPath, require.cache[configPath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [webhookSecurityPath, require.cache[webhookSecurityPath]],
+    [ghlConversationPath, require.cache[ghlConversationPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+  const originalWorkflowSecret = process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+  const originalGhlSecret = process.env.GHL_WEBHOOK_SECRET;
+
+  delete require.cache[routePath];
+  process.env.GHL_WORKFLOW_WEBHOOK_SECRET = 'workflow-secret';
+  process.env.GHL_WEBHOOK_SECRET = 'hmac-secret';
+  require.cache[configPath] = { exports: { isProduction: true } };
+  require.cache[trackingServicePath] = {
+    exports: {
+      handleMetaLead: async () => ({ client_id: 'meta' }),
+      handleGhlWebhook: async () => ({ client_id: 'ghl' }),
+    },
+  };
+  require.cache[webhookSecurityPath] = {
+    exports: {
+      reserveRequest: async () => ({ accepted: true }),
+    },
+  };
+  require.cache[ghlConversationPath] = {
+    exports: {
+      processInboundMessage: async () => ({ processed: true }),
+      processOutboundMessage: async () => ({ processed: true }),
+    },
+  };
+
+  try {
+    const router = require('../routes/webhooks');
+    const app = makeJsonApp(router);
+    const res = await invoke(app, {
+      method: 'POST',
+      url: '/ghl?workflow_secret=workflow-secret',
+      headers: { 'content-type': 'application/json' },
+      body: { type: 'InboundMessage', messageId: 'm1' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.success, true);
+    assert.equal(res.json.kind, 'inbound_message');
+  } finally {
+    if (originalWorkflowSecret === undefined) delete process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+    else process.env.GHL_WORKFLOW_WEBHOOK_SECRET = originalWorkflowSecret;
+    if (originalGhlSecret === undefined) delete process.env.GHL_WEBHOOK_SECRET;
+    else process.env.GHL_WEBHOOK_SECRET = originalGhlSecret;
+    restoreCache(originals);
+  }
+});
+
+test('ghl workflow webhook rejects bad static shared secret', async () => {
+  const configPath = require.resolve('../config');
+  const trackingServicePath = require.resolve('../services/trackingService');
+  const routePath = require.resolve('../routes/webhooks');
+  const originals = new Map([
+    [configPath, require.cache[configPath]],
+    [trackingServicePath, require.cache[trackingServicePath]],
+    [routePath, require.cache[routePath]],
+  ]);
+  const originalWorkflowSecret = process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+  const originalGhlSecret = process.env.GHL_WEBHOOK_SECRET;
+
+  delete require.cache[routePath];
+  process.env.GHL_WORKFLOW_WEBHOOK_SECRET = 'workflow-secret';
+  process.env.GHL_WEBHOOK_SECRET = 'hmac-secret';
+  require.cache[configPath] = { exports: { isProduction: true } };
+  require.cache[trackingServicePath] = {
+    exports: {
+      handleMetaLead: async () => ({ client_id: 'meta' }),
+      handleGhlWebhook: async () => ({ client_id: 'ghl' }),
+    },
+  };
+
+  try {
+    const router = require('../routes/webhooks');
+    const app = makeJsonApp(router);
+    const res = await invoke(app, {
+      method: 'POST',
+      url: '/ghl?workflow_secret=wrong',
+      headers: { 'content-type': 'application/json' },
+      body: { type: 'InboundMessage', messageId: 'm1' },
+    });
+    assert.equal(res.status, 401);
+  } finally {
+    if (originalWorkflowSecret === undefined) delete process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+    else process.env.GHL_WORKFLOW_WEBHOOK_SECRET = originalWorkflowSecret;
+    if (originalGhlSecret === undefined) delete process.env.GHL_WEBHOOK_SECRET;
+    else process.env.GHL_WEBHOOK_SECRET = originalGhlSecret;
+    restoreCache(originals);
+  }
+});
+
 test('cache stats endpoint is admin only', async () => {
   const metaUsagePath = require.resolve('../services/metaUsageService');
   const metaCachePath = require.resolve('../services/metaCache');

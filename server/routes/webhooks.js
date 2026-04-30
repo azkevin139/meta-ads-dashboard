@@ -31,6 +31,16 @@ function verifyMetaSignature(req) {
 }
 
 function verifyGhlSignature(req) {
+  const workflowSecret = process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+  const providedWorkflowSecret = req.header('x-adcommand-webhook-secret')
+    || req.header('x-ghl-workflow-secret')
+    || req.query?.workflow_secret;
+  if (workflowSecret && providedWorkflowSecret) {
+    return timingSafeEq(workflowSecret, providedWorkflowSecret)
+      ? { ok: true, reason: 'workflow_secret' }
+      : { ok: false, reason: 'bad_workflow_secret' };
+  }
+
   const secret = process.env.GHL_WEBHOOK_SECRET;
   if (!secret) {
     return config.isProduction
