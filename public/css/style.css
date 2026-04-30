@@ -788,6 +788,43 @@ tbody td.name-cell a:hover {
   color: var(--text-primary);
 }
 
+.report-card-subtitle {
+  margin-top: -6px;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.report-card-accent {
+  border-top: 3px solid var(--accent);
+}
+
+.report-table-wrap {
+  border: 0;
+  margin: 0;
+}
+
+.report-creative-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+}
+
+.report-rank-badge {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .report-funnel-step,
 .report-stage-row,
 .report-health-row {

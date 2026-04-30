@@ -212,6 +212,105 @@ async function getPipeline(accountId, range) {
   `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
 }
 
+async function getCreativePerformance(accountId, range) {
+  return queryAll(`
+    WITH meta_rows AS (
+      SELECT
+        ads.meta_ad_id,
+        COALESCE(ads.name, ads.meta_ad_id) AS creative_name,
+        COALESCE(SUM(di.spend), 0) AS spend,
+        COALESCE(SUM(di.impressions), 0)::bigint AS impressions,
+        COALESCE(SUM(di.clicks), 0)::bigint AS clicks,
+        COALESCE(SUM(
+          COALESCE((
+            SELECT SUM((action->>'value')::numeric)
+            FROM jsonb_array_elements(COALESCE(di.actions_json->'actions', '[]'::jsonb)) action
+            WHERE action->>'action_type' = 'link_click'
+          ), 0)
+        ), 0)::bigint AS link_clicks
+      FROM daily_insights di
+      JOIN ads ON ads.id = di.ad_id
+      WHERE di.account_id = $1
+        AND di.level = 'ad'
+        AND di.date BETWEEN $2::date AND $3::date
+      GROUP BY ads.meta_ad_id, COALESCE(ads.name, ads.meta_ad_id)
+    ),
+    lead_rows AS (
+      SELECT
+        v.ad_id,
+        COALESCE(
+          NULLIF(v.ghl_contact_id, ''),
+          NULLIF(v.phone_hash, ''),
+          NULLIF(v.email_hash, ''),
+          NULLIF(v.meta_lead_id, ''),
+          v.client_id
+        ) AS dedupe_key,
+        ${isQualifiedExpression('v')} AS is_qualified,
+        v.normalized_stage,
+        v.revenue
+      FROM visitors v
+      WHERE v.account_id = $1
+        AND v.ad_id IS NOT NULL
+        AND (
+          v.meta_lead_id IS NOT NULL
+          OR v.ghl_contact_id IS NOT NULL
+          OR v.email_hash IS NOT NULL
+          OR v.phone_hash IS NOT NULL
+        )
+        AND (COALESCE(v.resolved_at, v.first_seen_at) AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+    ),
+    deduped_leads AS (
+      SELECT DISTINCT ON (ad_id, dedupe_key) *
+      FROM lead_rows
+      ORDER BY ad_id, dedupe_key
+    ),
+    lead_stats AS (
+      SELECT
+        ad_id,
+        COUNT(*)::int AS total_leads,
+        COUNT(*) FILTER (WHERE is_qualified)::int AS qualified_leads,
+        COUNT(*) FILTER (WHERE normalized_stage IN ('booked', 'showed'))::int AS booked_count,
+        COUNT(*) FILTER (WHERE normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0)::int AS won_count
+      FROM deduped_leads
+      GROUP BY ad_id
+    )
+    SELECT
+      m.meta_ad_id,
+      m.creative_name,
+      m.spend,
+      m.impressions,
+      COALESCE(NULLIF(m.link_clicks, 0), m.clicks) AS clicks,
+      COALESCE(ls.total_leads, 0)::int AS total_leads,
+      COALESCE(ls.qualified_leads, 0)::int AS qualified_leads,
+      COALESCE(ls.booked_count, 0)::int AS booked_count,
+      COALESCE(ls.won_count, 0)::int AS won_count
+    FROM meta_rows m
+    LEFT JOIN lead_stats ls ON ls.ad_id = m.meta_ad_id
+    ORDER BY COALESCE(ls.qualified_leads, 0) DESC, COALESCE(ls.total_leads, 0) DESC, m.spend DESC
+    LIMIT 12
+  `, [accountId, range.since, range.until, REPORTING_TIMEZONE]).then((rows) => rows.map((row) => {
+    const spend = Number(row.spend) || 0;
+    const clicks = Number(row.clicks) || 0;
+    const leads = Number(row.total_leads) || 0;
+    const qualified = Number(row.qualified_leads) || 0;
+    return {
+      meta_ad_id: row.meta_ad_id,
+      creative_name: row.creative_name,
+      source_name: 'Meta ad name',
+      spend,
+      impressions: Number(row.impressions) || 0,
+      clicks,
+      total_leads: leads,
+      qualified_leads: qualified,
+      booked_count: Number(row.booked_count) || 0,
+      won_count: Number(row.won_count) || 0,
+      cpl: cost(spend, leads),
+      cost_per_qualified_lead: cost(spend, qualified),
+      click_to_lead_rate: rate(leads, clicks),
+    };
+  }));
+}
+
 async function getHealthSummary(accountId) {
   const rows = await queryAll(`
     WITH latest AS (
@@ -268,11 +367,12 @@ async function getLeadReport(accountId, params = {}) {
   const range = resolveRange(params);
   const previous = previousRange(range);
 
-  const [meta, leads, website, pipeline, health] = await Promise.all([
+  const [meta, leads, website, pipeline, creativePerformance, health] = await Promise.all([
     getMetaMetrics(accountId, range),
     getLeadMetrics(accountId, range),
     getWebsiteMetrics(accountId, range),
     getPipeline(accountId, range),
+    getCreativePerformance(accountId, range),
     getHealthSummary(accountId),
   ]);
   const [prevMeta, prevLeads, prevWebsite] = await Promise.all([
@@ -299,6 +399,8 @@ async function getLeadReport(accountId, params = {}) {
       engaged_leads: 'Supporting KPI for reply/engagement signals. Kept separate from official qualified leads until score rules are mapped.',
       acquisition_source: 'Meta daily insights are the source of truth for spend, impressions, reach, and clicks.',
       pipeline_source: 'GoHighLevel-derived lifecycle state is the source of truth for qualification and pipeline outcomes.',
+      creative_name: 'Creative names come from the Meta ad name at ad/creative level.',
+      creative_performance: 'Creative performance combines Meta ad-level delivery with deduped GHL/lead outcomes attributed to the same Meta ad ID.',
     },
     summary: currentFlat,
     previous_summary: previousFlat,
@@ -354,6 +456,8 @@ async function getLeadReport(accountId, params = {}) {
       lead_score_status: 'unmapped',
     },
     pipeline,
+    creativePerformance,
+    creative_performance: creativePerformance,
     freshness: health,
     health,
   };

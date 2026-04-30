@@ -44,6 +44,7 @@
     const website = data.websiteFunnel || data.website_funnel || {};
     const quality = data.leadQuality || data.lead_quality || {};
     const pipeline = data.pipeline || [];
+    const creatives = data.creativePerformance || data.creative_performance || [];
     const freshness = data.freshness || data.health || [];
     const range = data.range || {};
     const account = payload.account || {};
@@ -116,6 +117,44 @@
             `).join('') : '<div class="text-muted">No pipeline data in this period.</div>'}
           </section>
         </div>
+
+        <section class="report-card report-card-accent">
+          <div class="report-card-title">Which Visual Performs Best</div>
+          <div class="report-card-subtitle">Creative name comes from the Meta ad name. Performance combines Meta delivery with GHL lead and pipeline outcomes.</div>
+          <div class="table-container report-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Creative</th>
+                  <th class="right">Spend</th>
+                  <th class="right">Clicks</th>
+                  <th class="right">Leads</th>
+                  <th class="right">CPL</th>
+                  <th class="right">Qualified</th>
+                  <th class="right">Booked</th>
+                  <th class="right">Won</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${creatives.length ? creatives.map((row, index) => `
+                  <tr>
+                    <td>
+                      <div class="report-creative-name"><span class="report-rank-badge">${index + 1}</span>${escapeHtml(row.creative_name || row.meta_ad_id || 'Unknown creative')}</div>
+                      <div class="text-muted" style="font-size:0.72rem;">${escapeHtml(row.source_name || 'Meta ad name')}</div>
+                    </td>
+                    <td class="right">${fmtSafe(row.spend, 'currency')}</td>
+                    <td class="right">${fmtSafe(row.clicks, 'integer')}</td>
+                    <td class="right">${fmtSafe(row.total_leads, 'integer')}</td>
+                    <td class="right">${fmtSafe(row.cpl, 'currency')}</td>
+                    <td class="right">${fmtSafe(row.qualified_leads, 'integer')}</td>
+                    <td class="right">${fmtSafe(row.booked_count, 'integer')}</td>
+                    <td class="right">${fmtSafe(row.won_count, 'integer')}</td>
+                  </tr>
+                `).join('') : '<tr><td colspan="8" class="text-muted">No ad-level creative data for this period.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         <section class="report-card">
           <div class="report-card-title">Definitions</div>
