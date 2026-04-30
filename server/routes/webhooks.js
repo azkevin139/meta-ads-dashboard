@@ -4,6 +4,7 @@ const config = require('../config');
 const { sendError } = require('../errorResponse');
 const tracking = require('../services/trackingService');
 const webhookSecurity = require('../services/webhookSecurityService');
+const ghlConversation = require('../services/ghlConversationService');
 const { ensureObject } = require('../validation');
 
 const router = express.Router();
@@ -60,6 +61,15 @@ router.post('/ghl', async (req, res) => {
     if (!replay.accepted) {
       console.warn(`[webhook] GHL duplicate rejected: ${replay.event_id}`);
       return res.json({ success: true, duplicate: true });
+    }
+    const eventType = String(body.type || body.event || '').toLowerCase();
+    if (eventType === 'inboundmessage' || eventType === 'inbound_message') {
+      const result = await ghlConversation.processInboundMessage(body);
+      return res.json({ success: true, kind: 'inbound_message', ...result });
+    }
+    if (eventType === 'outboundmessage' || eventType === 'outbound_message') {
+      const result = await ghlConversation.processOutboundMessage(body);
+      return res.json({ success: true, kind: 'outbound_message', ...result });
     }
     const visitor = await tracking.handleGhlWebhook(body);
     res.json({ success: true, client_id: visitor.client_id });

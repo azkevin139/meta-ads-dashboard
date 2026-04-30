@@ -74,12 +74,13 @@
     return `<div class="kpi-delta ${deltaClass(v, inverse)}">${icon} ${Math.abs(v).toFixed(1)}% vs prev period</div>`;
   }
 
-  function kpi(label, value, delta, inverseDelta) {
+  function kpi(label, value, delta, inverseDelta, sub) {
     return `
       <div class="kpi-card">
         <div class="kpi-label">${escape(label)}</div>
         <div class="kpi-value">${value}</div>
         ${delta !== undefined ? renderDelta(delta, inverseDelta) : ''}
+        ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}
       </div>
     `;
   }
@@ -276,7 +277,15 @@
         ${kpi('Link clicks', fmt.int(summary.clicks), deltas.clicks, false)}
         ${kpi('Total leads', fmt.int(summary.total_leads), deltas.total_leads, false)}
         ${kpi('CPL', fmt.money(summary.cpl), deltas.cpl, true)}
-        ${kpi('Qualified leads', fmt.int(summary.qualified_leads), deltas.qualified_leads, false)}
+        ${kpi(
+          'Qualified leads',
+          fmt.int(summary.qualified_leads),
+          deltas.qualified_leads,
+          false,
+          summary.qualified_leads_stage !== undefined && summary.qualified_leads_stage !== summary.qualified_leads
+            ? `Prior method: ${escape(fmt.int(summary.qualified_leads_stage))}`
+            : null,
+        )}
         ${kpi('Cost per QL', fmt.money(summary.cost_per_qualified_lead), deltas.cost_per_qualified_lead, true)}
         ${kpi('Won / Booked', fmt.int(wonBooked), deltas.booked_count, false)}
       </div>

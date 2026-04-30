@@ -216,7 +216,12 @@ async function getLeadMetrics(accountId, range) {
       COUNT(*)::int AS total_leads,
       COUNT(*) FILTER (WHERE lead_source = 'meta_lead_form')::int AS meta_leads,
       COUNT(*) FILTER (WHERE lead_source = 'website_form')::int AS website_leads,
-      COUNT(*) FILTER (WHERE ${isQualifiedExpression('scoped')})::int AS qualified_leads,
+      -- V1 qualification (engagement-based, persisted by ghlConversationService).
+      COUNT(*) FILTER (WHERE qualified_at IS NOT NULL)::int AS qualified_leads,
+      -- Transitional dual-display: legacy stage-based qualified count, kept for one cycle.
+      COUNT(*) FILTER (WHERE ${isQualifiedExpression('scoped')})::int AS qualified_leads_stage,
+      COUNT(*) FILTER (WHERE first_inbound_reply_at IS NOT NULL)::int AS replied_leads,
+      COUNT(*) FILTER (WHERE first_outbound_at IS NOT NULL)::int AS contacted_leads,
       COUNT(*) FILTER (WHERE normalized_stage IN ('booked', 'showed'))::int AS booked_count,
       COUNT(*) FILTER (WHERE normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0)::int AS won_count,
       COUNT(*) FILTER (WHERE normalized_stage = 'closed_lost')::int AS lost_count,
@@ -229,6 +234,9 @@ async function getLeadMetrics(accountId, range) {
     meta_leads: Number(row?.meta_leads) || 0,
     website_leads: Number(row?.website_leads) || 0,
     qualified_leads: Number(row?.qualified_leads) || 0,
+    qualified_leads_stage: Number(row?.qualified_leads_stage) || 0,
+    replied_leads: Number(row?.replied_leads) || 0,
+    contacted_leads: Number(row?.contacted_leads) || 0,
     unqualified_leads: Number(row?.unqualified_leads) || 0,
     booked_count: Number(row?.booked_count) || 0,
     won_count: Number(row?.won_count) || 0,
@@ -402,9 +410,11 @@ function buildDerived(meta, website, leads) {
   return {
     cpl: cost(meta.spend, leads.total_leads),
     cost_per_qualified_lead: cost(meta.spend, leads.qualified_leads),
+    cost_per_replied_lead: cost(meta.spend, leads.replied_leads),
     click_to_lead_rate: rate(leads.total_leads, meta.clicks),
     visit_to_website_lead_rate: rate(leads.website_leads, website.visits),
     qualified_rate: rate(leads.qualified_leads, leads.total_leads),
+    reply_rate: rate(leads.replied_leads, leads.contacted_leads),
   };
 }
 
@@ -418,10 +428,15 @@ function withComparisons(current, previous) {
     'meta_leads',
     'website_leads',
     'qualified_leads',
+    'qualified_leads_stage',
+    'replied_leads',
+    'contacted_leads',
     'booked_count',
     'won_count',
     'cpl',
     'cost_per_qualified_lead',
+    'cost_per_replied_lead',
+    'reply_rate',
   ];
   return Object.fromEntries(keys.map((key) => [key, pctDelta(current[key], previous[key])]));
 }
@@ -472,10 +487,13 @@ async function getLeadReport(accountId, params = {}) {
     },
     definitions: {
       total_leads: 'Deduped people who submitted a Meta lead form or website form. Dedupe priority: GHL contact ID, phone hash, email hash, Meta lead ID, client ID.',
-      qualified_leads: 'V1 reporting KPI: normalized GHL stage is qualified/booked/showed/closed_won, or an approved engagement/interest signal is present.',
-      engaged_leads: 'Supporting KPI for reply/engagement signals. Kept separate from official qualified leads until score rules are mapped.',
+      qualified_leads: 'A lead from Meta or the website that replied to our outreach by WhatsApp, SMS, email, Facebook Messenger, Instagram, or live chat after we sent a first message. Recorded from GoHighLevel Conversations webhooks.',
+      qualified_leads_stage: 'Transitional comparison only: how the previous methodology counted qualified leads (using normalized GHL stage). Will be removed after one reporting cycle.',
+      replied_leads: 'Leads who sent any inbound conversation message after their lead was created. Useful for separating responsiveness from sales-readiness.',
+      contacted_leads: 'Leads we sent a first outbound message to via GoHighLevel.',
+      reply_rate: 'replied_leads / contacted_leads. Tells you how often outreach actually starts a conversation.',
       acquisition_source: 'Meta daily insights are the source of truth for spend, impressions, reach, and clicks.',
-      pipeline_source: 'GoHighLevel-derived lifecycle state is the source of truth for qualification and pipeline outcomes.',
+      pipeline_source: 'GoHighLevel-derived lifecycle state is the source of truth for sales pipeline progression. Pipeline status is separate from qualification.',
       creative_name: 'Creative names come from the Meta ad name at ad/creative level.',
       creative_performance: 'Creative performance combines Meta ad-level delivery with deduped GHL/lead outcomes attributed to the same Meta ad ID.',
     },
