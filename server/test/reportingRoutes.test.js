@@ -265,6 +265,42 @@ test('public report route uses account from token, not request query', async () 
   }
 });
 
+test('public report viewer timezone endpoint returns proxy timezone when available', async () => {
+  const reportLinksPath = require.resolve('../services/reportLinkService');
+  const reportingPath = require.resolve('../services/reportingService');
+  const routePath = require.resolve('../routes/publicReports');
+  const originals = new Map([
+    [reportLinksPath, require.cache[reportLinksPath]],
+    [reportingPath, require.cache[reportingPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  delete require.cache[routePath];
+  require.cache[reportLinksPath] = {
+    exports: {
+      isValidTokenFormat: () => true,
+      resolveToken: async () => ({ id: 4, account_id: 11 }),
+      enforcePresetRestriction: () => {},
+      recordView: async () => {},
+    },
+  };
+  require.cache[reportingPath] = { exports: { getLeadReport: async () => ({}) } };
+
+  try {
+    const router = require('../routes/publicReports');
+    const app = makeJsonApp(router);
+    const res = await invoke(app, {
+      url: `/${VALID_TOKEN}/viewer-timezone`,
+      headers: { 'cf-timezone': 'Asia/Bangkok' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.timezone, 'Asia/Bangkok');
+    assert.equal(res.json.source, 'ip');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('public report route fast-rejects malformed tokens before DB lookup', async () => {
   const reportLinksPath = require.resolve('../services/reportLinkService');
   const reportingPath = require.resolve('../services/reportingService');

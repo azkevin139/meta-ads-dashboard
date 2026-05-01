@@ -60,4 +60,33 @@ router.get('/:token/lead-summary', async (req, res) => {
   }
 });
 
+router.get('/:token/viewer-timezone', async (req, res) => {
+  setPublicReportHeaders(res);
+  if (reportLinkThrottle.isBlocked(req.ip)) {
+    res.status(429).json({ error: 'Too many invalid report attempts. Try again later.' });
+    return;
+  }
+  if (!reportLinks.isValidTokenFormat(req.params.token)) {
+    reportLinkThrottle.noteFailure(req.ip);
+    res.status(401).json({ error: 'Invalid report link' });
+    return;
+  }
+  try {
+    await reportLinks.resolveToken(req.params.token);
+    const timezone = optionalTrimmedString(
+      req.headers['x-vercel-ip-timezone']
+      || req.headers['cf-timezone']
+      || req.headers['x-timezone'],
+      80,
+    );
+    res.json({
+      timezone: timezone || null,
+      source: timezone ? 'ip' : 'unavailable',
+    });
+  } catch (err) {
+    reportLinkThrottle.noteFailure(req.ip);
+    sendError(res, err);
+  }
+});
+
 module.exports = router;

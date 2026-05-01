@@ -48,6 +48,9 @@
     .date-btn { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius-sm); padding: 6px 14px; font-family: var(--font-body); font-size: 13px; color: var(--text-muted); cursor: pointer; transition: all 0.2s; }
     .date-btn:hover, .date-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
     .last-updated { font-size: 11px; color: var(--text-dim); }
+    .report-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 18px 0 0; }
+    .contact-pill { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--accent); padding: 8px 12px; font-size: 13px; text-decoration: none; transition: border-color 0.2s, background 0.2s; }
+    .contact-pill:hover { border-color: var(--accent); background: var(--accent-dim); }
 
     .section-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-weight: 500; margin-bottom: 16px; margin-top: 40px; display: flex; align-items: center; gap: 8px; }
     .section-label::after { content: ''; flex: 1; height: 0.5px; background: var(--border); }
@@ -153,6 +156,8 @@
       .funnels-row { grid-template-columns: 1fr; }
       .header { flex-direction: column; align-items: flex-start; padding-top: 32px; }
       .header-right { align-items: flex-start; }
+      .report-actions { flex-direction: column; }
+      .contact-pill { justify-content: center; }
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .kpi-value { font-size: 21px; }
       .funnel-block-inner { padding: 8px 10px; }
@@ -167,7 +172,7 @@
         <div class="logo-mark"><span>E42</span></div>
         <div>
           <div class="header-title" id="clientTitle">Loading...</div>
-          <div class="header-subtitle" id="reportSubtitle">Campaign Performance Report · Dubai Time</div>
+          <div class="header-subtitle" id="reportSubtitle">Campaign Performance Report</div>
         </div>
       </div>
       <div class="header-right">
@@ -180,6 +185,11 @@
         <div class="last-updated" id="lastUpdated">Fetching data...</div>
       </div>
     </header>
+
+    <div class="report-actions" aria-label="Report contacts">
+      <a class="contact-pill" href="https://slack.com/app_redirect?team=T02JNSKLYJU&amp;channel=U081PLKUHPV" target="_blank" rel="noopener noreferrer">Speak to Amin</a>
+      <a class="contact-pill" href="https://slack.com/app_redirect?team=T02JNSKLYJU&amp;channel=U02HJGH53HV" target="_blank" rel="noopener noreferrer">Speak to Kevin</a>
+    </div>
 
     <div class="error-banner" id="errorBanner"></div>
 

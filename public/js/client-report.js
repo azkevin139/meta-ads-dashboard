@@ -4,6 +4,8 @@
   const queryDays = new URLSearchParams(window.location.search).get('days');
   let activePreset = allowedPresets.includes(queryPreset) ? queryPreset : allowedPresets.includes(`${queryDays}d`) ? `${queryDays}d` : '7d';
   let activeCurrency = 'USD';
+  let viewerTimezone = null;
+  let viewerTimezoneSource = 'account';
 
   const fmt = {
     money(value) {
@@ -42,6 +44,47 @@
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || 'Report unavailable');
     return json;
+  }
+
+  function browserTimezone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async function resolveViewerTimezone(token, accountTimezone) {
+    const browserTz = browserTimezone();
+    if (browserTz) return { timezone: browserTz, source: 'browser' };
+    try {
+      const res = await fetch(`/api/public/reports/${encodeURIComponent(token)}/viewer-timezone`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.timezone) return { timezone: json.timezone, source: json.source || 'ip' };
+    } catch (_err) {}
+    return { timezone: accountTimezone || 'Asia/Dubai', source: 'account' };
+  }
+
+  function formatDateTime(date, timezone) {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: timezone,
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(date);
+    } catch (_err) {
+      return date.toLocaleString('en-AE', { timeZone: 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' });
+    }
+  }
+
+  function timezoneLabel(timezone, source) {
+    if (!timezone) return 'account timezone';
+    if (source === 'browser') return `${timezone} (your browser)`;
+    if (source === 'ip') return `${timezone} (estimated from IP)`;
+    return `${timezone} (report timezone)`;
   }
 
   function num(value) {
@@ -123,7 +166,7 @@
       </div>
       <div class="funnel-steps">
         ${rows.map((row) => row.handoff
-          ? '<div class="funnel-handoff">GoHighLevel qualification</div>'
+          ? '<div class="funnel-handoff">LINXIO qualification</div>'
           : funnelBlock(row.label, row.value, row.cssClass, widthFor(row.value, row.top || topValue), row.rate)).join('')}
       </div>
     `;
@@ -330,7 +373,8 @@
     const creativeLeaderboard = data.creativeLeaderboard || data.creative_leaderboard || null;
     const dailySpend = data.dailySpend || data.daily_spend || [];
     const range = data.range || {};
-    const updatedAt = new Date().toLocaleString('en-AE', { timeZone: data.timezone || 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' });
+    const accountTimezone = data.timezone || 'Asia/Dubai';
+    const updatedAt = formatDateTime(new Date(), viewerTimezone || accountTimezone);
     activeCurrency = account.currency || 'USD';
 
     const metaClicks = firstDefined(meta.linkClicks, meta.link_clicks, summary.clicks);
@@ -347,8 +391,8 @@
     const wonBooked = num(summary.won_count) + num(summary.booked_count);
 
     document.getElementById('clientTitle').textContent = account.name || 'Campaign Report';
-    document.getElementById('reportSubtitle').textContent = `${range.since || ''} to ${range.until || ''} · Dubai Time`;
-    document.getElementById('lastUpdated').textContent = `Updated ${updatedAt}`;
+    document.getElementById('reportSubtitle').textContent = `${range.since || ''} to ${range.until || ''} · Report period calculated in ${accountTimezone}`;
+    document.getElementById('lastUpdated').textContent = `Updated ${updatedAt} · Times shown in ${timezoneLabel(viewerTimezone || accountTimezone, viewerTimezoneSource)}`;
 
     document.getElementById('mainContent').innerHTML = `
       <div class="section-label">Performance overview</div>
@@ -442,7 +486,7 @@
 
       <div class="footer">
         <div class="footer-brand">E42 Agency</div>
-        <div class="footer-note">Read-only report · Powered by Meta Ads &amp; GoHighLevel · Dubai time (GMT+4)</div>
+        <div class="footer-note">Read-only report · Powered by Meta Ads &amp; LINXIO · Report period calculated in ${escape(accountTimezone)}</div>
       </div>
     `;
   }
@@ -474,7 +518,11 @@
     }
     setLoading();
     try {
-      render(await fetchReport(token));
+      const payload = await fetchReport(token);
+      const tz = await resolveViewerTimezone(token, payload.data?.timezone || 'Asia/Dubai');
+      viewerTimezone = tz.timezone;
+      viewerTimezoneSource = tz.source;
+      render(payload);
     } catch (err) {
       setUnavailable(err.message);
     }
