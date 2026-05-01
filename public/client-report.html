@@ -49,7 +49,7 @@
     .date-btn:hover, .date-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
     .last-updated { font-size: 11px; color: var(--text-dim); }
     .report-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 18px 0 0; }
-    .contact-pill { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--accent); padding: 8px 12px; font-size: 13px; text-decoration: none; transition: border-color 0.2s, background 0.2s; }
+    .contact-pill { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--accent); padding: 8px 12px; font: inherit; font-size: 13px; text-decoration: none; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
     .contact-pill:hover { border-color: var(--accent); background: var(--accent-dim); }
 
     .section-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-weight: 500; margin-bottom: 16px; margin-top: 40px; display: flex; align-items: center; gap: 8px; }
@@ -127,6 +127,9 @@
     .rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-dim); color: var(--accent); font-size: 11px; margin-right: 8px; }
     .creative-winner-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
     .creative-winner-card { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius); padding: 16px; }
+    .creative-winner-visual { aspect-ratio: 1 / 1; width: 100%; border-radius: var(--radius-sm); background: var(--bg-card2); border: 0.5px solid var(--border-soft); overflow: hidden; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; }
+    .creative-winner-visual img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .creative-winner-placeholder { color: var(--text-dim); font-size: 12px; padding: 12px; text-align: center; }
     .creative-winner-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
     .creative-winner-name { font-family: var(--font-display); font-size: 18px; line-height: 1.2; color: var(--text); }
     .creative-winner-metric { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
@@ -160,6 +163,12 @@
       .funnel-block-inner { padding: 8px 10px; }
       .creative-winner-grid { grid-template-columns: 1fr; }
     }
+    @media print {
+      .report-actions, .date-range-wrap { display: none !important; }
+      .shell { max-width: none; padding: 0 18px 32px; }
+      .kpi-card, .funnel-card, .chart-card-full, .creative-winner-card, .definition-item { break-inside: avoid; page-break-inside: avoid; }
+      html, body { background: #fff; }
+    }
   </style>
 </head>
 <body>
@@ -184,6 +193,7 @@
     </header>
 
     <div class="report-actions" aria-label="Report contacts">
+      <button class="contact-pill" type="button" id="downloadPdfButton">Download PDF</button>
       <a class="contact-pill" href="https://slack.com/app_redirect?team=T02JNSKLYJU&amp;channel=U081PLKUHPV" target="_blank" rel="noopener noreferrer">Speak to Amin</a>
       <a class="contact-pill" href="https://slack.com/app_redirect?team=T02JNSKLYJU&amp;channel=U02HJGH53HV" target="_blank" rel="noopener noreferrer">Speak to Kevin</a>
     </div>

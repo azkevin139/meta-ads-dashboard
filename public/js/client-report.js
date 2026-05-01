@@ -263,10 +263,23 @@
     return row ? escape(row.creative_name || row.meta_ad_id || 'Unknown visual') : 'Unavailable';
   }
 
+  function creativeImage(row) {
+    const url = row?.creative_image_url;
+    if (!url) {
+      return '<div class="creative-winner-visual"><div class="creative-winner-placeholder">Visual unavailable</div></div>';
+    }
+    return `
+      <div class="creative-winner-visual">
+        <img src="${escape(url)}" alt="${creativeTitle(row)}" loading="lazy" referrerpolicy="no-referrer">
+      </div>
+    `;
+  }
+
   function renderWinner(label, row, metricLabel, metricValue) {
     if (!row) {
       return `
         <div class="creative-winner-card">
+          <div class="creative-winner-visual"><div class="creative-winner-placeholder">Visual unavailable</div></div>
           <div class="creative-winner-label">${escape(label)}</div>
           <div class="creative-winner-name">Unavailable</div>
           <div class="creative-winner-metric">No covered ad-level data</div>
@@ -275,6 +288,7 @@
     }
     return `
       <div class="creative-winner-card">
+        ${creativeImage(row)}
         <div class="creative-winner-label">${escape(label)}</div>
         <div class="creative-winner-name">${creativeTitle(row)}</div>
         <div class="creative-winner-metric">${escape(metricLabel)}: ${metricValue}</div>
@@ -518,8 +532,15 @@
     });
   }
 
+  function bindDownloadPdf() {
+    const button = document.getElementById('downloadPdfButton');
+    if (!button) return;
+    button.addEventListener('click', () => window.print());
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     bindPresetButtons();
+    bindDownloadPdf();
     load();
   });
 })();

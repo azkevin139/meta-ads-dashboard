@@ -311,6 +311,7 @@ async function getCreativePerformance(accountId, range) {
       SELECT
         ads.meta_ad_id,
         COALESCE(ads.name, ads.meta_ad_id) AS creative_name,
+        COALESCE(ads.creative_meta->>'image_url', ads.creative_meta->>'thumbnail_url') AS creative_image_url,
         COALESCE(SUM(di.spend), 0) AS spend,
         COALESCE(SUM(di.impressions), 0)::bigint AS impressions,
         COALESCE(SUM(di.clicks), 0)::bigint AS clicks,
@@ -326,7 +327,7 @@ async function getCreativePerformance(accountId, range) {
       WHERE di.account_id = $1
         AND di.level = 'ad'
         AND di.date BETWEEN $2::date AND $3::date
-      GROUP BY ads.meta_ad_id, COALESCE(ads.name, ads.meta_ad_id)
+      GROUP BY ads.meta_ad_id, COALESCE(ads.name, ads.meta_ad_id), COALESCE(ads.creative_meta->>'image_url', ads.creative_meta->>'thumbnail_url')
     ),
     lead_rows AS (
       SELECT
@@ -364,6 +365,7 @@ async function getCreativePerformance(accountId, range) {
     SELECT
       m.meta_ad_id,
       m.creative_name,
+      m.creative_image_url,
       m.spend,
       m.impressions,
       COALESCE(NULLIF(m.link_clicks, 0), m.clicks) AS clicks,
@@ -383,6 +385,7 @@ async function getCreativePerformance(accountId, range) {
     return {
       meta_ad_id: row.meta_ad_id,
       creative_name: row.creative_name,
+      creative_image_url: row.creative_image_url || null,
       source_name: 'Meta ad name',
       spend,
       impressions: Number(row.impressions) || 0,
