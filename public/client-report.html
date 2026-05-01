@@ -125,6 +125,11 @@
     .creative-name { max-width: 260px; font-weight: 500; line-height: 1.35; }
     .creative-source { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
     .rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-dim); color: var(--accent); font-size: 11px; margin-right: 8px; }
+    .creative-winner-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .creative-winner-card { background: var(--bg-card); border: 0.5px solid var(--border-soft); border-radius: var(--radius); padding: 16px; }
+    .creative-winner-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+    .creative-winner-name { font-family: var(--font-display); font-size: 18px; line-height: 1.2; color: var(--text); }
+    .creative-winner-metric { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
     .change-pill { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 7px; border-radius: 20px; }
     .change-pill.up { background: rgba(26,122,85,0.12); color: var(--green); }
     .change-pill.down { background: rgba(192,57,43,0.12); color: var(--red); }
@@ -151,6 +156,7 @@
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .kpi-value { font-size: 21px; }
       .funnel-block-inner { padding: 8px 10px; }
+      .creative-winner-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>

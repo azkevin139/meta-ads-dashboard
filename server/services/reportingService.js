@@ -398,6 +398,81 @@ async function getCreativePerformance(accountId, range) {
   }));
 }
 
+async function getCreativeCoverage(accountId, range) {
+  const row = await queryOne(`
+    WITH ad_insights AS (
+      SELECT COUNT(DISTINCT ads.meta_ad_id)::int AS ad_level_ads
+      FROM daily_insights di
+      JOIN ads ON ads.id = di.ad_id
+      WHERE di.account_id = $1
+        AND di.level = 'ad'
+        AND di.date BETWEEN $2::date AND $3::date
+    ),
+    lead_rows AS (
+      SELECT
+        ${dedupeKeyExpression('v')} AS dedupe_key,
+        v.ad_id,
+        ${leadTimeExpression('v')} AS lead_time
+      FROM visitors v
+      WHERE v.account_id = $1
+        AND ${leadIdentityFilter('v')}
+    ),
+    scoped AS (
+      SELECT DISTINCT ON (dedupe_key) *
+      FROM lead_rows
+      WHERE (lead_time AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
+      ORDER BY dedupe_key, lead_time ASC
+    )
+    SELECT
+      COALESCE((SELECT ad_level_ads FROM ad_insights), 0)::int AS ad_level_ads,
+      COUNT(*)::int AS total_leads,
+      COUNT(*) FILTER (WHERE ad_id IS NOT NULL)::int AS attributed_leads
+    FROM scoped
+  `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
+  const adLevelAds = Number(row?.ad_level_ads) || 0;
+  const totalLeads = Number(row?.total_leads) || 0;
+  const attributedLeads = Number(row?.attributed_leads) || 0;
+  const attributionRate = rate(attributedLeads, totalLeads);
+  const ready = adLevelAds > 0 && (totalLeads === 0 || attributionRate >= 20);
+  return {
+    ready,
+    status: ready ? 'ready' : 'unavailable',
+    reason_code: !adLevelAds
+      ? 'ad_level_insights_missing'
+      : (totalLeads > 0 && attributionRate < 20 ? 'lead_attribution_coverage_low' : null),
+    ad_level_ads: adLevelAds,
+    total_leads: totalLeads,
+    attributed_leads: attributedLeads,
+    attributed_lead_rate: attributionRate,
+    minimum_attributed_lead_rate: 20,
+  };
+}
+
+function buildCreativeLeaderboard(creatives, coverage) {
+  const rows = Array.isArray(creatives) ? creatives : [];
+  const eligible = coverage?.ready && rows.length > 0;
+  const byClicks = [...rows].sort((a, b) => (Number(b.clicks) || 0) - (Number(a.clicks) || 0))[0] || null;
+  const byLeads = [...rows].sort((a, b) => (Number(b.total_leads) || 0) - (Number(a.total_leads) || 0))[0] || null;
+  const byQualified = [...rows].sort((a, b) => {
+    const qualifiedDelta = (Number(b.qualified_leads) || 0) - (Number(a.qualified_leads) || 0);
+    if (qualifiedDelta) return qualifiedDelta;
+    const aCpql = Number(a.cost_per_qualified_lead) || Number.MAX_SAFE_INTEGER;
+    const bCpql = Number(b.cost_per_qualified_lead) || Number.MAX_SAFE_INTEGER;
+    if (aCpql !== bCpql) return aCpql - bCpql;
+    return (Number(b.total_leads) || 0) - (Number(a.total_leads) || 0);
+  })[0] || null;
+  return {
+    available: eligible,
+    coverage,
+    winners: {
+      most_clicked: byClicks,
+      most_leads: byLeads,
+      most_qualified: byQualified,
+    },
+    rows,
+  };
+}
+
 async function getHealthSummary(accountId) {
   const rows = await queryAll(`
     WITH latest AS (
@@ -473,13 +548,14 @@ async function getLeadReport(accountId, params = {}) {
   const cached = reportCacheGet(cacheKey);
   if (cached) return cached;
 
-  const [meta, dailySpend, leads, website, pipeline, creativePerformance, health] = await Promise.all([
+  const [meta, dailySpend, leads, website, pipeline, creativePerformance, creativeCoverage, health] = await Promise.all([
     getMetaMetrics(accountId, range),
     getDailySpend(accountId, range),
     getLeadMetrics(accountId, range),
     getWebsiteMetrics(accountId, range),
     getPipeline(accountId, range),
     getCreativePerformance(accountId, range),
+    getCreativeCoverage(accountId, range),
     getHealthSummary(accountId),
   ]);
   const [prevMeta, prevLeads, prevWebsite] = await Promise.all([
@@ -500,6 +576,7 @@ async function getLeadReport(accountId, params = {}) {
   const currentFlat = { ...meta, ...website, ...leads, ...buildDerived(meta, website, leads) };
   const previousFlat = { ...prevMeta, ...prevWebsite, ...prevLeads, ...buildDerived(prevMeta, prevWebsite, prevLeads) };
 
+  const creativeLeaderboard = buildCreativeLeaderboard(creativePerformance, creativeCoverage);
   const payload = {
     contract_version: 'lead-report.v1',
     timezone: REPORTING_TIMEZONE,
@@ -522,8 +599,8 @@ async function getLeadReport(accountId, params = {}) {
       reply_rate: 'replied_leads / contacted_leads. Tells you how often outreach actually starts a conversation.',
       acquisition_source: 'Meta daily insights are the source of truth for spend, impressions, reach, and clicks.',
       pipeline_source: 'GoHighLevel-derived lifecycle state is the source of truth for sales pipeline progression. Pipeline status is separate from qualification.',
-      creative_name: 'Creative names come from the Meta ad name at ad/creative level.',
-      creative_performance: 'Creative performance combines Meta ad-level delivery with deduped GHL/lead outcomes attributed to the same Meta ad ID.',
+    creative_name: 'Creative names come from the Meta ad name at ad/creative level.',
+      creative_performance: 'Creative performance combines Meta ad-level delivery with deduped GHL/lead outcomes attributed to the same Meta ad ID. Leaderboard is shown only when ad-level data and lead attribution coverage are sufficient.',
     },
     summary: currentFlat,
     previous_summary: previousFlat,
@@ -583,6 +660,8 @@ async function getLeadReport(accountId, params = {}) {
     pipeline,
     creativePerformance,
     creative_performance: creativePerformance,
+    creativeLeaderboard,
+    creative_leaderboard: creativeLeaderboard,
     freshness: health,
     health,
   };

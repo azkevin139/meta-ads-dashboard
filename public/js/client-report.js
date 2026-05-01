@@ -230,6 +230,83 @@
     `).join('');
   }
 
+  function creativeTitle(row) {
+    return row ? escape(row.creative_name || row.meta_ad_id || 'Unknown visual') : 'Unavailable';
+  }
+
+  function renderWinner(label, row, metricLabel, metricValue) {
+    if (!row) {
+      return `
+        <div class="creative-winner-card">
+          <div class="creative-winner-label">${escape(label)}</div>
+          <div class="creative-winner-name">Unavailable</div>
+          <div class="creative-winner-metric">No covered ad-level data</div>
+        </div>
+      `;
+    }
+    return `
+      <div class="creative-winner-card">
+        <div class="creative-winner-label">${escape(label)}</div>
+        <div class="creative-winner-name">${creativeTitle(row)}</div>
+        <div class="creative-winner-metric">${escape(metricLabel)}: ${metricValue}</div>
+      </div>
+    `;
+  }
+
+  function renderCreativeLeaderboard(leaderboard) {
+    const coverage = leaderboard?.coverage || {};
+    if (!leaderboard?.available) {
+      const reason = coverage.reason_code === 'lead_attribution_coverage_low'
+        ? `Lead attribution coverage is ${fmt.pct((coverage.attributed_lead_rate || 0) / 100)}; minimum is ${coverage.minimum_attributed_lead_rate || 20}%.`
+        : 'Ad-level Meta data is not available for this period.';
+      return `
+        <div class="section-label">Creative leaderboard</div>
+        <div class="empty-panel">
+          Creative leaderboard unavailable. ${escape(reason)}
+        </div>
+      `;
+    }
+    const winners = leaderboard.winners || {};
+    const rows = leaderboard.rows || [];
+    return `
+      <div class="section-label">Creative leaderboard</div>
+      <div class="creative-winner-grid">
+        ${renderWinner('Most clicked visual', winners.most_clicked, 'Clicks', fmt.int(winners.most_clicked?.clicks))}
+        ${renderWinner('Most lead-generating visual', winners.most_leads, 'Leads', fmt.int(winners.most_leads?.total_leads))}
+        ${renderWinner('Most qualified-lead-generating visual', winners.most_qualified, 'Qualified leads', fmt.int(winners.most_qualified?.qualified_leads))}
+      </div>
+      <div class="table-scroll" style="margin-top:10px;">
+        <table class="creative-table">
+          <thead>
+            <tr>
+              <th>Visual</th>
+              <th>Spend</th>
+              <th>Clicks</th>
+              <th>Leads</th>
+              <th>CPL</th>
+              <th>Qualified</th>
+              <th>Cost / qualified</th>
+            </tr>
+          </thead>
+          <tbody>${rows.map((row, index) => `
+            <tr>
+              <td>
+                <div class="creative-name"><span class="rank-badge">${index + 1}</span>${creativeTitle(row)}</div>
+                <div class="creative-source">Meta ad name · ${escape(row.meta_ad_id || 'unmapped ad ID')}</div>
+              </td>
+              <td>${fmt.money(row.spend)}</td>
+              <td>${fmt.int(row.clicks)}</td>
+              <td>${fmt.int(row.total_leads)}</td>
+              <td>${fmt.money(row.cpl)}</td>
+              <td>${fmt.int(row.qualified_leads)}</td>
+              <td>${fmt.money(row.cost_per_qualified_lead)}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
   function renderDefinitions(definitions) {
     return Object.entries(definitions || {}).map(([key, value]) => `
       <div class="definition-item">
@@ -250,6 +327,7 @@
     const quality = data.leadQuality || data.lead_quality || {};
     const pipeline = data.pipeline || [];
     const creatives = data.creativePerformance || data.creative_performance || [];
+    const creativeLeaderboard = data.creativeLeaderboard || data.creative_leaderboard || null;
     const dailySpend = data.dailySpend || data.daily_spend || [];
     const range = data.range || {};
     const updatedAt = new Date().toLocaleString('en-AE', { timeZone: data.timezone || 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' });
@@ -342,24 +420,7 @@
       <div class="section-label">Current pipeline status for leads acquired in this period</div>
       <div class="pipeline-grid">${renderPipeline(pipeline)}</div>
 
-      <div class="section-label">Which visual performs best</div>
-      <div class="table-scroll">
-        <table class="creative-table">
-          <thead>
-            <tr>
-              <th>Creative</th>
-              <th>Spend</th>
-              <th>Clicks</th>
-              <th>Leads</th>
-              <th>CPL</th>
-              <th>Qualified</th>
-              <th>Booked</th>
-              <th>Won</th>
-            </tr>
-          </thead>
-          <tbody>${renderCreatives(creatives)}</tbody>
-        </table>
-      </div>
+      ${renderCreativeLeaderboard(creativeLeaderboard || { available: Boolean(creatives.length), rows: creatives, winners: {} })}
 
       <div class="section-label">Period comparison</div>
       <div class="table-scroll">
