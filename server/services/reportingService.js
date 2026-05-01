@@ -332,7 +332,7 @@ async function getCreativePerformance(accountId, range) {
       SELECT
         v.ad_id,
         ${dedupeKeyExpression('v')} AS dedupe_key,
-        ${isQualifiedExpression('v')} AS is_qualified,
+        (v.qualified_at IS NOT NULL) AS is_qualified,
         v.normalized_stage,
         v.revenue,
         ${leadTimeExpression('v')} AS lead_time

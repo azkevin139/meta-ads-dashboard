@@ -172,20 +172,6 @@
     `;
   }
 
-  function renderSpendBars(dailySpend) {
-    const rows = Array.isArray(dailySpend) ? dailySpend : [];
-    if (!rows.length) return '<div class="empty-panel">No daily spend data for this period.</div>';
-    const max = Math.max(...rows.map((row) => num(row.spend)), 1);
-    return `
-      <div class="bar-chart" aria-label="Daily ad spend chart">
-        ${rows.map((row) => {
-          const height = Math.max(2, (num(row.spend) / max) * 100);
-          return `<div class="bar" title="${escape(row.date)} · ${escape(fmt.money(row.spend))}" style="height:${height}%"></div>`;
-        }).join('')}
-      </div>
-    `;
-  }
-
   function renderQuality(quality, summary) {
     const total = firstDefined(quality.totalLeads, quality.total_leads, summary.total_leads);
     const qualified = firstDefined(quality.qualifiedLeads, quality.qualified_leads, summary.qualified_leads);
@@ -371,7 +357,6 @@
     const pipeline = data.pipeline || [];
     const creatives = data.creativePerformance || data.creative_performance || [];
     const creativeLeaderboard = data.creativeLeaderboard || data.creative_leaderboard || null;
-    const dailySpend = data.dailySpend || data.daily_spend || [];
     const range = data.range || {};
     const accountTimezone = data.timezone || 'Asia/Dubai';
     const updatedAt = formatDateTime(new Date(), viewerTimezone || accountTimezone);
@@ -413,12 +398,6 @@
         )}
         ${kpi('Cost per QL', fmt.money(summary.cost_per_qualified_lead), deltas.cost_per_qualified_lead, true)}
         ${kpi('Won / Booked', fmt.int(wonBooked), deltas.booked_count, false)}
-      </div>
-
-      <div class="section-label">Daily spend</div>
-      <div class="chart-card-full">
-        <div class="chart-title">Ad spend over period</div>
-        ${renderSpendBars(dailySpend)}
       </div>
 
       <div class="section-label">Acquisition funnels</div>
