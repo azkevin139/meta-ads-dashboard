@@ -260,9 +260,12 @@
     const metaReach = firstDefined(meta.reach, summary.reach, meta.impressions, summary.impressions);
     const websiteVisits = firstDefined(website.visits, summary.visits);
     const websiteForms = firstDefined(website.formSubmissions, website.form_submissions, summary.website_leads);
-    const qualified = firstDefined(meta.qualifiedLeads, meta.qualified_leads, summary.qualified_leads);
-    const booked = firstDefined(meta.bookedCount, meta.booked_count, summary.booked_count);
-    const won = firstDefined(meta.wonCount, meta.won_count, summary.won_count);
+    const metaQualified = firstDefined(meta.qualifiedLeads, meta.qualified_leads, summary.meta_qualified_leads, 0);
+    const websiteQualified = firstDefined(website.qualifiedLeads, website.qualified_leads, summary.website_qualified_leads, 0);
+    const metaBooked = firstDefined(meta.bookedCount, meta.booked_count, summary.meta_booked_count, 0);
+    const websiteBooked = firstDefined(website.bookedCount, website.booked_count, summary.website_booked_count, 0);
+    const metaWon = firstDefined(meta.wonCount, meta.won_count, summary.meta_won_count, 0);
+    const websiteWon = firstDefined(website.wonCount, website.won_count, summary.website_won_count, 0);
     const wonBooked = num(summary.won_count) + num(summary.booked_count);
 
     document.getElementById('clientTitle').textContent = account.name || 'Campaign Report';
@@ -309,9 +312,9 @@
               { label: 'Link clicks', value: metaClicks, cssClass: 'fs-click', rate: rate(metaClicks, metaReach) },
               { label: 'Instant form submitted', value: metaLeads, cssClass: 'fs-form', rate: rate(metaLeads, metaClicks) },
               { handoff: true },
-              { label: 'Qualified', value: qualified, cssClass: 'fs-qual', rate: rate(qualified, metaLeads) },
-              { label: 'Appointment booked', value: booked, cssClass: 'fs-appt', rate: rate(booked, qualified) },
-              { label: 'Won / Deal closed', value: won, cssClass: 'fs-won', rate: rate(won, booked) },
+              { label: 'Qualified', value: metaQualified, cssClass: 'fs-qual', rate: rate(metaQualified, metaLeads) },
+              { label: 'Appointment booked', value: metaBooked, cssClass: 'fs-appt', rate: rate(metaBooked, metaQualified) },
+              { label: 'Won / Deal closed', value: metaWon, cssClass: 'fs-won', rate: rate(metaWon, metaBooked) },
             ],
           })}
         </div>
@@ -325,9 +328,9 @@
               { label: 'Landing page visits', value: websiteVisits, cssClass: 'fs-reach' },
               { label: 'Form submitted', value: websiteForms, cssClass: 'fs-form', rate: rate(websiteForms, websiteVisits) },
               { handoff: true },
-              { label: 'Qualified', value: qualified, cssClass: 'fs-qual', rate: rate(qualified, websiteForms) },
-              { label: 'Appointment booked', value: booked, cssClass: 'fs-appt', rate: rate(booked, qualified) },
-              { label: 'Won / Deal closed', value: won, cssClass: 'fs-won', rate: rate(won, booked) },
+              { label: 'Qualified', value: websiteQualified, cssClass: 'fs-qual', rate: rate(websiteQualified, websiteForms) },
+              { label: 'Appointment booked', value: websiteBooked, cssClass: 'fs-appt', rate: rate(websiteBooked, websiteQualified) },
+              { label: 'Won / Deal closed', value: websiteWon, cssClass: 'fs-won', rate: rate(websiteWon, websiteBooked) },
             ],
           })}
         </div>
