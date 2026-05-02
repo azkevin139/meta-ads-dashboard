@@ -5,6 +5,7 @@ const auth = require('../services/authService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
 const cspService = require('../services/cspService');
+const accountTruth = require('../services/accountTruthService');
 const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
 
@@ -111,6 +112,20 @@ router.get('/data-health', async (req, res) => {
         'no_token',
       ],
     });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/accounts/:id/truth-check', async (req, res) => {
+  try {
+    const accountId = ensureInteger(req.params.id, 'id must be a positive integer');
+    const data = await accountTruth.getTruthCheck(accountId, {
+      preset: optionalTrimmedString(req.query.preset, 50),
+      since: optionalTrimmedString(req.query.since, 20),
+      until: optionalTrimmedString(req.query.until, 20),
+    });
+    res.json({ data });
   } catch (err) {
     sendError(res, err);
   }

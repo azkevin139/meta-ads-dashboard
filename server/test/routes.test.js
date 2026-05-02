@@ -2158,3 +2158,63 @@ test('admin update rejects invalid role', async () => {
     restoreCache(originals);
   }
 });
+
+test('admin account truth-check returns account-scoped diagnostic payload', async () => {
+  const authServicePath = require.resolve('../services/authService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const syncTruthPath = require.resolve('../services/syncTruthService');
+  const cspPath = require.resolve('../services/cspService');
+  const accountTruthPath = require.resolve('../services/accountTruthService');
+  const routePath = require.resolve('../routes/admin');
+  const originals = new Map([
+    [authServicePath, require.cache[authServicePath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [syncTruthPath, require.cache[syncTruthPath]],
+    [cspPath, require.cache[cspPath]],
+    [accountTruthPath, require.cache[accountTruthPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let called = null;
+  delete require.cache[routePath];
+  require.cache[authServicePath] = {
+    exports: {
+      getAllUsers: async () => [],
+      getActiveSessions: async () => [],
+      updateUser: async () => ({}),
+      deleteUser: async () => ({}),
+    },
+  };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {}, list: async () => [] } };
+  require.cache[syncTruthPath] = { exports: { getHealth: async () => [] } };
+  require.cache[cspPath] = { exports: { getSummary: async () => [] } };
+  require.cache[accountTruthPath] = {
+    exports: {
+      getTruthCheck: async (accountId, params) => {
+        called = { accountId, params };
+        return {
+          account_id: accountId,
+          qualified_leads: 25,
+          canonical_leads: 31,
+          creative_coverage_status: 'partial',
+        };
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/admin');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', id: 1 };
+      next();
+    });
+    const res = await invoke(app, { method: 'GET', url: '/accounts/11/truth-check?preset=60d' });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.data.qualified_leads, 25);
+    assert.equal(res.json.data.creative_coverage_status, 'partial');
+    assert.equal(called.accountId, 11);
+    assert.equal(called.params.preset, '60d');
+  } finally {
+    restoreCache(originals);
+  }
+});

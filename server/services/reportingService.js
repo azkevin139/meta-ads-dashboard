@@ -1,4 +1,5 @@
 const { queryOne, queryAll } = require('../db');
+const creativeCoverageService = require('./creativeCoverageService');
 
 const REPORTING_TIMEZONE = 'Asia/Dubai';
 const DEFAULT_PRESET = '7d';
@@ -414,57 +415,7 @@ async function getCreativePerformance(accountId, range) {
 }
 
 async function getCreativeCoverage(accountId, range) {
-  const row = await queryOne(`
-    WITH ad_insights AS (
-      SELECT COUNT(DISTINCT ads.meta_ad_id)::int AS ad_level_ads
-      FROM daily_insights di
-      JOIN ads ON ads.id = di.ad_id
-      WHERE di.account_id = $1
-        AND di.level = 'ad'
-        AND di.date BETWEEN $2::date AND $3::date
-    ),
-    lead_rows AS (
-      SELECT
-        COALESCE(clink.canonical_lead_id::text, ${dedupeKeyExpression('v')}) AS dedupe_key,
-        v.ad_id,
-        ${leadTimeExpression('v')} AS lead_time
-      FROM visitors v
-      LEFT JOIN canonical_lead_links clink
-        ON clink.account_id = v.account_id
-        AND clink.source_type = 'visitor'
-        AND clink.source_id = v.client_id
-      WHERE v.account_id = $1
-        AND ${leadIdentityFilter('v')}
-    ),
-    scoped AS (
-      SELECT DISTINCT ON (dedupe_key) *
-      FROM lead_rows
-      WHERE (lead_time AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
-      ORDER BY dedupe_key, lead_time ASC
-    )
-    SELECT
-      COALESCE((SELECT ad_level_ads FROM ad_insights), 0)::int AS ad_level_ads,
-      COUNT(*)::int AS total_leads,
-      COUNT(*) FILTER (WHERE ad_id IS NOT NULL)::int AS attributed_leads
-    FROM scoped
-  `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
-  const adLevelAds = Number(row?.ad_level_ads) || 0;
-  const totalLeads = Number(row?.total_leads) || 0;
-  const attributedLeads = Number(row?.attributed_leads) || 0;
-  const attributionRate = rate(attributedLeads, totalLeads);
-  const ready = adLevelAds > 0 && (totalLeads === 0 || attributionRate >= 20);
-  return {
-    ready,
-    status: ready ? 'ready' : 'unavailable',
-    reason_code: !adLevelAds
-      ? 'ad_level_insights_missing'
-      : (totalLeads > 0 && attributionRate < 20 ? 'lead_attribution_coverage_low' : null),
-    ad_level_ads: adLevelAds,
-    total_leads: totalLeads,
-    attributed_leads: attributedLeads,
-    attributed_lead_rate: attributionRate,
-    minimum_attributed_lead_rate: 20,
-  };
+  return creativeCoverageService.getCoverage(accountId, range.since, range.until, { timezone: REPORTING_TIMEZONE });
 }
 
 function buildCreativeLeaderboard(creatives, coverage) {
