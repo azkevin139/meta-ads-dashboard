@@ -758,6 +758,83 @@ test('revisit automation route returns config summary and activity', async () =>
   }
 });
 
+test('intelligence UX validation routes persist sanitized events and summarize engagement', async () => {
+  const dbPath = require.resolve('../db');
+  const accountAccessPath = require.resolve('../services/accountAccessService');
+  const routePath = require.resolve('../routes/intelligence');
+  const originals = new Map([
+    [dbPath, require.cache[dbPath]],
+    [accountAccessPath, require.cache[accountAccessPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  const inserted = [];
+  delete require.cache[routePath];
+  require.cache[accountAccessPath] = {
+    exports: {
+      resolveAuthorizedAccount: async () => ({ id: 11 }),
+    },
+  };
+  require.cache[dbPath] = {
+    exports: {
+      query: async (_sql, params) => {
+        inserted.push(params);
+        return { rows: [] };
+      },
+      queryOne: async () => null,
+      queryAll: async (sql) => {
+        if (sql.includes('WITH first_click')) return [{ sessions: 1, now_queue_first: 1, now_queue_first_pct: 100 }];
+        if (sql.includes('time_to_first_click')) return [{ page: 'intelligence', samples: 1, avg_ms: 1200, median_ms: 1200 }];
+        if (sql.includes('event_name,')) return [];
+        if (sql.includes('payload ?')) return [{ target: 'campaigns', count: 1 }];
+        return [{ blocker_related_clicks: 1, action_detail_clicks: 1, generate_clicks: 0 }];
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/intelligence');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'admin', email: 'ops@test.com' };
+      req.metaAccount = { id: 11 };
+      next();
+    });
+
+    const postRes = await invoke(app, {
+      method: 'POST',
+      url: '/ux-events',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        accountId: 11,
+        events: [{
+          name: 'decision_now_action_details',
+          page: 'intelligence',
+          sessionId: 'session-1',
+          route: '/#intelligence',
+          payload: {
+            text: 'Open action details',
+            token: 'should-not-be-special',
+            long: 'x'.repeat(700),
+          },
+        }],
+      },
+    });
+    assert.equal(postRes.status, 200);
+    assert.equal(postRes.json.inserted, 1);
+    assert.equal(inserted.length, 1);
+    assert.equal(inserted[0][0], 11);
+    assert.equal(inserted[0][2], 'decision_now_action_details');
+    assert.equal(JSON.parse(inserted[0][6]).long.length, 500);
+
+    const summaryRes = await invoke(app, { method: 'GET', url: '/ux-validation-summary?days=7' });
+    assert.equal(summaryRes.status, 200);
+    assert.equal(summaryRes.json.data.now_queue_first.now_queue_first_pct, 100);
+    assert.equal(summaryRes.json.data.time_to_first_click[0].page, 'intelligence');
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('metaEntity rejects invalid entity level', async () => {
   const metaUsagePath = require.resolve('../services/metaUsageService');
   const entityServicePath = require.resolve('../services/metaEntityService');

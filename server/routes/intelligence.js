@@ -15,7 +15,7 @@ const accountAccess = require('../services/accountAccessService');
 const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
 const identityCollisions = require('../services/identityCollisionService');
-const { queryAll } = require('../db');
+const { query, queryAll } = require('../db');
 const {
   ensureArray,
   ensureBoolean,
@@ -39,6 +39,112 @@ function adminOrOperator(req, res, next) {
     return res.status(403).json({ error: 'Operator or admin access required' });
   }
   next();
+}
+
+function sanitizeUxPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const clean = {};
+  for (const [key, raw] of Object.entries(value).slice(0, 12)) {
+    const safeKey = String(key).slice(0, 80);
+    if (raw === null || raw === undefined || typeof raw === 'number' || typeof raw === 'boolean') {
+      clean[safeKey] = raw;
+    } else {
+      clean[safeKey] = String(raw).slice(0, 500);
+    }
+  }
+  return clean;
+}
+
+function normalizeUxEvent(raw) {
+  const event = ensureObject(raw, 'UX event must be an object');
+  const name = ensureNonEmptyString(event.name, 'UX event name required').slice(0, 120);
+  return {
+    name,
+    page: optionalTrimmedString(event.page, 80) || null,
+    session_id: optionalTrimmedString(event.sessionId || event.session_id, 120) || null,
+    route: optionalTrimmedString(event.route, 300) || null,
+    payload: sanitizeUxPayload(event.payload),
+  };
+}
+
+async function getUxValidationSummary(accountId, days) {
+  const params = [accountId, days];
+  const topCtas = await queryAll(`
+    SELECT
+      event_name,
+      COALESCE(NULLIF(payload->>'text', ''), payload->>'navTarget', event_name) AS label,
+      COUNT(*)::int AS count
+    FROM ux_validation_events
+    WHERE account_id = $1
+      AND created_at >= now() - ($2::int * interval '1 day')
+      AND event_name <> 'time_to_first_click'
+    GROUP BY event_name, label
+    ORDER BY count DESC, event_name
+    LIMIT 10
+  `, params);
+  const timeToFirstClick = await queryAll(`
+    SELECT
+      page,
+      COUNT(*)::int AS samples,
+      ROUND(AVG((payload->>'elapsed_ms')::numeric))::int AS avg_ms,
+      ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY (payload->>'elapsed_ms')::numeric))::int AS median_ms
+    FROM ux_validation_events
+    WHERE account_id = $1
+      AND created_at >= now() - ($2::int * interval '1 day')
+      AND event_name = 'time_to_first_click'
+      AND payload->>'elapsed_ms' ~ '^[0-9]+$'
+    GROUP BY page
+    ORDER BY samples DESC, page
+  `, params);
+  const nowQueue = await queryAll(`
+    WITH first_click AS (
+      SELECT DISTINCT ON (session_id, page)
+        session_id,
+        page,
+        event_name
+      FROM ux_validation_events
+      WHERE account_id = $1
+        AND created_at >= now() - ($2::int * interval '1 day')
+        AND session_id IS NOT NULL
+        AND event_name <> 'time_to_first_click'
+      ORDER BY session_id, page, created_at
+    )
+    SELECT
+      COUNT(*)::int AS sessions,
+      COUNT(*) FILTER (WHERE event_name LIKE 'decision_now_%')::int AS now_queue_first,
+      COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE event_name LIKE 'decision_now_%') / NULLIF(COUNT(*), 0), 1), 0)::float AS now_queue_first_pct
+    FROM first_click
+    WHERE page = 'intelligence'
+  `, params);
+  const drilldowns = await queryAll(`
+    SELECT
+      COALESCE(NULLIF(payload->>'navTarget', ''), 'unknown') AS target,
+      COUNT(*)::int AS count
+    FROM ux_validation_events
+    WHERE account_id = $1
+      AND created_at >= now() - ($2::int * interval '1 day')
+      AND payload ? 'navTarget'
+    GROUP BY target
+    ORDER BY count DESC, target
+    LIMIT 12
+  `, params);
+  const blockerEngagement = await queryAll(`
+    SELECT
+      COUNT(*) FILTER (WHERE event_name LIKE 'decision_now_%')::int AS blocker_related_clicks,
+      COUNT(*) FILTER (WHERE event_name = 'decision_now_action_details')::int AS action_detail_clicks,
+      COUNT(*) FILTER (WHERE event_name = 'decision_now_generate')::int AS generate_clicks
+    FROM ux_validation_events
+    WHERE account_id = $1
+      AND created_at >= now() - ($2::int * interval '1 day')
+  `, params);
+  return {
+    range_days: days,
+    top_ctas: topCtas,
+    time_to_first_click: timeToFirstClick,
+    now_queue_first: nowQueue[0] || { sessions: 0, now_queue_first: 0, now_queue_first_pct: 0 },
+    drilldowns,
+    blocker_engagement: blockerEngagement[0] || { blocker_related_clicks: 0, action_detail_clicks: 0, generate_clicks: 0 },
+  };
 }
 
 router.get('/account-context', async (req, res) => {
@@ -694,6 +800,57 @@ router.get('/revisit-automation', async (req, res) => {
     };
     data.activity = await revisitAutomation.listRecentActivity(account.id, { limit: 20 });
     res.json(data);
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/ux-events', async (req, res) => {
+  try {
+    const body = ensureObject(req.body);
+    const account = await accountAccess.resolveAuthorizedAccount(req, body.accountId || req.metaAccount?.id, { allowAdminOverride: true });
+    const rawEvents = Array.isArray(body.events) ? body.events : [body.event || body];
+    const events = rawEvents.slice(0, 20).map(normalizeUxEvent);
+    if (!events.length) return res.json({ success: true, inserted: 0 });
+
+    const values = [];
+    const params = [];
+    events.forEach((event, index) => {
+      const offset = index * 7;
+      values.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}::jsonb)`);
+      params.push(
+        account.id,
+        req.user?.id || null,
+        event.name,
+        event.page,
+        event.session_id,
+        event.route,
+        JSON.stringify(event.payload)
+      );
+    });
+
+    await query(`
+      INSERT INTO ux_validation_events (
+        account_id,
+        user_id,
+        event_name,
+        page,
+        session_id,
+        route,
+        payload
+      ) VALUES ${values.join(', ')}
+    `, params);
+    res.json({ success: true, inserted: events.length });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/ux-validation-summary', adminOrOperator, async (req, res) => {
+  try {
+    const account = await accountAccess.resolveAuthorizedAccount(req, req.query.accountId, { allowAdminOverride: true });
+    const days = req.query.days ? ensureInteger(req.query.days, 'days must be a positive integer') : 7;
+    res.json({ data: await getUxValidationSummary(account.id, Math.min(days, 30)) });
   } catch (err) {
     sendError(res, err);
   }
