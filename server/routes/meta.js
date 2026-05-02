@@ -3,7 +3,7 @@ const { sendError } = require('../errorResponse');
 const router = express.Router();
 const metaApi = require('../services/metaApi');
 const leadSync = require('../services/metaLeadSyncService');
-const accountService = require('../services/accountService');
+const metaScope = require('../services/metaScopeService');
 const {
   ensureEnum,
   ensureInteger,
@@ -40,8 +40,8 @@ router.get('/accounts', async (req, res) => {
 // GET /api/meta/campaigns?accountId=act_XXX
 router.get('/campaigns', async (req, res) => {
   try {
-    const accountId = req.query.accountId || metaApi.contextAccountId(req.metaAccount);
-    const campaigns = await metaApi.getCampaigns(accountId, req.metaAccount);
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAccountId: req.query.accountId });
+    const campaigns = await metaApi.getCampaigns(scope.metaAccountId, scope.account);
     res.json(withMetaMeta(campaigns));
   } catch (err) {
     sendError(res, err);
@@ -53,7 +53,8 @@ router.get('/adsets', async (req, res) => {
   try {
     const { campaignId } = req.query;
     if (!campaignId) return res.status(400).json({ error: 'campaignId required' });
-    const adsets = await metaApi.getAdSets(campaignId, req.metaAccount);
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedCampaignId: campaignId });
+    const adsets = await metaApi.getAdSets(campaignId, scope.account);
     res.json(withMetaMeta(adsets));
   } catch (err) {
     sendError(res, err);
@@ -65,7 +66,8 @@ router.get('/ads', async (req, res) => {
   try {
     const { adSetId } = req.query;
     if (!adSetId) return res.status(400).json({ error: 'adSetId required' });
-    const ads = await metaApi.getAds(adSetId, req.metaAccount);
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdsetId: adSetId });
+    const ads = await metaApi.getAds(adSetId, scope.account);
     res.json(withMetaMeta(ads));
   } catch (err) {
     sendError(res, err);
@@ -77,15 +79,19 @@ router.get('/insights', async (req, res) => {
   try {
     const { entityId, datePreset, level, since, until } = req.query;
     if (!entityId) return res.status(400).json({ error: 'entityId required' });
+    const normalizedLevel = ensureEnum(level || 'campaign', ['account', 'campaign', 'adset', 'ad'], 'Invalid insights level');
+    const scope = normalizedLevel === 'account'
+      ? await metaScope.resolveAuthorizedMetaScope(req, { requestedAccountId: entityId })
+      : await metaScope.resolveAuthorizedMetaScope(req, metaScope.entityRequestForLevel(normalizedLevel, entityId));
 
     let insights;
     if (since && until) {
-      insights = await metaApi.getInsightsRange(entityId, since, until, level || 'campaign', req.metaAccount);
+      insights = await metaApi.getInsightsRange(entityId, since, until, normalizedLevel, scope.account);
     } else {
       insights = await metaApi.getInsights(entityId, {
         date_preset: datePreset || 'yesterday',
-        level: level || 'campaign',
-      }, req.metaAccount);
+        level: normalizedLevel,
+      }, scope.account);
     }
     res.json(withMetaMeta(insights));
   } catch (err) {
@@ -98,11 +104,12 @@ router.get('/creative-thumbnail', async (req, res) => {
   try {
     const { adId } = req.query;
     if (!adId) return res.status(400).json({ error: 'adId required' });
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdId: adId });
     
     // Fetch the ad with creative details and preview
     const data = await metaApi.metaGet(`/${adId}`, {
       fields: 'creative{thumbnail_url,image_url,image_hash,object_story_spec,asset_feed_spec},preview_shareable_link',
-    }, req.metaAccount);
+    }, scope.account);
     
     const creative = data.creative || {};
     const storySpec = creative.object_story_spec || {};
@@ -132,6 +139,7 @@ router.get('/live', async (req, res) => {
     const since = req.query.since;
     const until = req.query.until;
     const datePreset = req.query.preset || null;
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAccountId: req.query.accountId });
 
     const params = {
       level: level,
@@ -146,7 +154,7 @@ router.get('/live', async (req, res) => {
       params.date_preset = 'today';
     }
 
-    const data = await metaApi.getInsights(metaApi.contextAccountId(req.metaAccount), params, req.metaAccount);
+    const data = await metaApi.getInsights(scope.metaAccountId || metaApi.contextAccountId(scope.account), params, scope.account);
     res.json(withMetaMeta(data));
   } catch (err) {
     sendError(res, err);
@@ -157,11 +165,12 @@ router.get('/live', async (req, res) => {
 router.get('/today', async (req, res) => {
   try {
     const level = req.query.level || 'campaign';
-    const data = await metaApi.getInsights(metaApi.contextAccountId(req.metaAccount), {
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAccountId: req.query.accountId });
+    const data = await metaApi.getInsights(scope.metaAccountId || metaApi.contextAccountId(scope.account), {
       date_preset: 'today',
       level: level,
       fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,reach,ctr,cpm,cpc,frequency,actions,action_values,cost_per_action_type',
-    }, req.metaAccount);
+    }, scope.account);
     res.json(withMetaMeta(data));
   } catch (err) {
     sendError(res, err);
@@ -173,9 +182,10 @@ router.get('/ad-detail', async (req, res) => {
   try {
     const { adId } = req.query;
     if (!adId) return res.status(400).json({ error: 'adId required' });
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdId: adId });
     const data = await metaApi.metaGet(`/${adId}`, {
       fields: 'id,name,status,effective_status,creative{id,title,body,call_to_action_type,link_url,image_url,thumbnail_url,object_story_spec,asset_feed_spec}',
-    }, req.metaAccount);
+    }, scope.account);
 
     const creative = data.creative || {};
     const storySpec = creative.object_story_spec || {};
@@ -260,9 +270,10 @@ router.get('/adset-detail', async (req, res) => {
   try {
     const { adsetId } = req.query;
     if (!adsetId) return res.status(400).json({ error: 'adsetId required' });
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdsetId: adsetId });
     const data = await metaApi.metaGet(`/${adsetId}`, {
       fields: 'id,name,status,targeting,promoted_object,bid_strategy,optimization_goal,billing_event,daily_budget,lifetime_budget,start_time,end_time',
-    }, req.metaAccount);
+    }, scope.account);
 
     const targeting = data.targeting || {};
 
