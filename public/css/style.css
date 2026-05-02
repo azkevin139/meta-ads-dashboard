@@ -1369,6 +1369,100 @@ tbody td.name-cell a:hover {
   font-size: 0.76rem;
 }
 
+.operator-briefing {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+}
+
+.briefing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.briefing-title {
+  font-size: 1.18rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.briefing-subtitle {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.briefing-badges,
+.briefing-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.briefing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.briefing-card,
+.campaign-issue-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.briefing-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 650;
+}
+
+.briefing-value {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.campaign-issue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.campaign-issue-card {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-issue-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.campaign-issue-name {
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.campaign-issue-detail {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 /* ─── RESPONSIVE ───────────────────────────────────────── */
 @media (max-width: 1024px) {
   .sidebar { display: none; }
@@ -1386,6 +1480,7 @@ tbody td.name-cell a:hover {
   .intel-hero-actions { align-items: flex-start; }
   .intel-status-strip,
   .intel-delta-grid { grid-template-columns: 1fr 1fr; }
+  .briefing-grid { grid-template-columns: 1fr 1fr; }
   .intel-nav-shell { top: calc(var(--header-h) + 8px); }
   .intel-proposal-card { padding: 14px 16px; }
   .intel-copilot-layout,
@@ -1427,7 +1522,9 @@ tbody td.name-cell a:hover {
   .intel-hero-title { font-size: 1.15rem; max-width: none; }
   .intel-status-strip,
   .intel-delta-grid,
-  .intel-action-grid { grid-template-columns: 1fr; }
+  .intel-action-grid,
+  .briefing-grid,
+  .campaign-issue-grid { grid-template-columns: 1fr; }
   .intel-nav-shell { overflow-x: auto; flex-wrap: nowrap; white-space: nowrap; scrollbar-width: none; }
   .intel-nav-shell::-webkit-scrollbar { display: none; }
   .intel-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

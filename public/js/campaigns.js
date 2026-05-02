@@ -49,6 +49,7 @@ async function loadCampaigns(container) {
 
     <div id="campaign-pulse-inline" class="mb-md"><div class="loading">Loading live request usage...</div></div>
     <div id="campaign-data-health" class="mb-md"></div>
+    <div id="campaign-action-briefing" class="mb-md"><div class="loading">Finding campaigns that need attention</div></div>
 
     <div id="bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px; flex-wrap:wrap;">
       <span id="bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
@@ -92,10 +93,71 @@ async function loadCampaigns(container) {
     }
 
     const rows = (insights.length ? insights : entities.map(c => ({ campaign_id: c.id, campaign_name: c.name }))).map(c => ({ ...c, meta: entityMap[c.campaign_id] || null }));
+    renderCampaignActionBriefing(rows);
     document.getElementById('campaigns-table').innerHTML = isMobile ? renderCampaignCards(rows) : renderCampaignDesktopTable(rows);
   } catch (err) {
     document.getElementById('campaigns-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
+}
+
+function campaignIssueFor(row) {
+  const result = parseResults(row.actions, row.desired_event);
+  const spend = parseFloat(row.spend) || 0;
+  const ctr = parseFloat(row.ctr) || 0;
+  const status = row.meta?.effective_status || row.meta?.status || '';
+  const cpr = parseCostPerResult(row.cost_per_action_type, result.type);
+  const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
+  if (status && !['ACTIVE', 'PAUSED'].includes(status)) {
+    return { severity: 'critical', title: 'Delivery status needs review', detail: `${status} may prevent stable delivery.`, rank: 1 };
+  }
+  if (spend >= 25 && result.count === 0) {
+    return { severity: 'warning', title: 'Spend with no result', detail: `${fmt(spend, 'currency')} spent without tracked results.`, rank: 2 };
+  }
+  if (costPerResult >= 80 && result.count > 0) {
+    return { severity: 'warning', title: 'High cost per result', detail: `${fmt(costPerResult, 'currency')} per ${result.type}.`, rank: 3 };
+  }
+  if (spend >= 10 && ctr > 0 && ctr < 0.5) {
+    return { severity: 'low', title: 'Low click-through rate', detail: `${fmt(ctr, 'percent')} CTR after spend.`, rank: 4 };
+  }
+  return null;
+}
+
+function renderCampaignActionBriefing(rows) {
+  const el = document.getElementById('campaign-action-briefing');
+  if (!el) return;
+  const issues = (rows || [])
+    .map((row) => ({ row, issue: campaignIssueFor(row) }))
+    .filter((item) => item.issue)
+    .sort((a, b) => a.issue.rank - b.issue.rank || (parseFloat(b.row.spend) || 0) - (parseFloat(a.row.spend) || 0))
+    .slice(0, 4);
+  el.innerHTML = `
+    <div class="operator-briefing">
+      <div class="briefing-header">
+        <div>
+          <div class="intel-eyebrow">Campaign Triage</div>
+          <div class="briefing-title">${issues.length ? `${issues.length} campaign${issues.length === 1 ? '' : 's'} need attention` : 'No urgent campaign issue detected'}</div>
+          <div class="briefing-subtitle">Action-needed campaigns first. Full campaign table stays below.</div>
+        </div>
+        <span class="badge badge-${issues.length ? 'warning' : 'active'}">${fmt(issues.length, 'integer')} issues</span>
+      </div>
+      ${issues.length ? `<div class="campaign-issue-grid">
+        ${issues.map(({ row, issue }) => `
+          <div class="campaign-issue-card">
+            <div class="campaign-issue-top">
+              <span class="badge badge-${issue.severity}">${escapeHtml(issue.title)}</span>
+              <span class="text-muted">${fmt(parseFloat(row.spend) || 0, 'currency')}</span>
+            </div>
+            <div class="campaign-issue-name">${escapeHtml(row.campaign_name || row.name || row.campaign_id)}</div>
+            <div class="campaign-issue-detail">${escapeHtml(issue.detail)}</div>
+            <div class="btn-group">
+              <button class="btn btn-sm btn-primary" data-campaign-edit="${escapeHtml(row.campaign_id)}">Edit</button>
+              <button class="btn btn-sm" data-campaign-open="${escapeHtml(row.campaign_id)}" data-campaign-name="${escapeHtml(row.campaign_name || '')}">Open</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>` : `<div class="empty-state" style="padding:22px 12px;"><div class="empty-state-text">Campaigns are not showing obvious spend, delivery, or CTR issues in this range.</div></div>`}
+    </div>
+  `;
 }
 
 function renderCampaignDataHealth(health) {

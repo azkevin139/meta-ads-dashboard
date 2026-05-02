@@ -15,6 +15,7 @@ let metaPulseTimer = null;
 async function loadOverview(container) {
   stopMetaPulseAutoRefresh();
   const { from: dateFrom, to: dateTo, preset: activePreset } = overviewFilterState.getState();
+  const prevRange = previousOverviewRange(dateFrom, dateTo);
   container.innerHTML = `
     <div class="flex-between mb-md" style="flex-wrap: wrap; gap: 10px;">
       <div></div>
@@ -36,11 +37,12 @@ async function loadOverview(container) {
       </div>
     </div>
     <div id="date-label" class="text-muted mb-sm" style="font-size: 0.78rem; text-align: right;">${getDateLabel()}</div>
+    <div id="overview-briefing" class="mb-md"><div class="loading">Loading operator briefing</div></div>
     <div id="overview-data-health" class="mb-md"></div>
-    <div id="meta-pulse-card" class="reco-card mb-md"><div class="loading">Loading Meta pulse</div></div>
     <div id="alert-area"></div>
     <div id="kpi-area" class="kpi-grid"><div class="loading">Loading KPIs</div></div>
     <div id="campaigns-summary"></div>
+    <div id="meta-pulse-card" class="reco-card mb-md"><div class="loading">Loading Meta pulse</div></div>
   `;
   bindOverviewControls(container);
 
@@ -58,8 +60,9 @@ async function loadOverview(container) {
   });
 
   try {
-    const [liveRes, listRes, recoRes, rateRes, trackingAlertRes, healthRes] = await Promise.all([
+    const [liveRes, prevLiveRes, listRes, recoRes, rateRes, trackingAlertRes, healthRes] = await Promise.all([
       apiGet(`/meta/live?level=campaign&since=${dateFrom}&until=${dateTo}`),
+      apiGet(`/meta/live?level=campaign&since=${prevRange.from}&until=${prevRange.to}`).catch(() => ({ data: [] })),
       apiGet('/meta/campaigns'),
       apiGet(`/ai/recommendations?accountId=${ACCOUNT_ID}&status=pending`),
       apiGet('/meta/rate-limit-status'),
@@ -76,6 +79,10 @@ async function loadOverview(container) {
     }
 
     const campaigns = (liveRes.data || []).map(row => ({
+      ...row,
+      desired_event: desiredByCampaign[row.campaign_id] || null,
+    }));
+    const prevCampaigns = (prevLiveRes.data || []).map(row => ({
       ...row,
       desired_event: desiredByCampaign[row.campaign_id] || null,
     }));
@@ -102,17 +109,22 @@ async function loadOverview(container) {
     const avgCpm = totalImpressions > 0 ? (totalSpend / totalImpressions * 1000) : 0;
     const avgCpc = totalClicks > 0 ? (totalSpend / totalClicks) : 0;
     const avgCpa = totalResults > 0 ? (totalSpend / totalResults) : 0;
+    renderOverviewBriefing({
+      current: summarizeOverviewCampaigns(campaigns),
+      previous: summarizeOverviewCampaigns(prevCampaigns),
+      recommendations: recoRes.data || [],
+      trackingAlerts: trackingAlertRes.alerts || [],
+      health: healthRes,
+    });
 
     renderAlerts(recoRes.data || [], trackingAlertRes.alerts || []);
     kpiSection?.setData(`
       ${overviewMetrics.kpiCard('Spend', fmt(totalSpend, 'currency'))}
       ${overviewMetrics.kpiCard('Impressions', fmt(totalImpressions, 'compact'))}
-      ${overviewMetrics.kpiCard('CPM', '$' + fmt(avgCpm, 'decimal'))}
       ${overviewMetrics.kpiCard('CTR', fmt(avgCtr, 'percent'))}
       ${overviewMetrics.kpiCard('CPC', '$' + fmt(avgCpc, 'decimal'))}
       ${overviewMetrics.kpiCard('Results (' + resultType + ')', fmt(totalResults, 'integer'))}
       ${overviewMetrics.kpiCard('Cost per Result', fmt(avgCpa, 'currency'))}
-      ${overviewMetrics.kpiCard('Reach', fmt(totalReach, 'compact'))}
     `);
     if (!campaigns.length) return campaignsSection?.setEmpty();
     campaignsSection?.setData(`
@@ -127,6 +139,98 @@ async function loadOverview(container) {
   } catch (err) {
     kpiSection?.setError(err);
   }
+}
+
+function previousOverviewRange(from, to) {
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const prevEnd = new Date(start);
+  prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+  const prevStart = new Date(prevEnd);
+  prevStart.setUTCDate(prevStart.getUTCDate() - (days - 1));
+  return { from: prevStart.toISOString().slice(0, 10), to: prevEnd.toISOString().slice(0, 10) };
+}
+
+function summarizeOverviewCampaigns(campaigns) {
+  return (campaigns || []).reduce((acc, c) => {
+    const spend = parseFloat(c.spend) || 0;
+    const impressions = parseInt(c.impressions, 10) || 0;
+    const clicks = parseInt(c.clicks, 10) || 0;
+    const result = parseResults(c.actions, c.desired_event);
+    acc.spend += spend;
+    acc.impressions += impressions;
+    acc.clicks += clicks;
+    acc.results += result.count || 0;
+    acc.reach += parseInt(c.reach, 10) || 0;
+    acc.campaigns += 1;
+    return acc;
+  }, { spend: 0, impressions: 0, clicks: 0, results: 0, reach: 0, campaigns: 0 });
+}
+
+function overviewDelta(current, previous) {
+  const a = Number(current) || 0;
+  const b = Number(previous) || 0;
+  if (!a && !b) return 0;
+  if (!b) return 100;
+  return ((a - b) / b) * 100;
+}
+
+function briefingDeltaCard(label, current, previous, formatter = 'integer', inverse = false) {
+  const delta = overviewDelta(current, previous);
+  const good = inverse ? delta < 0 : delta > 0;
+  const cls = Math.abs(delta) < 1 ? 'flat' : good ? 'up' : 'down';
+  const icon = delta > 0 ? '↑' : delta < 0 ? '↓' : '—';
+  return `
+    <div class="briefing-card">
+      <div class="briefing-label">${label}</div>
+      <div class="briefing-value">${fmt(current, formatter)}</div>
+      <div class="kpi-delta ${cls}">${icon} ${Math.abs(delta).toFixed(1)}% vs previous period</div>
+    </div>
+  `;
+}
+
+function renderOverviewBriefing({ current, previous, recommendations, trackingAlerts, health }) {
+  const el = document.getElementById('overview-briefing');
+  if (!el) return;
+  const urgentRecs = (recommendations || []).filter((row) => ['critical', 'high'].includes(row.urgency || row.priority));
+  const alerts = trackingAlerts || [];
+  const healthSummary = window.DataHealth?.summarizeHealth(health, [
+    { source: 'meta', dataset: 'warehouse_insights' },
+    { source: 'meta', dataset: 'entities' },
+    { source: 'meta', dataset: 'leads' },
+    { source: 'ghl', dataset: 'contacts' },
+  ]);
+  const healthState = healthSummary?.state || 'unavailable';
+  const healthBadge = healthState === 'fresh' ? 'active' : healthState === 'failed' ? 'critical' : healthState === 'partial' || healthState === 'stale' ? 'warning' : 'low';
+  const topIssue = urgentRecs[0]?.recommendation || urgentRecs[0]?.root_cause || alerts[0]?.message || (healthState !== 'fresh' ? `Data health is ${healthState}` : 'No urgent issue detected');
+  el.innerHTML = `
+    <div class="operator-briefing">
+      <div class="briefing-header">
+        <div>
+          <div class="intel-eyebrow">Operator Briefing</div>
+          <div class="briefing-title">${escapeHtml(topIssue)}</div>
+          <div class="briefing-subtitle">What changed, what matters, and where to go next.</div>
+        </div>
+        <div class="briefing-badges">
+          <span class="badge badge-${healthBadge}">Health ${escapeHtml(healthState)}</span>
+          <span class="badge badge-${urgentRecs.length ? 'warning' : 'active'}">${fmt(urgentRecs.length, 'integer')} urgent</span>
+          <span class="badge badge-${alerts.length ? 'critical' : 'low'}">${fmt(alerts.length, 'integer')} alerts</span>
+        </div>
+      </div>
+      <div class="briefing-grid">
+        ${briefingDeltaCard('Spend', current.spend, previous.spend, 'currency')}
+        ${briefingDeltaCard('Results', current.results, previous.results, 'integer')}
+        ${briefingDeltaCard('Clicks', current.clicks, previous.clicks, 'compact')}
+        ${briefingDeltaCard('Reach', current.reach, previous.reach, 'compact')}
+      </div>
+      <div class="briefing-actions">
+        <button class="btn btn-sm btn-primary" data-nav-target="${urgentRecs.length ? 'ai' : 'intelligence'}">${urgentRecs.length ? 'Review urgent actions' : 'Open Decision Center'}</button>
+        <button class="btn btn-sm" data-nav-target="campaigns">Open campaigns</button>
+        <button class="btn btn-sm" data-nav-target="settings">Check settings</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderOverviewDataHealth(health) {
