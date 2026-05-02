@@ -40,32 +40,45 @@ async function loadOverview(container) {
       </div>
     </div>
     <div id="date-label" class="text-muted mb-sm" style="font-size: 0.78rem; text-align: right;">${getDateLabel()}</div>
-    <div id="overview-briefing" class="mb-md"><div class="loading">Loading command briefing</div></div>
+    <div id="overview-briefing" class="mb-md">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading command briefing') : '<div class="loading">Loading command briefing</div>'}</div>
     <div id="alert-area"></div>
     <div id="kpi-area" class="kpi-grid"><div class="loading">Loading KPIs</div></div>
     <div class="overview-command-grid mb-md">
-      <div id="overview-performance-card"><div class="loading">Loading performance trend</div></div>
-      <div id="overview-action-card"><div class="loading">Loading urgent actions</div></div>
+      <div id="overview-performance-card">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading performance trend') : '<div class="loading">Loading performance trend</div>'}</div>
+      <div id="overview-action-card">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading urgent actions') : '<div class="loading">Loading urgent actions</div>'}</div>
     </div>
     <div id="campaigns-summary"></div>
     <div class="overview-lower-grid">
       <div id="overview-data-health"></div>
       <div id="overview-recent-changes"></div>
     </div>
-    <div id="meta-pulse-card" class="quiet-card mb-md"><div class="loading">Loading Meta pulse</div></div>
+    <div id="meta-pulse-card" class="quiet-card mb-md">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading Meta pulse') : '<div class="loading">Loading Meta pulse</div>'}</div>
   `;
   bindOverviewControls(container);
 
   const kpiSection = overviewAsyncSection.createAsyncSection({
     targetId: 'kpi-area',
     loadingText: 'Loading KPIs',
-    onError: (err) => `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`,
+    onError: (err) => window.UXPatterns?.errorState
+      ? window.UXPatterns.errorState({
+          title: 'Overview metrics did not load',
+          message: safeErrorMessage(err),
+          nextStep: 'Campaign metrics may be stale until this request succeeds.',
+          ctaLabel: 'Retry overview',
+          target: 'overview',
+        })
+      : `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`,
     render: (metrics) => metrics,
   });
   const campaignsSection = overviewAsyncSection.createAsyncSection({
     targetId: 'campaigns-summary',
     loadingText: 'Loading campaigns',
-    emptyHtml: '<div class="table-container"><div class="empty-state"><div class="empty-state-text">No campaign data for this date range</div></div></div>',
+    emptyHtml: `<div class="table-container">${window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+      title: 'No campaign data for this date range',
+      nextStep: 'Try a wider date range or confirm Meta sync health before making decisions.',
+      ctaLabel: 'Open campaign health',
+      target: 'campaigns',
+    }) : '<div class="empty-state"><div class="empty-state-text">No campaign data for this date range</div></div>'}</div>`,
     render: (html) => html,
   });
 
@@ -268,6 +281,12 @@ function renderOverviewBriefing({ current, previous, recommendations, trackingAl
         <div class="command-side-stat"><span>Health</span><strong>${escapeHtml(healthState)}</strong></div>
         <div class="command-side-stat"><span>Urgent</span><strong>${fmt(urgentRecs.length, 'integer')}</strong></div>
       </div>
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        `Last synced ${lastSyncLabel || 'not recorded'}`,
+        'Connected to Meta',
+        'Data source: Live + warehouse',
+        `AI confidence: ${confidence}`,
+      ]) : ''}
     </div>
   `;
 }
@@ -309,7 +328,12 @@ function renderOverviewActionCard(recommendations, trackingAlerts, health) {
             <span class="badge badge-${item.badge}">${item.badge}</span>
             <div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.meta)}</span></div>
           </div>
-        `).join('') : '<div class="empty-state"><div class="empty-state-text">No urgent action detected for this range.</div></div>'}
+        `).join('') : (window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+          title: 'No active recommendations',
+          nextStep: 'Campaigns are currently within visible target ranges. Budget, CPA, and fatigue issues will appear here when action is needed.',
+          ctaLabel: 'Review campaign health',
+          target: 'campaigns',
+        }) : '<div class="empty-state"><div class="empty-state-text">No urgent action detected for this range.</div></div>')}
       </div>
     </div>
   `;
@@ -351,6 +375,11 @@ function renderOverviewPerformanceCard(campaigns, prevCampaigns) {
           `;
         }).join('')}
       </div>
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        'Data source: Meta live insights',
+        'Attribution follows campaign configured result',
+        getDateLabel(),
+      ]) : ''}
     </div>
   `;
 }

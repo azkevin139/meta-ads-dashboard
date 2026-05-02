@@ -117,12 +117,46 @@
 
   function emptyState({ title, nextStep, ctaLabel, target }) {
     return `
-      <div class="empty-state">
+      <div class="empty-state empty-state-rich">
         <div class="empty-state-text">
           <div style="font-weight:700; color:var(--text-primary); margin-bottom:4px;">${escapeHtml(title || 'Nothing to show yet')}</div>
           ${nextStep ? `<div>${escapeHtml(nextStep)}</div>` : ''}
           ${ctaLabel && target ? `<button class="btn btn-sm mt-md" data-nav-target="${escapeHtml(target)}" data-ux-track="empty_state_cta">${escapeHtml(ctaLabel)}</button>` : ''}
         </div>
+      </div>
+    `;
+  }
+
+  function loadingState(label = 'Loading') {
+    return `
+      <div class="loading-skeleton" aria-busy="true">
+        <div class="skeleton-line wide"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-grid">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="loading-caption">${escapeHtml(label)}</div>
+      </div>
+    `;
+  }
+
+  function errorState({ title = 'Something went wrong', message, nextStep, ctaLabel, target }) {
+    return `
+      <div class="state-card state-error">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          ${message ? `<span>${escapeHtml(message)}</span>` : ''}
+          ${nextStep ? `<em>${escapeHtml(nextStep)}</em>` : ''}
+        </div>
+        ${ctaLabel && target ? `<button class="btn btn-sm" data-nav-target="${escapeHtml(target)}" data-ux-track="error_state_cta">${escapeHtml(ctaLabel)}</button>` : ''}
+      </div>
+    `;
+  }
+
+  function trustRow(items = []) {
+    return `
+      <div class="trust-row">
+        ${items.filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
       </div>
     `;
   }
@@ -190,6 +224,9 @@
     badgeClass,
     actionAlert,
     emptyState,
+    loadingState,
+    errorState,
+    trustRow,
     track,
     markPageStart,
     flushEvents,

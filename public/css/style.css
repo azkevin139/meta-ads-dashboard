@@ -591,6 +591,192 @@ tbody td.name-cell a:hover {
   font-size: 0.9rem;
 }
 
+/* ─── PHASE 3 POLISH / STATE SYSTEM ─────────────────────
+   Visual QA standard: one primary focus, one primary action,
+   readable numbers, meaningful status colors, mobile as task cards. */
+.loading-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 24px;
+  background: var(--bg-quiet);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.skeleton-line,
+.skeleton-grid span {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(16, 20, 26, 0.05), rgba(16, 20, 26, 0.11), rgba(16, 20, 26, 0.05));
+  background-size: 220% 100%;
+  animation: skeletonSweep 1.15s ease-in-out infinite;
+}
+.skeleton-line {
+  width: 62%;
+}
+.skeleton-line.wide {
+  width: 86%;
+  height: 16px;
+}
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.skeleton-grid span {
+  height: 54px;
+  border-radius: 16px;
+}
+.loading-caption {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+@keyframes skeletonSweep {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+
+.empty-state-rich {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  background: var(--bg-quiet);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+}
+.empty-state-title {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+.empty-state-next {
+  max-width: 52ch;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.empty-state-rich .btn {
+  margin-top: 6px;
+}
+
+.state-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  background: var(--bg-quiet);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+.state-card > div {
+  display: grid;
+  gap: 5px;
+}
+.state-card strong {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+.state-card span,
+.state-card em {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+.state-error {
+  background: var(--red-dim);
+  border-color: rgba(185, 79, 79, 0.22);
+}
+.state-error strong {
+  color: var(--red);
+}
+
+.trust-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+.trust-row span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+}
+.trust-row span::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--green);
+  opacity: 0.8;
+}
+
+.priority-card,
+.operator-briefing,
+.intel-action-queue,
+.decision-pipeline-card,
+.command-hero-card,
+.kpi-card,
+.campaign-mobile-card,
+.campaign-issue-card,
+.intel-action-card,
+.reco-card {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+.priority-card:hover,
+.operator-briefing:hover,
+.intel-action-queue:hover,
+.decision-pipeline-card:hover,
+.command-hero-card:hover,
+.kpi-card:hover,
+.campaign-mobile-card:hover,
+.campaign-issue-card:hover,
+.intel-action-card:hover,
+.reco-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(16, 20, 26, 0.14);
+}
+.kpi-card:hover,
+.campaign-mobile-card:hover,
+.campaign-issue-card:hover,
+.intel-action-card:hover,
+.reco-card:hover {
+  box-shadow: var(--shadow-card);
+}
+
+.sync-pulse,
+.badge-live {
+  position: relative;
+}
+.sync-pulse::before,
+.badge-live::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+  animation: syncPulse 1.8s ease-in-out infinite;
+}
+@keyframes syncPulse {
+  0%, 100% { transform: scale(0.9); opacity: 0.45; }
+  50% { transform: scale(1.15); opacity: 0.9; }
+}
+
 /* ─── SPARKLINE (mini trend) ───────────────────────────── */
 .sparkline {
   display: inline-block;
@@ -2512,5 +2698,78 @@ tbody tr.campaign-row-warning:hover {
   }
   #bulk-bar {
     box-shadow: var(--shadow-card);
+  }
+}
+
+/* ─── PHASE 3 MOBILE FINAL OVERRIDES ───────────────────── */
+@media (max-width: 640px) {
+  .page-body {
+    padding: 16px 16px 88px;
+  }
+  .command-toolbar,
+  .briefing-header,
+  .intel-summary-header,
+  .decision-pipeline-header,
+  .campaign-issue-top,
+  .report-range-row {
+    align-items: stretch;
+  }
+  .command-toolbar > *,
+  .briefing-header > *,
+  .intel-summary-header > *,
+  .decision-pipeline-header > * {
+    width: 100%;
+  }
+  .btn,
+  .btn-sm,
+  .date-btn {
+    min-height: 44px;
+  }
+  .btn-group,
+  .command-hero-actions,
+  .campaign-mobile-actions,
+  .intel-live-actions,
+  .intel-hero-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  .kpi-grid,
+  .intel-status-strip,
+  .intel-delta-grid,
+  .intel-summary-grid,
+  .campaign-mobile-metrics,
+  .skeleton-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .decision-pipeline-steps {
+    grid-template-columns: 1fr;
+  }
+  .trust-row {
+    gap: 6px;
+  }
+  .trust-row span {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .state-card {
+    display: grid;
+  }
+  .state-card .btn {
+    width: 100%;
+  }
+  .loading-skeleton,
+  .empty-state-rich,
+  .campaign-mobile-card {
+    border-radius: 18px;
+  }
+  .campaign-mobile-card,
+  .campaign-issue-card,
+  .intel-action-card,
+  .reco-card {
+    transform: none;
+  }
+  .mobile-nav {
+    min-height: 64px;
   }
 }

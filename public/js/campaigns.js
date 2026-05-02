@@ -47,9 +47,9 @@ async function loadCampaigns(container) {
       </div>
     </div>
 
-    <div id="campaign-pulse-inline" class="mb-md"><div class="loading">Loading live request usage...</div></div>
+    <div id="campaign-pulse-inline" class="mb-md">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading live request usage') : '<div class="loading">Loading live request usage...</div>'}</div>
     <div id="campaign-data-health" class="mb-md"></div>
-    <div id="campaign-action-briefing" class="mb-md"><div class="loading">Finding campaigns that need attention</div></div>
+    <div id="campaign-action-briefing" class="mb-md">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Finding campaigns that need attention') : '<div class="loading">Finding campaigns that need attention</div>'}</div>
 
     <div id="bulk-bar" style="display:none; padding: 10px 16px; background: var(--accent-bg); border: 1px solid var(--accent-dim); border-radius: var(--radius); margin-bottom: 14px; align-items: center; gap: 12px; flex-wrap:wrap;">
       <span id="bulk-count" style="font-weight: 600; font-size: 0.85rem;">0 selected</span>
@@ -64,7 +64,7 @@ async function loadCampaigns(container) {
         <span class="table-title">Campaigns</span>
         <span class="badge badge-active" style="font-size: 0.7rem;">LIVE</span>
       </div>
-      <div id="campaigns-table"><div class="loading">Loading campaigns from Meta</div></div>
+      <div id="campaigns-table">${window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Loading campaigns from Meta') : '<div class="loading">Loading campaigns from Meta</div>'}</div>
     </div>
   `;
   bindCampaignControls(container);
@@ -88,7 +88,12 @@ async function loadCampaigns(container) {
     }
 
     if (insights.length === 0 && entities.length === 0) {
-      document.getElementById('campaigns-table').innerHTML = '<div class="empty-state"><div class="empty-state-text">No campaigns found</div></div>';
+      document.getElementById('campaigns-table').innerHTML = window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+        title: 'No campaigns found',
+        nextStep: 'Connect or sync Meta campaigns before reviewing performance and optimization signals.',
+        ctaLabel: 'Open data health',
+        target: 'admin',
+      }) : '<div class="empty-state"><div class="empty-state-text">No campaigns found</div></div>';
       return;
     }
 
@@ -96,7 +101,13 @@ async function loadCampaigns(container) {
     renderCampaignActionBriefing(rows);
     document.getElementById('campaigns-table').innerHTML = isMobile ? renderCampaignCards(rows) : renderCampaignDesktopTable(rows);
   } catch (err) {
-    document.getElementById('campaigns-table').innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+    document.getElementById('campaigns-table').innerHTML = window.UXPatterns?.errorState ? window.UXPatterns.errorState({
+      title: 'Campaigns did not load',
+      message: safeErrorMessage(err),
+      nextStep: 'Check Meta connection health, then retry this campaign view.',
+      ctaLabel: 'Open data health',
+      target: 'admin',
+    }) : `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
   }
 }
 
@@ -140,6 +151,11 @@ function renderCampaignActionBriefing(rows) {
         </div>
         <span class="badge badge-${issues.length ? 'warning' : 'active'}">${fmt(issues.length, 'integer')} issues</span>
       </div>
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        'Data source: Meta live insights',
+        'Ranking: delivery blockers, spend waste, high CPA',
+        'Actions remain operator-controlled',
+      ]) : ''}
       ${issues.length ? `<div class="campaign-issue-grid">
         ${issues.map(({ row, issue }) => `
           <div class="campaign-issue-card">
@@ -155,7 +171,12 @@ function renderCampaignActionBriefing(rows) {
             </div>
           </div>
         `).join('')}
-      </div>` : `<div class="empty-state" style="padding:22px 12px;"><div class="empty-state-text">Campaigns are not showing obvious spend, delivery, or CTR issues in this range.</div></div>`}
+      </div>` : (window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+        title: 'No urgent campaign issue detected',
+        nextStep: 'Campaigns are not showing obvious spend, delivery, CPA, or CTR issues in this range.',
+        ctaLabel: 'Review full campaign table',
+        target: 'campaigns',
+      }) : `<div class="empty-state" style="padding:22px 12px;"><div class="empty-state-text">Campaigns are not showing obvious spend, delivery, or CTR issues in this range.</div></div>`)}
     </div>
   `;
 }
@@ -178,7 +199,7 @@ function renderCampaignUsageInline(rateRes) {
     <div class="reco-card" style="padding:12px 14px;">
       <div class="flex-between" style="gap:10px; flex-wrap:wrap;">
         <div style="font-weight:600; font-size:0.82rem;">Live API usage</div>
-        <div class="text-muted" style="font-size:0.72rem;">${rateRes.last_seen_at ? `Updated ${fmtDateTime(rateRes.last_seen_at)}` : 'Waiting for headers'}</div>
+        <div class="text-muted sync-pulse" style="font-size:0.72rem;">${rateRes.last_seen_at ? `Updated ${fmtDateTime(rateRes.last_seen_at)}` : 'Waiting for headers'}</div>
       </div>
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap:8px; margin-top:8px; font-size:0.78rem;">
         <div><div class="kpi-label">Ads Mgmt</div><div>${fmtPct(summary.ads_management?.call_count)}</div></div>
@@ -186,6 +207,11 @@ function renderCampaignUsageInline(rateRes) {
         <div><div class="kpi-label">Account</div><div>${fmtPct(summary.ad_account_util_pct)}</div></div>
         <div><div class="kpi-label">Reset</div><div>${campaignMetrics.formatSeconds(rateRes.estimated_regain_seconds || 0)}</div></div>
       </div>
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        'Connected to Meta',
+        'Data source: Live API headers',
+        rateRes.safe_to_write ? 'Write pressure: safe' : 'Write pressure: elevated',
+      ]) : ''}
       ${!rateRes.safe_to_write ? `<div class="alert-banner alert-warning" style="margin-top:8px;">High pressure: better wait before more edits.</div>` : ''}
     </div>
   `;

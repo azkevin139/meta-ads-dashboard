@@ -5,7 +5,9 @@
 
     return {
       setLoading() {
-        target.innerHTML = `<div class="loading">${loadingText}</div>`;
+        target.innerHTML = window.UXPatterns?.loadingState
+          ? window.UXPatterns.loadingState(loadingText)
+          : `<div class="loading">${loadingText}</div>`;
       },
       setEmpty() {
         target.innerHTML = emptyHtml;
@@ -15,7 +17,13 @@
           target.innerHTML = onError(err);
           return;
         }
-        target.innerHTML = `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
+        target.innerHTML = window.UXPatterns?.errorState
+          ? window.UXPatterns.errorState({
+              title: 'Unable to load this section',
+              message: safeErrorMessage(err),
+              nextStep: 'Refresh the page or retry the action.',
+            })
+          : `<div class="alert-banner alert-critical">Error: ${safeErrorMessage(err)}</div>`;
       },
       setData(data) {
         target.innerHTML = render(data);

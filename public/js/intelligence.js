@@ -692,7 +692,12 @@ function renderIntelActionQueue() {
       </div>
       ${finalActions.length
         ? `<div class="intel-action-grid">${finalActions.map(actionCard).join('')}</div>`
-        : `<div class="empty-state" style="padding:28px 12px;"><div class="empty-state-text">No urgent actions. Check Revenue, Audiences, or Diagnostics when you need detail.</div></div>`}
+        : (window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+            title: 'No active recommendations',
+            nextStep: 'Campaigns and data health are not showing urgent action signals. Review campaign health when you want a deeper check.',
+            ctaLabel: 'Review campaign health',
+            target: 'campaigns',
+          }) : `<div class="empty-state" style="padding:28px 12px;"><div class="empty-state-text">No urgent actions. Check Revenue, Audiences, or Diagnostics when you need detail.</div></div>`)}
     </div>
   `;
   el.querySelectorAll('[data-intel-nav]').forEach((button) => {
@@ -733,6 +738,11 @@ function renderDecisionPipeline() {
         </div>
         <button class="btn btn-sm" data-intel-nav="intel-section-proposals">Open recommendations</button>
       </div>
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        'Data source: Proposed Actions ledger',
+        'Execution: human-approved only',
+        'AI confidence shown per action',
+      ]) : ''}
       <div class="decision-pipeline-steps">
         ${stages.map(([label, count], index) => `
           <div class="decision-step ${index === activeIndex ? 'is-active' : ''}">
@@ -928,7 +938,12 @@ async function loadProposedActions() {
         ${meta}
         ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
         ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
-        <div class="text-muted" style="font-size:0.78rem; padding:12px;">No ${escapeHtml(proposedActionFilter)} actions yet.</div>
+        ${window.UXPatterns?.emptyState ? window.UXPatterns.emptyState({
+          title: `No ${proposedActionFilter} actions yet`,
+          nextStep: 'Generate proposals when you need a fresh decision queue. This area stays read-only until an operator approves an action.',
+          ctaLabel: 'Generate proposals',
+          target: 'intel-section-proposals',
+        }) : `<div class="text-muted" style="font-size:0.78rem; padding:12px;">No ${escapeHtml(proposedActionFilter)} actions yet.</div>`}
       `;
       return;
     }
@@ -946,6 +961,11 @@ async function loadProposedActions() {
         <div class="intel-proposal-review-stat"><div class="intel-proposal-review-count">${fmt(counts.dismissed, 'integer')}</div><div class="intel-proposal-review-label">Dismissed</div></div>
       </div>
       ${typeFilterBar}
+      ${window.UXPatterns?.trustRow ? window.UXPatterns.trustRow([
+        'Data source: normalized diagnostics',
+        'Execution: read-only proposals',
+        'Operator approval required',
+      ]) : ''}
       ${meta}
       ${latestError ? `<div class="alert-banner alert-critical" style="margin-bottom:10px;">${escapeHtml(latestError)}</div>` : ''}
       ${summary ? `<div class="alert-banner alert-warning" style="margin-bottom:10px;">${escapeHtml(summary)}</div>` : ''}
@@ -1194,7 +1214,7 @@ async function reopenProposalFromDrawer(proposalId) {
 async function loadProposalDraft(proposalId) {
   const slot = document.getElementById('proposal-draft-slot');
   if (!slot) return;
-  slot.innerHTML = '<div class="loading" style="padding:24px;">Generating follow-up draft</div>';
+  slot.innerHTML = window.UXPatterns?.loadingState ? window.UXPatterns.loadingState('Generating follow-up draft') : '<div class="loading" style="padding:24px;">Generating follow-up draft</div>';
   try {
     const res = await apiPost(`/intelligence/proposed-actions/${proposalId}/draft`, {});
     const draft = res.data || {};
