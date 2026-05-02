@@ -20,11 +20,11 @@ let intelShellState = {
   dataHealthSummary: null,
   creativeRows: null,
 };
-let intelActiveNavTarget = 'intel-section-overview';
+let intelActiveNavTarget = 'intel-action-queue';
 let intelSectionState = {
-  overview: true,
-  proposals: true,
-  revenue: true,
+  overview: false,
+  proposals: false,
+  revenue: false,
   audiences: false,
   touch: false,
   lifecycle: false,
@@ -42,13 +42,13 @@ let intelWorkspaceState = {
 async function loadIntelligence(container) {
   container.innerHTML = `
     <div class="intel-shell">
-      <div class="intel-hero mb-md">
-        <div class="intel-hero-copy">
+      <div class="intel-live-header mb-md">
+        <div id="intel-live-state">
           <div class="intel-eyebrow">Decision Center</div>
-          <div class="intel-hero-title">Revenue, response speed, and retargeting actions in one workspace.</div>
-          <div class="intel-hero-subtitle">The page now starts with what needs attention first: health, urgent actions, and the sections where operators actually make decisions.</div>
+          <div class="intel-live-title">Loading account state</div>
+          <div class="intel-live-subtitle">Checking health, blockers, and proposed actions.</div>
         </div>
-        <div class="intel-hero-actions">
+        <div class="intel-live-actions">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button class="btn btn-sm ${intelPreset === 'today' ? 'btn-primary' : ''}" onclick="setIntelPreset('today')">Today</button>
             <button class="btn btn-sm ${intelPreset === 'yesterday' ? 'btn-primary' : ''}" onclick="setIntelPreset('yesterday')">Yesterday</button>
@@ -64,25 +64,19 @@ async function loadIntelligence(container) {
         </div>
       </div>
       <div id="intel-summary" class="mb-md"><div class="loading">Loading top summary</div></div>
+      <div id="intel-action-queue" class="mb-md"><div class="loading">Loading action queue</div></div>
       <div class="intel-nav-shell mb-md">
-        <button class="btn btn-sm" data-intel-nav="intel-section-overview">Overview</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-proposals">Proposed Actions</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-audiences">Audiences</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-touch">Touch</button>
+        <button class="btn btn-sm" data-intel-nav="intel-action-queue">Now</button>
         <button class="btn btn-sm" data-intel-nav="intel-section-revenue">Revenue</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-lifecycle">Lifecycle</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-identity">Identity</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-performance">Performance</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-creative">Creative</button>
-        <button class="btn btn-sm" data-intel-nav="intel-section-journeys">Journeys</button>
-        <button class="btn btn-sm" data-intel-nav="settings">Settings</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-audiences">Audiences</button>
+        <button class="btn btn-sm" data-intel-nav="intel-section-overview">Diagnostics</button>
       </div>
 
       <section id="intel-section-overview" class="intel-section is-expanded">
         <div class="intel-section-header">
           <div>
-            <div class="intel-section-title">Overview</div>
-            <div class="intel-section-subtitle">Decision queues, data health, and account-level operating context.</div>
+            <div class="intel-section-title">Diagnostics</div>
+            <div class="intel-section-subtitle">Data health, rule queues, and deeper operating context. Open this after the action queue.</div>
           </div>
           <button class="btn btn-sm intel-section-toggle" data-intel-toggle="overview">Collapse</button>
         </div>
@@ -95,8 +89,8 @@ async function loadIntelligence(container) {
       <section id="intel-section-proposals" class="intel-section is-expanded">
         <div class="intel-section-header">
           <div>
-            <div class="intel-section-title">Proposed Actions</div>
-            <div class="intel-section-subtitle">Prioritized operator actions with justification, tradeoff, and confidence.</div>
+            <div class="intel-section-title">Action Details</div>
+            <div class="intel-section-subtitle">Full proposal list with justification, tradeoff, confidence, and approval history.</div>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button class="btn btn-sm" id="intel-proposals-filter-proposed">Proposed</button>
@@ -367,6 +361,11 @@ function handleIntelNav(targetId) {
     return;
   }
   intelActiveNavTarget = targetId;
+  const sectionKey = String(targetId || '').replace('intel-section-', '');
+  if (Object.prototype.hasOwnProperty.call(intelSectionState, sectionKey)) {
+    intelSectionState[sectionKey] = true;
+    applyIntelSectionState();
+  }
   syncIntelNavButtons();
   const target = document.getElementById(targetId);
   if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -497,7 +496,7 @@ function sumBy(rows, key) {
 function renderIntelSummary() {
   const el = document.getElementById('intel-summary');
   if (!el) return;
-  const health = intelShellState.dataHealthSummary || { state: 'unavailable', summary: 'Loading account health' };
+  const health = intelShellState.dataHealthSummary || { state: 'unavailable', label: 'loading', rows: [] };
   const revenue = intelShellState.revenueCopilot || {};
   const lead = revenue.lead_response_audit?.metrics || {};
   const topCampaigns = revenue.revenue_feedback_summary?.metrics?.top_campaigns || [];
@@ -510,11 +509,25 @@ function renderIntelSummary() {
   const urgentActions = proposalRows.filter((row) => row.status === 'proposed' && ['critical', 'high'].includes(row.priority)).length;
   const openActions = proposalRows.filter((row) => row.status === 'proposed').length;
   const trueRoas = spend > 0 ? Number((firstPartyRevenue / spend).toFixed(2)) : null;
-  const stateBadge = health.state === 'ready'
-    ? 'active'
-    : health.state === 'warning' || health.state === 'partial' || health.state === 'stale'
-      ? 'warning'
-      : 'critical';
+  const blockerCount = (health.rows || []).filter((row) => row.status === 'failed' || row.status === 'partial' || row.status === 'skipped').length;
+  const latestSync = (health.rows || [])
+    .map((row) => row.last_successful_at || row.last_attempted_at)
+    .filter(Boolean)
+    .sort()
+    .pop();
+  const lastSyncLabel = latestSync ? fmtDateTime(latestSync) : 'No sync recorded';
+  const statusLabel = health.state === 'fresh' ? 'Healthy'
+    : health.state === 'partial' || health.state === 'stale' ? 'Partial'
+      : health.state === 'failed' ? 'Blocked'
+        : 'Checking';
+  const stateBadge = health.state === 'fresh' ? 'active'
+    : health.state === 'partial' || health.state === 'stale' ? 'warning'
+      : health.state === 'failed' ? 'critical'
+        : 'low';
+  const primaryIssue = latestProposalRun?.reason_code === 'openai_auth_failed'
+    ? 'AI proposal generation blocked by OpenAI backend auth'
+    : (health.rows || []).find((row) => row.status === 'failed' || row.status === 'partial' || row.status === 'skipped')?.partial_reason
+      || (urgentActions ? `${urgentActions} urgent action${urgentActions === 1 ? '' : 's'} waiting` : 'No urgent blocker detected');
 
   const topAlert = latestProposalRun?.reason_code === 'openai_auth_failed'
     ? `<div class="alert-banner alert-critical" style="margin-top:12px;">AI proposal generation is blocked by backend OpenAI auth. Fix the platform OpenAI key in Admin before using Proposed Actions.</div>`
@@ -522,34 +535,44 @@ function renderIntelSummary() {
       ? `<div class="alert-banner alert-warning" style="margin-top:12px;">${fmt(urgentActions, 'integer')} urgent proposed action${urgentActions === 1 ? '' : 's'} need review before traffic or retargeting changes.</div>`
       : '';
 
+  const liveState = document.getElementById('intel-live-state');
+  if (liveState) {
+    liveState.innerHTML = `
+      <div class="intel-eyebrow">Decision Center</div>
+      <div class="intel-live-title">Status: ${escapeHtml(statusLabel)}</div>
+      <div class="intel-live-subtitle">${escapeHtml(primaryIssue)} · Last sync ${escapeHtml(lastSyncLabel)}</div>
+    `;
+  }
+
   el.innerHTML = `
     <div class="intel-summary-shell">
       <div class="intel-summary-header">
         <div>
-          <div class="intel-section-title">Top Summary</div>
-          <div class="intel-section-subtitle">${escapeHtml(health.summary || 'Loading data health')}</div>
+          <div class="intel-section-title">Account Status</div>
+          <div class="intel-section-subtitle">Health, blockers, and current operating state before any drilldown.</div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <span class="badge badge-${stateBadge}">Health ${escapeHtml(health.state || 'unknown')}</span>
+          <span class="badge badge-${stateBadge}">${escapeHtml(statusLabel)}</span>
           <span class="badge badge-${urgentActions ? 'warning' : 'active'}">${fmt(openActions, 'integer')} open actions</span>
-          <span class="badge badge-low">${fmt(urgentActions, 'integer')} urgent actions</span>
+          <span class="badge badge-${blockerCount ? 'critical' : 'low'}">${fmt(blockerCount, 'integer')} blockers</span>
         </div>
       </div>
-      <div class="intel-summary-grid">
+      <div class="intel-status-strip">
+        <div><div class="intel-summary-label">Primary issue</div><div class="intel-status-value">${escapeHtml(primaryIssue)}</div></div>
+        <div><div class="intel-summary-label">Last sync</div><div class="intel-status-value">${escapeHtml(lastSyncLabel)}</div></div>
+        <div><div class="intel-summary-label">Urgent actions</div><div class="intel-status-value">${fmt(urgentActions, 'integer')}</div></div>
+        <div><div class="intel-summary-label">Active blockers</div><div class="intel-status-value">${fmt(blockerCount, 'integer')}</div></div>
+      </div>
+      <div class="intel-summary-grid intel-delta-grid">
         <div class="intel-summary-card">
           <div class="intel-summary-label">Spend</div>
           <div class="intel-summary-value">${spend ? fmt(spend, 'currency') : '—'}</div>
-          <div class="intel-summary-note">Current range</div>
+          <div class="intel-summary-note">Current selected range</div>
         </div>
         <div class="intel-summary-card">
           <div class="intel-summary-label">True ROAS</div>
           <div class="intel-summary-value">${trueRoas === null ? '—' : `${fmt(trueRoas, 'decimal')}x`}</div>
           <div class="intel-summary-note">First-party revenue / spend</div>
-        </div>
-        <div class="intel-summary-card">
-          <div class="intel-summary-label">Revenue</div>
-          <div class="intel-summary-value">${firstPartyRevenue ? fmt(firstPartyRevenue, 'currency') : '—'}</div>
-          <div class="intel-summary-note">Attributed first-party revenue</div>
         </div>
         <div class="intel-summary-card">
           <div class="intel-summary-label">Booked Calls</div>
@@ -570,6 +593,112 @@ function renderIntelSummary() {
       ${topAlert}
     </div>
   `;
+  renderIntelActionQueue();
+}
+
+function actionCard({ group, title, impact, blocker, nextStep, cta, targetId, badge = 'warning' }) {
+  return `
+    <div class="intel-action-card">
+      <div class="intel-action-group">${escapeHtml(group)}</div>
+      <div class="intel-action-title">${escapeHtml(title)}</div>
+      <div class="intel-action-impact">${escapeHtml(impact)}</div>
+      <div class="intel-action-meta">
+        <span class="badge badge-${blocker ? 'critical' : badge}">${blocker ? 'Blocker' : 'Action'}</span>
+        <span class="text-muted">${escapeHtml(nextStep)}</span>
+      </div>
+      <button class="btn btn-sm ${blocker ? 'btn-primary' : ''}" data-intel-nav="${escapeHtml(targetId)}">${escapeHtml(cta)}</button>
+    </div>
+  `;
+}
+
+function renderIntelActionQueue() {
+  const el = document.getElementById('intel-action-queue');
+  if (!el) return;
+  const proposals = (intelShellState.proposals?.rows || []).filter((row) => row.status === 'proposed');
+  const health = intelShellState.dataHealthSummary || { rows: [] };
+  const latestRun = intelShellState.proposals?.latestRun || null;
+  const revenue = intelShellState.revenueCopilot || {};
+  const lead = revenue.lead_response_audit?.metrics || {};
+  const actions = [];
+
+  if (latestRun?.reason_code === 'openai_auth_failed') {
+    actions.push({
+      group: 'Blocked system',
+      title: 'AI proposal generation blocked',
+      impact: 'New proposed actions cannot be generated until the backend OpenAI key is fixed.',
+      blocker: true,
+      nextStep: 'Open Admin and repair AI Backend Status.',
+      cta: 'Fix AI backend',
+      targetId: 'settings',
+      rank: 1,
+    });
+  }
+
+  (health.rows || []).filter((row) => ['failed', 'partial', 'skipped'].includes(row.status)).slice(0, 2).forEach((row) => {
+    actions.push({
+      group: 'Data blocker',
+      title: `${row.source}/${row.dataset} is ${row.status}`,
+      impact: 'Operators may act on stale, partial, or unavailable data.',
+      blocker: row.status === 'failed',
+      nextStep: row.partial_reason ? row.partial_reason.replace(/_/g, ' ') : 'Review data health diagnostics.',
+      cta: 'Open diagnostics',
+      targetId: 'intel-section-overview',
+      rank: row.status === 'failed' ? 2 : 4,
+    });
+  });
+
+  proposals
+    .filter((row) => ['critical', 'high'].includes(row.priority))
+    .slice(0, 3)
+    .forEach((row) => {
+      actions.push({
+        group: row.priority === 'critical' ? 'Urgent' : 'Needs approval',
+        title: row.title || proposalTypeLabel(row.proposal_type),
+        impact: row.expected_impact || row.why || 'This proposed action needs operator review.',
+        blocker: false,
+        nextStep: 'Review the recommendation and approve, dismiss, or generate a draft.',
+        cta: 'Review action',
+        targetId: 'intel-section-proposals',
+        rank: row.priority === 'critical' ? 3 : 5,
+      });
+    });
+
+  if ((lead.zero_response_count || 0) > 0) {
+    actions.push({
+      group: 'Revenue leak',
+      title: `${fmt(lead.zero_response_count, 'integer')} leads have no response`,
+      impact: 'Speed-to-lead decay can reduce booked calls and reply rate.',
+      blocker: false,
+      nextStep: 'Review Revenue Copilot lead response audit.',
+      cta: 'Open revenue',
+      targetId: 'intel-section-revenue',
+      rank: 6,
+    });
+  }
+
+  const finalActions = actions.sort((a, b) => a.rank - b.rank).slice(0, 6);
+  el.innerHTML = `
+    <div class="intel-action-queue">
+      <div class="intel-summary-header">
+        <div>
+          <div class="intel-section-title">Now</div>
+          <div class="intel-section-subtitle">The next operator actions, ranked by blocker, revenue impact, and approval need.</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm btn-primary" data-intel-nav="intel-section-proposals">Open action details</button>
+          <button class="btn btn-sm" id="intel-action-generate">Generate</button>
+        </div>
+      </div>
+      ${finalActions.length
+        ? `<div class="intel-action-grid">${finalActions.map(actionCard).join('')}</div>`
+        : `<div class="empty-state" style="padding:28px 12px;"><div class="empty-state-text">No urgent actions. Check Revenue, Audiences, or Diagnostics when you need detail.</div></div>`}
+    </div>
+  `;
+  el.querySelectorAll('[data-intel-nav]').forEach((button) => {
+    button.onclick = () => handleIntelNav(button.dataset.intelNav);
+  });
+  const generate = document.getElementById('intel-action-generate');
+  if (generate) generate.onclick = () => generateProposedActions();
 }
 
 async function loadRevenueCopilot(forceRefresh = false) {
