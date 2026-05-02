@@ -225,9 +225,9 @@ function renderOverviewBriefing({ current, previous, recommendations, trackingAl
         ${briefingDeltaCard('Reach', current.reach, previous.reach, 'compact')}
       </div>
       <div class="briefing-actions">
-        <button class="btn btn-sm btn-primary" data-nav-target="${urgentRecs.length ? 'ai' : 'intelligence'}">${urgentRecs.length ? 'Review urgent actions' : 'Open Decision Center'}</button>
-        <button class="btn btn-sm" data-nav-target="campaigns">Open campaigns</button>
-        <button class="btn btn-sm" data-nav-target="settings">Check settings</button>
+        <button class="btn btn-sm btn-primary" data-nav-target="${urgentRecs.length ? 'ai' : 'intelligence'}" data-ux-track="overview_primary_cta">${urgentRecs.length ? 'Review urgent actions' : 'Open Decision Center'}</button>
+        <button class="btn btn-sm" data-nav-target="campaigns" data-ux-track="overview_campaigns_cta">Open campaigns</button>
+        <button class="btn btn-sm" data-nav-target="settings" data-ux-track="overview_settings_cta">Check settings</button>
       </div>
     </div>
   `;

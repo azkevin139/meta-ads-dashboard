@@ -150,8 +150,8 @@ function renderCampaignActionBriefing(rows) {
             <div class="campaign-issue-name">${escapeHtml(row.campaign_name || row.name || row.campaign_id)}</div>
             <div class="campaign-issue-detail">${escapeHtml(issue.detail)}</div>
             <div class="btn-group">
-              <button class="btn btn-sm btn-primary" data-campaign-edit="${escapeHtml(row.campaign_id)}">Edit</button>
-              <button class="btn btn-sm" data-campaign-open="${escapeHtml(row.campaign_id)}" data-campaign-name="${escapeHtml(row.campaign_name || '')}">Open</button>
+              <button class="btn btn-sm btn-primary" data-campaign-edit="${escapeHtml(row.campaign_id)}" data-ux-track="campaign_triage_edit">Edit</button>
+              <button class="btn btn-sm" data-campaign-open="${escapeHtml(row.campaign_id)}" data-campaign-name="${escapeHtml(row.campaign_name || '')}" data-ux-track="campaign_triage_open">Open</button>
             </div>
           </div>
         `).join('')}

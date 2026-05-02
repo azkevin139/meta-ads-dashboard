@@ -685,8 +685,8 @@ function renderIntelActionQueue() {
           <div class="intel-section-subtitle">The next operator actions, ranked by blocker, revenue impact, and approval need.</div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm btn-primary" data-intel-nav="intel-section-proposals">Open action details</button>
-          <button class="btn btn-sm" id="intel-action-generate">Generate</button>
+          <button class="btn btn-sm btn-primary" data-intel-nav="intel-section-proposals" data-ux-track="decision_now_action_details">Open action details</button>
+          <button class="btn btn-sm" id="intel-action-generate" data-ux-track="decision_now_generate">Generate</button>
         </div>
       </div>
       ${finalActions.length
