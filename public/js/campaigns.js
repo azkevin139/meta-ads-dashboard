@@ -199,7 +199,7 @@ function renderCampaignDesktopTable(rows) {
         <thead>
           <tr>
             <th style="width: 36px;"><input type="checkbox" data-campaign-toggle-all='${escapeHtml(JSON.stringify(rows.map(c => c.campaign_id)))}' /></th>
-            <th>Campaign</th><th>Status</th><th class="right">Spend</th><th class="right">Results</th><th class="right">Cost/Result</th><th class="right">Budget</th><th class="right">Target</th><th class="right">CTR</th><th class="right">CPC</th><th>Actions</th>
+            <th>Campaign</th><th>Status</th><th class="right">Spend</th><th class="right">Results</th><th class="right">Cost / Result</th><th class="right">Budget</th><th>Trend</th><th>Action</th>
           </tr>
         </thead>
         <tbody>${rows.map(renderCampaignRow).join('')}</tbody>
@@ -214,51 +214,51 @@ function renderCampaignRow(c) {
   const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
   const status = c.meta?.effective_status || c.meta?.status || '—';
   const budget = c.meta?.daily_budget ? fmtBudget(c.meta.daily_budget) : c.meta?.lifetime_budget ? fmtBudget(c.meta.lifetime_budget) + ' LT' : '—';
-  const target = c.desired_event?.event_label ? `<span class="badge badge-low" title="${c.desired_event.source}">${c.desired_event.event_label}</span>` : '—';
-  return `<tr>
+  const issue = campaignIssueFor(c);
+  const actionLabel = issue ? (issue.rank <= 3 ? 'Optimize' : 'Review') : 'Open';
+  const trendBadge = issue
+    ? `<span class="badge badge-${issue.severity === 'critical' ? 'critical' : issue.severity === 'warning' ? 'warning' : 'low'}">${escapeHtml(issue.title)}</span>`
+    : '<span class="badge badge-active">Stable</span>';
+  return `<tr class="${issue ? 'campaign-row-warning' : ''}">
     <td><input type="checkbox" class="camp-check" value="${c.campaign_id}" /></td>
-    <td class="name-cell"><a href="#" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">${c.campaign_name}</a></td>
+    <td class="name-cell"><a href="#" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">${escapeHtml(c.campaign_name || c.campaign_id)}</a>${c.desired_event?.event_label ? `<div class="text-muted" style="font-size:0.74rem;">Target: ${escapeHtml(c.desired_event.event_label)}</div>` : ''}</td>
     <td>${statusBadge(status)}</td>
     <td class="right">${spend > 0 ? fmt(spend,'currency') : '—'}</td>
     <td class="right" style="font-weight:600;">${result.count > 0 ? `${result.count}<div class="text-muted" style="font-size:0.66rem; font-weight:400;">${result.type}</div>` : '—'}</td>
     <td class="right">${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</td>
     <td class="right">${budget}</td>
-    <td class="right">${target}</td>
-    <td class="right">${c.ctr ? fmt(c.ctr,'percent') : '—'}</td>
-    <td class="right">${c.cpc ? fmt(c.cpc,'currency') : '—'}</td>
-    <td><div class="btn-group"><button class="btn btn-sm btn-primary" data-campaign-edit="${c.campaign_id}">Edit</button><button class="btn btn-sm" data-campaign-status="${c.campaign_id}" data-campaign-next-status="${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button><button class="btn btn-sm" data-campaign-duplicate="${c.campaign_id}">Dup</button></div></td>
+    <td>${trendBadge}${issue ? `<div class="text-muted" style="font-size:0.74rem; margin-top:4px;">${escapeHtml(issue.detail)}</div>` : ''}</td>
+    <td><div class="btn-group"><button class="btn btn-sm ${issue ? 'btn-primary' : ''}" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">${actionLabel}</button><button class="btn btn-sm" data-campaign-edit="${c.campaign_id}">Edit</button></div></td>
   </tr>`;
 }
 
 function renderCampaignCards(rows) {
   return `<div style="display:grid; gap:12px;">${rows.map(c => {
-    const result = parseResults(c.actions);
+    const result = parseResults(c.actions, c.desired_event);
     const cpr = parseCostPerResult(c.cost_per_action_type, result.type);
     const spend = parseFloat(c.spend) || 0;
     const costPerResult = cpr > 0 ? cpr : (result.count > 0 ? spend / result.count : 0);
     const status = c.meta?.effective_status || c.meta?.status || '—';
-    const budget = c.meta?.daily_budget ? fmtBudget(c.meta.daily_budget) : c.meta?.lifetime_budget ? fmtBudget(c.meta.lifetime_budget) + ' LT' : '—';
-    return `<div class="reco-card">
-      <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:10px;">
+    const issue = campaignIssueFor(c);
+    const recommendation = issue ? issue.detail : 'No urgent optimization signal in this range.';
+    return `<div class="campaign-mobile-card ${issue ? 'has-issue' : ''}">
+      <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:14px;">
         <input type="checkbox" class="camp-check" value="${c.campaign_id}" style="margin-top:4px;" />
         <div style="flex:1; min-width:0;">
-          <div style="font-weight:600; font-size:0.86rem; line-height:1.4; margin-bottom:6px;">${c.campaign_name}</div>
+          <div class="campaign-mobile-name">${escapeHtml(c.campaign_name || c.campaign_id)}</div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">${statusBadge(status)}${c.desired_event?.event_label ? `<span class="badge badge-low">Target: ${c.desired_event.event_label}</span>` : c.meta?.objective ? `<span class="badge badge-low">${c.meta.objective.replace(/_/g,' ')}</span>` : ''}</div>
         </div>
       </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.8rem; margin-bottom:12px;">
+      <div class="campaign-mobile-metrics">
         <div><div class="kpi-label">Spend</div><div>${spend > 0 ? fmt(spend,'currency') : '—'}</div></div>
-        <div><div class="kpi-label">Results</div><div>${result.count > 0 ? result.count : '—'}</div></div>
-        <div><div class="kpi-label">Cost/Result</div><div>${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</div></div>
-        <div><div class="kpi-label">Budget</div><div>${budget}</div></div>
-        <div><div class="kpi-label">CTR</div><div>${c.ctr ? fmt(c.ctr,'percent') : '—'}</div></div>
-        <div><div class="kpi-label">CPC</div><div>${c.cpc ? fmt(c.cpc,'currency') : '—'}</div></div>
+        <div><div class="kpi-label">Results</div><div>${result.count > 0 ? `${result.count} ${result.type}` : '—'}</div></div>
+        <div><div class="kpi-label">CPA</div><div>${costPerResult > 0 ? fmt(costPerResult,'currency') : '—'}</div></div>
+        <div><div class="kpi-label">Trend</div><div>${issue ? issue.title : 'Stable'}</div></div>
       </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <button class="btn btn-sm btn-primary" data-campaign-edit="${c.campaign_id}">Edit</button>
-        <button class="btn btn-sm" data-campaign-status="${c.campaign_id}" data-campaign-next-status="${status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">${status === 'ACTIVE' ? 'Pause' : 'Resume'}</button>
-        <button class="btn btn-sm" data-campaign-duplicate="${c.campaign_id}">Duplicate</button>
-        <button class="btn btn-sm" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">Open</button>
+      <div class="campaign-mobile-recommendation"><span>Recommended:</span> ${escapeHtml(recommendation)}</div>
+      <div class="campaign-mobile-actions">
+        <button class="btn btn-sm btn-primary" data-campaign-open="${c.campaign_id}" data-campaign-name="${escapeHtml(c.campaign_name || '')}">Review</button>
+        <button class="btn btn-sm" data-campaign-edit="${c.campaign_id}">Edit</button>
       </div>
     </div>`;
   }).join('')}</div>`;

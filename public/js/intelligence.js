@@ -65,6 +65,7 @@ async function loadIntelligence(container) {
       </div>
       <div id="intel-summary" class="mb-md"><div class="loading">Loading top summary</div></div>
       <div id="intel-action-queue" class="mb-md"><div class="loading">Loading action queue</div></div>
+      <div id="intel-decision-pipeline" class="mb-md"><div class="loading">Loading decision pipeline</div></div>
       <div class="intel-nav-shell mb-md">
         <button class="btn btn-sm" data-intel-nav="intel-action-queue">Now</button>
         <button class="btn btn-sm" data-intel-nav="intel-section-revenue">Revenue</button>
@@ -699,6 +700,52 @@ function renderIntelActionQueue() {
   });
   const generate = document.getElementById('intel-action-generate');
   if (generate) generate.onclick = () => generateProposedActions();
+  renderDecisionPipeline();
+}
+
+function renderDecisionPipeline() {
+  const el = document.getElementById('intel-decision-pipeline');
+  if (!el) return;
+  const rows = (intelShellState.proposals?.rows || []);
+  const counts = {
+    detected: rows.length,
+    evidence: rows.filter((row) => (row.payload?.evidence || []).length || (row.payload?.data_used || []).length).length,
+    recommendation: rows.filter((row) => row.status === 'proposed').length,
+    approval: rows.filter((row) => row.status === 'approved').length,
+    applied: rows.filter((row) => row.status === 'executed').length,
+    monitoring: rows.filter((row) => row.status === 'dismissed' || row.status === 'approved').length,
+  };
+  const stages = [
+    ['Detected issue', counts.detected],
+    ['Evidence', counts.evidence],
+    ['Recommendation', counts.recommendation],
+    ['Approval', counts.approval],
+    ['Applied', counts.applied],
+    ['Monitoring', counts.monitoring],
+  ];
+  const activeIndex = counts.recommendation ? 2 : counts.approval ? 3 : counts.detected ? 1 : 0;
+  el.innerHTML = `
+    <div class="decision-pipeline-card">
+      <div class="decision-pipeline-header">
+        <div>
+          <div class="intel-eyebrow">Decision Pipeline</div>
+          <div class="decision-pipeline-title">Detected issue → Evidence → Recommendation → Approval → Applied → Monitoring</div>
+        </div>
+        <button class="btn btn-sm" data-intel-nav="intel-section-proposals">Open recommendations</button>
+      </div>
+      <div class="decision-pipeline-steps">
+        ${stages.map(([label, count], index) => `
+          <div class="decision-step ${index === activeIndex ? 'is-active' : ''}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmt(count, 'integer')}</strong>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  el.querySelectorAll('[data-intel-nav]').forEach((button) => {
+    button.onclick = () => handleIntelNav(button.dataset.intelNav);
+  });
 }
 
 async function loadRevenueCopilot(forceRefresh = false) {
@@ -917,8 +964,12 @@ async function loadProposedActions() {
           const action = payload.recommended_action || {};
           const badge = row.status === 'approved' ? 'active' : row.status === 'dismissed' ? 'low' : row.priority === 'critical' ? 'critical' : row.priority === 'high' ? 'warning' : 'active';
           const confidencePct = fmt(Number(row.confidence || 0) * 100, 'integer');
+          const activeDecision = row.status === 'proposed' && ['critical', 'high'].includes(row.priority);
           return `
-            <div class="reco-card intel-proposal-card urgency-${escapeHtml(row.priority || 'low')}">
+            <div class="reco-card intel-proposal-card ${activeDecision ? 'active-decision' : ''} urgency-${escapeHtml(row.priority || 'low')}">
+              <div class="proposal-mini-pipeline">
+                <span class="done">Issue</span><span class="done">Evidence</span><span class="current">Recommendation</span><span>Approval</span><span>Monitoring</span>
+              </div>
               <div class="intel-proposal-header">
                 <div>
                   <div class="intel-proposal-title">${escapeHtml(row.title)}</div>

@@ -17,8 +17,11 @@ async function loadOverview(container) {
   const { from: dateFrom, to: dateTo, preset: activePreset } = overviewFilterState.getState();
   const prevRange = previousOverviewRange(dateFrom, dateTo);
   container.innerHTML = `
-    <div class="flex-between mb-md" style="flex-wrap: wrap; gap: 10px;">
-      <div></div>
+    <div class="command-toolbar mb-md">
+      <div>
+        <div class="command-kicker">Meta Ads Command Center</div>
+        <div class="command-subtitle">What happened, what matters, and what to do next.</div>
+      </div>
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <div class="date-selector">
           <button class="date-btn ${activePreset === 'today' ? 'active' : ''}" data-overview-preset="today">Today</button>
@@ -37,12 +40,19 @@ async function loadOverview(container) {
       </div>
     </div>
     <div id="date-label" class="text-muted mb-sm" style="font-size: 0.78rem; text-align: right;">${getDateLabel()}</div>
-    <div id="overview-briefing" class="mb-md"><div class="loading">Loading operator briefing</div></div>
-    <div id="overview-data-health" class="mb-md"></div>
+    <div id="overview-briefing" class="mb-md"><div class="loading">Loading command briefing</div></div>
     <div id="alert-area"></div>
     <div id="kpi-area" class="kpi-grid"><div class="loading">Loading KPIs</div></div>
+    <div class="overview-command-grid mb-md">
+      <div id="overview-performance-card"><div class="loading">Loading performance trend</div></div>
+      <div id="overview-action-card"><div class="loading">Loading urgent actions</div></div>
+    </div>
     <div id="campaigns-summary"></div>
-    <div id="meta-pulse-card" class="reco-card mb-md"><div class="loading">Loading Meta pulse</div></div>
+    <div class="overview-lower-grid">
+      <div id="overview-data-health"></div>
+      <div id="overview-recent-changes"></div>
+    </div>
+    <div id="meta-pulse-card" class="quiet-card mb-md"><div class="loading">Loading Meta pulse</div></div>
   `;
   bindOverviewControls(container);
 
@@ -115,25 +125,31 @@ async function loadOverview(container) {
       recommendations: recoRes.data || [],
       trackingAlerts: trackingAlertRes.alerts || [],
       health: healthRes,
+      campaigns,
     });
+    renderOverviewActionCard(recoRes.data || [], trackingAlertRes.alerts || [], healthRes);
+    renderOverviewPerformanceCard(campaigns, prevCampaigns);
+    renderOverviewRecentChanges(campaigns, prevCampaigns, trackingAlertRes.alerts || []);
 
     renderAlerts(recoRes.data || [], trackingAlertRes.alerts || []);
     kpiSection?.setData(`
       ${overviewMetrics.kpiCard('Spend', fmt(totalSpend, 'currency'))}
-      ${overviewMetrics.kpiCard('Impressions', fmt(totalImpressions, 'compact'))}
-      ${overviewMetrics.kpiCard('CTR', fmt(avgCtr, 'percent'))}
-      ${overviewMetrics.kpiCard('CPC', '$' + fmt(avgCpc, 'decimal'))}
-      ${overviewMetrics.kpiCard('Results (' + resultType + ')', fmt(totalResults, 'integer'))}
-      ${overviewMetrics.kpiCard('Cost per Result', fmt(avgCpa, 'currency'))}
+      ${overviewMetrics.kpiCard(resultType === '—' ? 'Leads / Results' : resultType, fmt(totalResults, 'integer'))}
+      ${overviewMetrics.kpiCard('CPA', fmt(avgCpa, 'currency'))}
+      ${overviewMetrics.kpiCard('Conversion Rate', totalClicks > 0 ? fmt(totalResults / totalClicks * 100, 'percent') : '—')}
     `);
     if (!campaigns.length) return campaignsSection?.setEmpty();
+    const previewRows = campaigns
+      .slice()
+      .sort((a, b) => (parseFloat(b.spend) || 0) - (parseFloat(a.spend) || 0))
+      .slice(0, 6);
     campaignsSection?.setData(`
       <div class="table-container">
         <div class="table-header">
-          <span class="table-title">${campaigns.length} Campaign${campaigns.length !== 1 ? 's' : ''}</span>
-          <span class="badge badge-active" style="font-size: 0.7rem;">LIVE FROM META</span>
+          <span class="table-title">Campaign preview</span>
+          <button class="btn btn-sm" data-nav-target="campaigns">Open all campaigns</button>
         </div>
-        ${renderCampaignTable(campaigns)}
+        ${renderCampaignTable(previewRows)}
       </div>
     `);
   } catch (err) {
@@ -190,7 +206,7 @@ function briefingDeltaCard(label, current, previous, formatter = 'integer', inve
   `;
 }
 
-function renderOverviewBriefing({ current, previous, recommendations, trackingAlerts, health }) {
+function renderOverviewBriefing({ current, previous, recommendations, trackingAlerts, health, campaigns }) {
   const el = document.getElementById('overview-briefing');
   if (!el) return;
   const urgentRecs = (recommendations || []).filter((row) => ['critical', 'high'].includes(row.urgency || row.priority));
@@ -203,31 +219,166 @@ function renderOverviewBriefing({ current, previous, recommendations, trackingAl
   ]);
   const healthState = healthSummary?.state || 'unavailable';
   const healthBadge = healthState === 'fresh' ? 'active' : healthState === 'failed' ? 'critical' : healthState === 'partial' || healthState === 'stale' ? 'warning' : 'low';
-  const topIssue = urgentRecs[0]?.recommendation || urgentRecs[0]?.root_cause || alerts[0]?.message || (healthState !== 'fresh' ? `Data health is ${healthState}` : 'No urgent issue detected');
+  const campaignDrivers = (campaigns || [])
+    .map((row) => {
+      const result = parseResults(row.actions, row.desired_event);
+      const spend = parseFloat(row.spend) || 0;
+      const cost = result.count > 0 ? spend / result.count : spend > 0 ? spend : 0;
+      return { row, result, spend, cost };
+    })
+    .sort((a, b) => b.cost - a.cost);
+  const topDriver = campaignDrivers[0];
+  const spendDelta = overviewDelta(current.spend, previous.spend);
+  const resultDelta = overviewDelta(current.results, previous.results);
+  const cpaCurrent = current.results > 0 ? current.spend / current.results : 0;
+  const cpaPrevious = previous.results > 0 ? previous.spend / previous.results : 0;
+  const cpaDelta = overviewDelta(cpaCurrent, cpaPrevious);
+  const topIssue = urgentRecs[0]?.recommendation || urgentRecs[0]?.root_cause || alerts[0]?.message
+    || (Math.abs(cpaDelta) >= 10 ? `CPA ${cpaDelta > 0 ? 'increased' : 'improved'} ${Math.abs(cpaDelta).toFixed(0)}% in this period` : '')
+    || (healthState !== 'fresh' ? `Data health is ${healthState}` : 'No urgent issue detected');
+  const recommendedAction = urgentRecs[0]?.action || urgentRecs[0]?.recommendation
+    || (cpaDelta > 10 && topDriver ? `Review ${topDriver.row.campaign_name || topDriver.row.campaign_id} and reduce waste before scaling.` : '')
+    || (resultDelta > 0 ? 'Keep the current campaign mix running and watch CPA movement.' : 'Review campaign triage before making budget changes.');
+  const impact = urgentRecs[0]?.impact || urgentRecs[0]?.expected_impact
+    || (topDriver ? `${fmt(topDriver.spend, 'currency')} spend driver · ${topDriver.result.count || 0} tracked results` : 'Low risk: no single campaign driver detected.');
+  const confidence = healthState === 'fresh' ? 'High' : healthState === 'partial' || healthState === 'stale' ? 'Medium' : 'Low';
+  const risk = urgentRecs[0]?.urgency === 'critical' || healthState === 'failed' ? 'High'
+    : Math.abs(cpaDelta) >= 15 || urgentRecs.length ? 'Medium'
+      : 'Low';
   el.innerHTML = `
-    <div class="operator-briefing">
-      <div class="briefing-header">
+    <div class="command-hero-card">
+      <div class="command-hero-main">
         <div>
-          <div class="intel-eyebrow">Operator Briefing</div>
-          <div class="briefing-title">${escapeHtml(topIssue)}</div>
-          <div class="briefing-subtitle">What changed, what matters, and where to go next.</div>
+          <div class="intel-eyebrow">Today's Priority</div>
+          <div class="command-hero-title">${escapeHtml(topIssue)}</div>
+          <div class="command-hero-copy">${escapeHtml(impact)}</div>
         </div>
-        <div class="briefing-badges">
-          <span class="badge badge-${healthBadge}">Health ${escapeHtml(healthState)}</span>
-          <span class="badge badge-${urgentRecs.length ? 'warning' : 'active'}">${fmt(urgentRecs.length, 'integer')} urgent</span>
-          <span class="badge badge-${alerts.length ? 'critical' : 'low'}">${fmt(alerts.length, 'integer')} alerts</span>
+        <div class="command-recommendation">
+          <div class="kpi-label">Recommended action</div>
+          <div>${escapeHtml(recommendedAction)}</div>
+        </div>
+        <div class="command-hero-actions">
+          <button class="btn btn-primary" data-nav-target="${urgentRecs.length ? 'ai' : 'campaigns'}" data-ux-track="overview_primary_cta">${urgentRecs.length ? 'Review recommendation' : 'Review campaigns'}</button>
+          <button class="btn" data-nav-target="intelligence">View evidence</button>
         </div>
       </div>
-      <div class="briefing-grid">
-        ${briefingDeltaCard('Spend', current.spend, previous.spend, 'currency')}
-        ${briefingDeltaCard('Results', current.results, previous.results, 'integer')}
-        ${briefingDeltaCard('Clicks', current.clicks, previous.clicks, 'compact')}
-        ${briefingDeltaCard('Reach', current.reach, previous.reach, 'compact')}
+      <div class="command-hero-side">
+        <div class="command-side-stat"><span>Confidence</span><strong>${escapeHtml(confidence)}</strong></div>
+        <div class="command-side-stat"><span>Risk</span><strong>${escapeHtml(risk)}</strong></div>
+        <div class="command-side-stat"><span>Health</span><strong>${escapeHtml(healthState)}</strong></div>
+        <div class="command-side-stat"><span>Urgent</span><strong>${fmt(urgentRecs.length, 'integer')}</strong></div>
       </div>
-      <div class="briefing-actions">
-        <button class="btn btn-sm btn-primary" data-nav-target="${urgentRecs.length ? 'ai' : 'intelligence'}" data-ux-track="overview_primary_cta">${urgentRecs.length ? 'Review urgent actions' : 'Open Decision Center'}</button>
-        <button class="btn btn-sm" data-nav-target="campaigns" data-ux-track="overview_campaigns_cta">Open campaigns</button>
-        <button class="btn btn-sm" data-nav-target="settings" data-ux-track="overview_settings_cta">Check settings</button>
+    </div>
+  `;
+}
+
+function renderOverviewActionCard(recommendations, trackingAlerts, health) {
+  const el = document.getElementById('overview-action-card');
+  if (!el) return;
+  const healthSummary = window.DataHealth?.summarizeHealth(health, [
+    { source: 'meta', dataset: 'warehouse_insights' },
+    { source: 'meta', dataset: 'entities' },
+    { source: 'meta', dataset: 'leads' },
+  ]);
+  const actions = [];
+  (recommendations || []).filter((row) => ['critical', 'high'].includes(row.urgency || row.priority)).slice(0, 3).forEach((row) => {
+    actions.push({
+      title: row.recommendation || row.title || 'Review recommendation',
+      meta: row.impact || row.root_cause || 'Needs operator review',
+      badge: row.urgency === 'critical' || row.priority === 'critical' ? 'critical' : 'warning',
+    });
+  });
+  (trackingAlerts || []).slice(0, 2).forEach((alert) => {
+    actions.push({ title: alert.message || 'Tracking alert', meta: 'Data quality may affect decisions', badge: 'critical' });
+  });
+  if (healthSummary && healthSummary.state !== 'fresh') {
+    actions.push({ title: `Data health is ${healthSummary.state}`, meta: healthSummary.extra_reason || 'Check sync truth before scaling actions.', badge: 'warning' });
+  }
+  el.innerHTML = `
+    <div class="standard-card chart-insight-card">
+      <div class="table-header">
+        <div>
+          <div class="table-title">AI recommendations / urgent actions</div>
+          <div class="intel-section-subtitle">The highest-priority items from recommendations, alerts, and data health.</div>
+        </div>
+        <button class="btn btn-sm" data-nav-target="intelligence">Open Decision Center</button>
+      </div>
+      <div class="insight-list">
+        ${actions.length ? actions.map((item) => `
+          <div class="insight-row">
+            <span class="badge badge-${item.badge}">${item.badge}</span>
+            <div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.meta)}</span></div>
+          </div>
+        `).join('') : '<div class="empty-state"><div class="empty-state-text">No urgent action detected for this range.</div></div>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderOverviewPerformanceCard(campaigns, prevCampaigns) {
+  const el = document.getElementById('overview-performance-card');
+  if (!el) return;
+  const current = summarizeOverviewCampaigns(campaigns || []);
+  const previous = summarizeOverviewCampaigns(prevCampaigns || []);
+  const currentCpa = current.results > 0 ? current.spend / current.results : 0;
+  const previousCpa = previous.results > 0 ? previous.spend / previous.results : 0;
+  const cpaDelta = overviewDelta(currentCpa, previousCpa);
+  const topRows = (campaigns || [])
+    .slice()
+    .sort((a, b) => (parseFloat(b.spend) || 0) - (parseFloat(a.spend) || 0))
+    .slice(0, 5);
+  const maxSpend = Math.max(...topRows.map((row) => parseFloat(row.spend) || 0), 1);
+  el.innerHTML = `
+    <div class="standard-card chart-insight-card">
+      <div class="table-header">
+        <div>
+          <div class="table-title">CPA ${cpaDelta > 0 ? 'is up' : cpaDelta < 0 ? 'is down' : 'is flat'} ${Math.abs(cpaDelta).toFixed(0)}%</div>
+          <div class="intel-section-subtitle">${getDateLabel()} · spend efficiency by campaign.</div>
+        </div>
+        <span class="badge badge-${cpaDelta > 10 ? 'warning' : cpaDelta < -10 ? 'active' : 'low'}">${currentCpa ? fmt(currentCpa, 'currency') : '—'} CPA</span>
+      </div>
+      <div class="spend-efficiency-bars">
+        ${topRows.map((row) => {
+          const spend = parseFloat(row.spend) || 0;
+          const result = parseResults(row.actions, row.desired_event);
+          const cpa = result.count > 0 ? spend / result.count : 0;
+          return `
+            <div class="efficiency-row">
+              <div class="efficiency-label">${escapeHtml(row.campaign_name || row.campaign_id)}</div>
+              <div class="efficiency-track"><span style="width:${Math.max(8, spend / maxSpend * 100)}%"></span></div>
+              <div class="efficiency-value">${cpa ? fmt(cpa, 'currency') : '—'}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderOverviewRecentChanges(campaigns, prevCampaigns, alerts) {
+  const el = document.getElementById('overview-recent-changes');
+  if (!el) return;
+  const current = summarizeOverviewCampaigns(campaigns || []);
+  const previous = summarizeOverviewCampaigns(prevCampaigns || []);
+  const changes = [
+    ['Spend', overviewDelta(current.spend, previous.spend), current.spend, 'currency'],
+    ['Results', overviewDelta(current.results, previous.results), current.results, 'integer'],
+    ['Clicks', overviewDelta(current.clicks, previous.clicks), current.clicks, 'compact'],
+  ];
+  el.innerHTML = `
+    <div class="quiet-card recent-changes-card">
+      <div class="table-header">
+        <span class="table-title">Recent changes</span>
+        <span class="badge badge-low">${fmt(alerts.length || 0, 'integer')} alerts</span>
+      </div>
+      <div class="recent-change-list">
+        ${changes.map(([label, delta, value, formatter]) => `
+          <div class="recent-change-row">
+            <span>${label}</span>
+            <strong>${fmt(value, formatter)}</strong>
+            <em class="${delta > 0 ? 'text-green' : delta < 0 ? 'text-red' : 'text-muted'}">${delta > 0 ? '+' : ''}${delta.toFixed(1)}%</em>
+          </div>
+        `).join('')}
       </div>
     </div>
   `;
