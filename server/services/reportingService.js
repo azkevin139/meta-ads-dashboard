@@ -193,7 +193,7 @@ async function getLeadMetrics(accountId, range) {
     WITH lead_rows AS (
       SELECT
         v.*,
-        ${dedupeKeyExpression('v')} AS dedupe_key,
+        COALESCE(clink.canonical_lead_id::text, ${dedupeKeyExpression('v')}) AS dedupe_key,
         CASE
           WHEN v.meta_lead_id IS NOT NULL
             OR lower(COALESCE(v.source_event_type, '')) LIKE 'fb-lead%'
@@ -203,6 +203,10 @@ async function getLeadMetrics(accountId, range) {
         END AS lead_source,
         ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
+      LEFT JOIN canonical_lead_links clink
+        ON clink.account_id = v.account_id
+        AND clink.source_type = 'visitor'
+        AND clink.source_id = v.client_id
       WHERE v.account_id = $1
         AND ${leadIdentityFilter('v')}
     ),
@@ -284,9 +288,13 @@ async function getPipeline(accountId, range) {
     WITH lead_rows AS (
       SELECT
         v.*,
-        ${dedupeKeyExpression('v')} AS dedupe_key,
+        COALESCE(clink.canonical_lead_id::text, ${dedupeKeyExpression('v')}) AS dedupe_key,
         ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
+      LEFT JOIN canonical_lead_links clink
+        ON clink.account_id = v.account_id
+        AND clink.source_type = 'visitor'
+        AND clink.source_id = v.client_id
       WHERE v.account_id = $1
         AND ${leadIdentityFilter('v')}
     ),
@@ -332,12 +340,16 @@ async function getCreativePerformance(accountId, range) {
     lead_rows AS (
       SELECT
         v.ad_id,
-        ${dedupeKeyExpression('v')} AS dedupe_key,
+        COALESCE(clink.canonical_lead_id::text, ${dedupeKeyExpression('v')}) AS dedupe_key,
         (v.qualified_at IS NOT NULL) AS is_qualified,
         v.normalized_stage,
         v.revenue,
         ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
+      LEFT JOIN canonical_lead_links clink
+        ON clink.account_id = v.account_id
+        AND clink.source_type = 'visitor'
+        AND clink.source_id = v.client_id
       WHERE v.account_id = $1
         AND v.ad_id IS NOT NULL
         AND ${leadIdentityFilter('v')}
@@ -413,10 +425,14 @@ async function getCreativeCoverage(accountId, range) {
     ),
     lead_rows AS (
       SELECT
-        ${dedupeKeyExpression('v')} AS dedupe_key,
+        COALESCE(clink.canonical_lead_id::text, ${dedupeKeyExpression('v')}) AS dedupe_key,
         v.ad_id,
         ${leadTimeExpression('v')} AS lead_time
       FROM visitors v
+      LEFT JOIN canonical_lead_links clink
+        ON clink.account_id = v.account_id
+        AND clink.source_type = 'visitor'
+        AND clink.source_id = v.client_id
       WHERE v.account_id = $1
         AND ${leadIdentityFilter('v')}
     ),
