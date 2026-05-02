@@ -32,6 +32,13 @@
 
       const userInfo = document.getElementById('user-info');
       if (userInfo) userInfo.textContent = currentUser.name || currentUser.email;
+      const userRole = document.getElementById('user-role');
+      if (userRole) userRole.textContent = currentUser.role === 'admin' ? 'Admin / Operator' : 'Operator';
+      const userAvatar = document.getElementById('user-avatar');
+      if (userAvatar) {
+        const label = currentUser.name || currentUser.email || 'Operator';
+        userAvatar.textContent = label.trim().charAt(0).toUpperCase();
+      }
     }
 
     return {
