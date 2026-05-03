@@ -2218,3 +2218,60 @@ test('admin account truth-check returns account-scoped diagnostic payload', asyn
     restoreCache(originals);
   }
 });
+
+test('admin jobs health returns durable job run summaries', async () => {
+  const authServicePath = require.resolve('../services/authService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const syncTruthPath = require.resolve('../services/syncTruthService');
+  const cspPath = require.resolve('../services/cspService');
+  const accountTruthPath = require.resolve('../services/accountTruthService');
+  const jobRunPath = require.resolve('../services/jobRunService');
+  const routePath = require.resolve('../routes/admin');
+  const originals = new Map([
+    [authServicePath, require.cache[authServicePath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [syncTruthPath, require.cache[syncTruthPath]],
+    [cspPath, require.cache[cspPath]],
+    [accountTruthPath, require.cache[accountTruthPath]],
+    [jobRunPath, require.cache[jobRunPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let limitSeen = null;
+  delete require.cache[routePath];
+  require.cache[authServicePath] = {
+    exports: {
+      getAllUsers: async () => [],
+      getActiveSessions: async () => [],
+      updateUser: async () => ({}),
+      deleteUser: async () => ({}),
+    },
+  };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {}, list: async () => [] } };
+  require.cache[syncTruthPath] = { exports: { getHealth: async () => [] } };
+  require.cache[cspPath] = { exports: { getSummary: async () => [] } };
+  require.cache[accountTruthPath] = { exports: { getTruthCheck: async () => ({}) } };
+  require.cache[jobRunPath] = {
+    exports: {
+      getHealth: async ({ limit }) => {
+        limitSeen = limit;
+        return [{ job_name: 'warehouse-sync', status: 'success', summary: { accounts: 3 } }];
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/admin');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', id: 1 };
+      next();
+    });
+    const res = await invoke(app, { method: 'GET', url: '/jobs/health?limit=5' });
+    assert.equal(res.status, 200);
+    assert.equal(limitSeen, 5);
+    assert.equal(res.json.data[0].job_name, 'warehouse-sync');
+    assert.equal(res.json.data[0].summary.accounts, 3);
+  } finally {
+    restoreCache(originals);
+  }
+});

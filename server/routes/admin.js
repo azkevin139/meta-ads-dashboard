@@ -6,6 +6,7 @@ const securityAudit = require('../services/securityAuditService');
 const syncTruth = require('../services/syncTruthService');
 const cspService = require('../services/cspService');
 const accountTruth = require('../services/accountTruthService');
+const jobRuns = require('../services/jobRunService');
 const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
 
@@ -112,6 +113,17 @@ router.get('/data-health', async (req, res) => {
         'no_token',
       ],
     });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/jobs/health', async (req, res) => {
+  try {
+    const data = await jobRuns.getHealth({
+      limit: req.query.limit ? ensureInteger(req.query.limit, 'limit must be a positive integer') : 100,
+    });
+    res.json({ data });
   } catch (err) {
     sendError(res, err);
   }
