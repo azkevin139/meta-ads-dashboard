@@ -238,7 +238,7 @@ async function getLeadMetrics(accountId, range) {
       COUNT(*) FILTER (WHERE lead_source = 'meta_lead_form' AND (normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0))::int AS meta_won_count,
       COUNT(*) FILTER (WHERE lead_source = 'website_form' AND (normalized_stage = 'closed_won' OR COALESCE(revenue, 0) > 0))::int AS website_won_count,
       COUNT(*) FILTER (WHERE normalized_stage = 'closed_lost')::int AS lost_count,
-      COUNT(*) FILTER (WHERE normalized_stage IS NULL OR normalized_stage IN ('new_lead', 'contacted'))::int AS unqualified_leads,
+      COUNT(*) FILTER (WHERE qualified_at IS NULL)::int AS unqualified_leads,
       COUNT(*) FILTER (WHERE normalized_stage IS NULL)::int AS null_stage_count
     FROM scoped
   `, [accountId, range.since, range.until, REPORTING_TIMEZONE]);
@@ -565,6 +565,7 @@ async function getLeadReport(accountId, params = {}) {
       meta_leads: 'Deduped leads whose acquisition source is a Meta native lead form or Instant Form.',
       website_leads: 'Deduped leads whose acquisition source is a website or landing-page form submission.',
       qualified_leads: 'A lead from Meta or the website that replied to outreach by WhatsApp, SMS, email, Facebook Messenger, Instagram, or live chat. Recorded from LINXIO conversation activity.',
+      unqualified_leads: 'Deduped leads in the selected period that have not yet sent an inbound reply recorded by LINXIO.',
       meta_qualified_leads: 'Qualified leads whose acquisition source is Meta native lead forms.',
       website_qualified_leads: 'Qualified leads whose acquisition source is website or landing-page forms.',
       qualified_leads_stage: 'Transitional comparison only: how the previous methodology counted qualified leads using normalized pipeline stage. Will be removed after one reporting cycle.',
