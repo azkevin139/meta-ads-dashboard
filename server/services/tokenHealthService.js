@@ -88,7 +88,14 @@ async function checkAccount(accountRow) {
 }
 
 async function checkAllAccounts() {
-  const rows = await queryAll('SELECT id, meta_account_id, access_token, encrypted_token FROM accounts ORDER BY id');
+  const rows = await queryAll(`
+    SELECT id, meta_account_id, access_token, encrypted_token
+    FROM accounts
+    WHERE COALESCE(is_active, false) = true
+       OR product_mode = 'lead_gen'
+       OR COALESCE(fast_sync_enabled, false) = true
+    ORDER BY id
+  `);
   const results = [];
   for (const row of rows) {
     results.push(await checkAccount(row));

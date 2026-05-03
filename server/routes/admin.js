@@ -7,6 +7,7 @@ const syncTruth = require('../services/syncTruthService');
 const cspService = require('../services/cspService');
 const accountTruth = require('../services/accountTruthService');
 const jobRuns = require('../services/jobRunService');
+const attributionLoss = require('../services/attributionLossService');
 const { queryAll } = require('../db');
 const { ensureBoolean, ensureEnum, ensureInteger, ensureObject, optionalTrimmedString } = require('../validation');
 
@@ -122,6 +123,20 @@ router.get('/jobs/health', async (req, res) => {
   try {
     const data = await jobRuns.getHealth({
       limit: req.query.limit ? ensureInteger(req.query.limit, 'limit must be a positive integer') : 100,
+    });
+    res.json({ data });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.get('/attribution-loss', async (req, res) => {
+  try {
+    const data = await attributionLoss.getLossForAccounts({
+      accountId: req.query.accountId ? ensureInteger(req.query.accountId, 'accountId must be a positive integer') : undefined,
+      preset: optionalTrimmedString(req.query.preset, 50),
+      since: optionalTrimmedString(req.query.since, 20),
+      until: optionalTrimmedString(req.query.until, 20),
     });
     res.json({ data });
   } catch (err) {

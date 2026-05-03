@@ -2275,3 +2275,63 @@ test('admin jobs health returns durable job run summaries', async () => {
     restoreCache(originals);
   }
 });
+
+test('admin attribution-loss returns account-scoped loss summary', async () => {
+  const authServicePath = require.resolve('../services/authService');
+  const securityAuditPath = require.resolve('../services/securityAuditService');
+  const syncTruthPath = require.resolve('../services/syncTruthService');
+  const cspPath = require.resolve('../services/cspService');
+  const accountTruthPath = require.resolve('../services/accountTruthService');
+  const jobRunPath = require.resolve('../services/jobRunService');
+  const attributionLossPath = require.resolve('../services/attributionLossService');
+  const routePath = require.resolve('../routes/admin');
+  const originals = new Map([
+    [authServicePath, require.cache[authServicePath]],
+    [securityAuditPath, require.cache[securityAuditPath]],
+    [syncTruthPath, require.cache[syncTruthPath]],
+    [cspPath, require.cache[cspPath]],
+    [accountTruthPath, require.cache[accountTruthPath]],
+    [jobRunPath, require.cache[jobRunPath]],
+    [attributionLossPath, require.cache[attributionLossPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let paramsSeen = null;
+  delete require.cache[routePath];
+  require.cache[authServicePath] = {
+    exports: {
+      getAllUsers: async () => [],
+      getActiveSessions: async () => [],
+      updateUser: async () => ({}),
+      deleteUser: async () => ({}),
+    },
+  };
+  require.cache[securityAuditPath] = { exports: { fromRequest: async () => {}, list: async () => [] } };
+  require.cache[syncTruthPath] = { exports: { getHealth: async () => [] } };
+  require.cache[cspPath] = { exports: { getSummary: async () => [] } };
+  require.cache[accountTruthPath] = { exports: { getTruthCheck: async () => ({}) } };
+  require.cache[jobRunPath] = { exports: { getHealth: async () => [] } };
+  require.cache[attributionLossPath] = {
+    exports: {
+      getLossForAccounts: async (params) => {
+        paramsSeen = params;
+        return [{ account_id: 11, total_leads: 25, missing: { ad_id: 3 }, status: 'ok' }];
+      },
+    },
+  };
+
+  try {
+    const router = require('../routes/admin');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { role: 'admin', id: 1 };
+      next();
+    });
+    const res = await invoke(app, { method: 'GET', url: '/attribution-loss?accountId=11&preset=60d' });
+    assert.equal(res.status, 200);
+    assert.equal(paramsSeen.accountId, 11);
+    assert.equal(paramsSeen.preset, '60d');
+    assert.equal(res.json.data[0].missing.ad_id, 3);
+  } finally {
+    restoreCache(originals);
+  }
+});

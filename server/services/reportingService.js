@@ -7,8 +7,8 @@ const REPORT_CACHE_TTL_MS = 60 * 1000;
 const REPORT_CACHE_MAX_ENTRIES = 256;
 const reportCache = new Map();
 
-function reportCacheKey(accountId, range) {
-  return `${accountId}|${range.since}|${range.until}|${range.preset}`;
+function reportCacheKey(accountId, range, options = {}) {
+  return `${accountId}|${range.since}|${range.until}|${range.preset}|daily:${options.includeDailySpend ? '1' : '0'}`;
 }
 
 function reportCacheGet(key) {
@@ -513,14 +513,18 @@ function withComparisons(current, previous) {
 async function getLeadReport(accountId, params = {}) {
   const range = resolveRange(params);
   const previous = previousRange(range);
+  const includeDailySpend = params.includeDailySpend === true
+    || params.includeDailySpend === 'true'
+    || params.include_daily_spend === true
+    || params.include_daily_spend === 'true';
 
-  const cacheKey = reportCacheKey(accountId, range);
+  const cacheKey = reportCacheKey(accountId, range, { includeDailySpend });
   const cached = reportCacheGet(cacheKey);
   if (cached) return cached;
 
   const [meta, dailySpend, leads, website, pipeline, creativePerformance, creativeCoverage, health] = await Promise.all([
     getMetaMetrics(accountId, range),
-    getDailySpend(accountId, range),
+    includeDailySpend ? getDailySpend(accountId, range) : Promise.resolve(undefined),
     getLeadMetrics(accountId, range),
     getWebsiteMetrics(accountId, range),
     getPipeline(accountId, range),
@@ -569,14 +573,18 @@ async function getLeadReport(accountId, params = {}) {
       reply_rate: 'replied_leads / contacted_leads. Tells you how often outreach actually starts a conversation.',
       acquisition_source: 'Meta daily insights are the source of truth for spend, impressions, reach, and clicks.',
       pipeline_source: 'LINXIO-derived lifecycle state is the source of truth for sales pipeline progression. Pipeline status is separate from qualification.',
+      pipeline_counts: 'Pipeline counts show current pipeline status for leads acquired in the selected report period. They are not the same as period-created opportunities.',
+      reporting_timezone: `Report ranges and comparisons are calculated in ${REPORTING_TIMEZONE}. Viewer timestamps may be displayed in the reader's local timezone.`,
+      source_split: 'Meta leads and landing-page leads are separated by acquisition source, then deduped into total leads using the canonical lead identity rules.',
+      qualification_vs_pipeline: 'Qualified leads are reply-qualified. Pipeline stages show sales progression and may be higher or lower than qualified leads depending on current stage state.',
+      freshness: 'Freshness shows when the underlying Meta, tracking, and LINXIO-derived data was last updated. Partial or stale sources can affect trust in the current report.',
       creative_name: 'Creative names come from the Meta ad name at ad/creative level.',
       creative_performance: 'Creative performance combines Meta ad-level delivery with deduped LINXIO lead outcomes attributed to the same Meta ad ID. Leaderboard is shown only when ad-level data and lead attribution coverage are sufficient.',
+      creative_coverage: 'Creative leaderboard availability depends on ad-level Meta insights, Meta ad metadata, and lead attribution to Meta ad IDs for this account/date range.',
     },
     summary: currentFlat,
     previous_summary: previousFlat,
     deltas_pct: withComparisons(currentFlat, previousFlat),
-    dailySpend,
-    daily_spend: dailySpend,
     metaFunnel: {
       impressions: meta.impressions,
       reach: meta.reach,
@@ -635,6 +643,10 @@ async function getLeadReport(accountId, params = {}) {
     freshness: health,
     health,
   };
+  if (includeDailySpend) {
+    payload.dailySpend = dailySpend;
+    payload.daily_spend = dailySpend;
+  }
   reportCachePut(cacheKey, payload);
   return payload;
 }

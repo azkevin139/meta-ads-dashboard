@@ -269,6 +269,9 @@ async function syncAllAccounts() {
   const rows = await queryAll(`
     SELECT id
     FROM accounts
+    WHERE COALESCE(is_active, false) = true
+       OR product_mode = 'lead_gen'
+       OR COALESCE(fast_sync_enabled, false) = true
     ORDER BY COALESCE(last_leads_sync_success_at, last_leads_sync_at, to_timestamp(0)) ASC, id ASC
     LIMIT $1
   `, [MAX_ACCOUNTS_PER_RUN]);

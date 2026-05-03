@@ -465,7 +465,14 @@ async function syncAccountInsightsRange(accountId, { since, until, levels = ['ac
 }
 
 async function syncAll({ days = 3 } = {}) {
-  const accounts = await queryAll('SELECT id FROM accounts ORDER BY id');
+  const accounts = await queryAll(`
+    SELECT id
+    FROM accounts
+    WHERE COALESCE(is_active, false) = true
+       OR product_mode = 'lead_gen'
+       OR COALESCE(fast_sync_enabled, false) = true
+    ORDER BY id
+  `);
   const results = [];
   for (const row of accounts) {
     try {
