@@ -221,12 +221,13 @@ router.post('/update-ad', adminOrOperator, async (req, res) => {
     const description = optionalTrimmedString(body.description, 2000);
     const cta = optionalTrimmedString(body.cta, 100);
     const linkUrl = optionalTrimmedString(body.linkUrl, 2000);
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdId: adId });
 
     // To edit an ad's creative, we need to create a new creative with updated fields
     // and then update the ad to use the new creative
     const adData = await metaApi.metaGet(`/${adId}`, {
       fields: 'creative{object_story_spec,asset_feed_spec}',
-    }, req.metaAccount);
+    }, scope.account);
     const oldCreative = adData.creative || {};
     const oldStorySpec = oldCreative.object_story_spec || {};
     const oldLinkData = oldStorySpec.link_data || {};
@@ -247,17 +248,17 @@ router.post('/update-ad', adminOrOperator, async (req, res) => {
     }
 
     // Create new creative
-    const newCreative = await metaApi.metaPost(`/${metaApi.contextAccountId(req.metaAccount)}/adcreatives`, {
+    const newCreative = await metaApi.metaPost(`/${metaApi.contextAccountId(scope.account)}/adcreatives`, {
       object_story_spec: {
         page_id: pageId,
         link_data: newLinkData,
       },
-    }, req.metaAccount);
+    }, scope.account);
 
     // Update ad to use new creative
     await metaApi.metaPost(`/${adId}`, {
       creative: { creative_id: newCreative.id },
-    }, req.metaAccount);
+    }, scope.account);
 
     res.json({ success: true, new_creative_id: newCreative.id });
   } catch (err) {
@@ -319,9 +320,10 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
     const dailyBudget = body.dailyBudget;
     const bidStrategy = optionalTrimmedString(body.bidStrategy, 100);
     const status = optionalTrimmedString(body.status, 50);
+    const scope = await metaScope.resolveAuthorizedMetaScope(req, { requestedAdsetId: adsetId });
 
     // First get current targeting to merge
-    const current = await metaApi.metaGet(`/${adsetId}`, { fields: 'targeting' }, req.metaAccount);
+    const current = await metaApi.metaGet(`/${adsetId}`, { fields: 'targeting' }, scope.account);
     const currentTargeting = current.targeting || {};
 
     // Build update payload
@@ -344,7 +346,7 @@ router.post('/update-adset', adminOrOperator, async (req, res) => {
     if (bidStrategy) update.bid_strategy = bidStrategy;
     if (status) update.status = status;
 
-    const result = await metaApi.metaPost(`/${adsetId}`, update, req.metaAccount);
+    const result = await metaApi.metaPost(`/${adsetId}`, update, scope.account);
     res.json({ success: true, result });
   } catch (err) {
     sendError(res, err);

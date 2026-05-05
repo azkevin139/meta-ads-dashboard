@@ -588,6 +588,89 @@ test('meta update-ad requires adId', async () => {
   }
 });
 
+test('meta update-ad rejects ads outside the authorized account scope before Meta mutation', async () => {
+  const dbPath = require.resolve('../db');
+  const accountAccessPath = require.resolve('../services/accountAccessService');
+  const accountServicePath = require.resolve('../services/accountService');
+  const metaScopePath = require.resolve('../services/metaScopeService');
+  const metaApiPath = require.resolve('../services/metaApi');
+  const leadSyncPath = require.resolve('../services/metaLeadSyncService');
+  const routePath = require.resolve('../routes/meta');
+  const originals = new Map([
+    [dbPath, require.cache[dbPath]],
+    [accountAccessPath, require.cache[accountAccessPath]],
+    [accountServicePath, require.cache[accountServicePath]],
+    [metaScopePath, require.cache[metaScopePath]],
+    [metaApiPath, require.cache[metaApiPath]],
+    [leadSyncPath, require.cache[leadSyncPath]],
+    [routePath, require.cache[routePath]],
+  ]);
+
+  let metaPostCalled = false;
+  delete require.cache[routePath];
+  delete require.cache[metaScopePath];
+  require.cache[dbPath] = {
+    exports: {
+      queryOne: async (sql) => {
+        if (sql.includes('FROM ads')) return { account_id: 22, meta_ad_id: 'ad_b' };
+        return null;
+      },
+    },
+  };
+  require.cache[accountAccessPath] = {
+    exports: {
+      resolveAuthorizedAccount: async (_req, accountId) => {
+        if (Number(accountId) === 11) return { id: 11, meta_account_id: 'act_11', access_token: 'tok_11' };
+        const err = new Error('Account access denied');
+        err.httpStatus = 403;
+        throw err;
+      },
+    },
+  };
+  require.cache[accountServicePath] = {
+    exports: {
+      getAccountById: async (id) => ({ id, meta_account_id: `act_${id}`, access_token: `tok_${id}` }),
+    },
+  };
+  require.cache[metaApiPath] = {
+    exports: {
+      metaGet: async () => ({}),
+      metaPost: async () => {
+        metaPostCalled = true;
+        return {};
+      },
+      contextAccountId: () => 'act_11',
+      getAdAccounts: async () => [],
+      getCampaigns: async () => [],
+      getAdSets: async () => [],
+      getAds: async () => [],
+      getInsightsRange: async () => [],
+      getInsights: async () => [],
+    },
+  };
+  require.cache[leadSyncPath] = { exports: { syncAccountLeads: async () => ({}) } };
+
+  try {
+    const router = require('../routes/meta');
+    const app = makeJsonApp(router, (req, _res, next) => {
+      req.user = { id: 1, role: 'operator', email: 'ops@test.com' };
+      req.metaAccount = { id: 11, meta_account_id: 'act_11', access_token: 'tok_11' };
+      next();
+    });
+
+    const res = await invoke(app, {
+      method: 'POST',
+      url: '/update-ad',
+      headers: { 'content-type': 'application/json' },
+      body: { adId: 'ad_b', headline: 'Blocked headline' },
+    });
+    assert.equal(res.status, 403);
+    assert.equal(metaPostCalled, false);
+  } finally {
+    restoreCache(originals);
+  }
+});
+
 test('meta leads sync route validates mode and forwards manual options', async () => {
   const metaApiPath = require.resolve('../services/metaApi');
   const leadSyncPath = require.resolve('../services/metaLeadSyncService');
