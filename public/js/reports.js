@@ -45,7 +45,7 @@ async function loadLeadReport(preset) {
     const result = await apiGet(`/reports/lead-summary?${query.toString()}`);
     renderLeadReport(body, result);
   } catch (err) {
-    body.innerHTML = `<div class="empty-state"><div class="empty-state-title">Report failed to load</div><div class="empty-state-text">${escapeHtml(err.message)}</div></div>`;
+    body.innerHTML = `<div class="empty-state"><div class="empty-state-title">Report failed to load</div><div class="empty-state-text">${safeErrorMessage(err)}</div></div>`;
   }
 }
 
@@ -250,7 +250,7 @@ async function loadReportLinks() {
       </section>
     `;
   } catch (err) {
-    wrap.innerHTML = `<section class="report-card"><div class="text-muted">Report link management unavailable: ${escapeHtml(err.message)}</div></section>`;
+    wrap.innerHTML = `<section class="report-card"><div class="text-muted">Report link management unavailable: ${safeErrorMessage(err)}</div></section>`;
   }
 }
 
@@ -269,7 +269,7 @@ async function createClientReportLink() {
       prompt('Client report link', `${window.location.origin}${path}`);
     }
   } catch (err) {
-    toast(`Report link failed: ${err.message}`, 'error');
+    toast(`Report link failed: ${safeErrorMessage(err)}`, 'error');
   }
 }
 
@@ -282,6 +282,6 @@ async function revokeClientReportLink(id) {
     await apiPost(`/reports/links/${id}/revoke?${query.toString()}`, {});
     await loadReportLinks();
   } catch (err) {
-    toast(`Revoke failed: ${err.message}`, 'error');
+    toast(`Revoke failed: ${safeErrorMessage(err)}`, 'error');
   }
 }
