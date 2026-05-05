@@ -15,6 +15,26 @@ try {
   ipKeyGenerator = erl.ipKeyGenerator || ((ip) => String(ip || 'unknown'));
 } catch (e) { rateLimit = null; ipKeyGenerator = (ip) => String(ip || 'unknown'); }
 
+function buildCspOptions(config = {}) {
+  return {
+    reportOnly: config.cspReportOnly !== false,
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      baseUri: ["'self'"],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      connectSrc: ["'self'", 'https://track.lnxo.me', 'https://n8n.emma42.com'],
+      frameAncestors: ["'none'"],
+      formAction: ["'self'"],
+      reportUri: ['/api/security/csp-report'],
+    },
+  };
+}
+
 function createApp(config) {
   const authRoutes = require('./routes/auth');
   const adminRoutes = require('./routes/admin');
@@ -47,23 +67,7 @@ function createApp(config) {
 
   if (helmet) {
     app.use(helmet({
-      contentSecurityPolicy: {
-        reportOnly: true,
-        useDefaults: false,
-        directives: {
-          defaultSrc: ["'self'"],
-          baseUri: ["'self'"],
-          objectSrc: ["'none'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-          imgSrc: ["'self'", 'data:', 'https:'],
-          fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
-          connectSrc: ["'self'", 'https://track.lnxo.me', 'https://n8n.emma42.com'],
-          frameAncestors: ["'none'"],
-          formAction: ["'self'"],
-          reportUri: ['/api/security/csp-report'],
-        },
-      },
+      contentSecurityPolicy: buildCspOptions(config),
     }));
   }
 
@@ -222,6 +226,7 @@ function createApp(config) {
         time: new Date().toISOString(),
         env: config.nodeEnv,
         read_only: readOnly,
+        csp_report_only: config.cspReportOnly !== false,
       });
     } catch (err) {
       const aiStatus = await aiBackendSettings.getStatus().catch(() => ({ configured: Boolean(config.openai.apiKey) }));
@@ -233,6 +238,7 @@ function createApp(config) {
         time: new Date().toISOString(),
         env: config.nodeEnv,
         read_only: readOnly,
+        csp_report_only: config.cspReportOnly !== false,
       });
     }
   });
@@ -244,4 +250,4 @@ function createApp(config) {
   return app;
 }
 
-module.exports = { createApp };
+module.exports = { createApp, buildCspOptions };

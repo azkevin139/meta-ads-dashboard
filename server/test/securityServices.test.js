@@ -111,3 +111,15 @@ test('csp service normalizes legacy and reporting-api payloads', () => {
     blockedURL: 'inline',
   });
 });
+
+test('app CSP policy is report-only by default and can be enforced', () => {
+  const { buildCspOptions } = require('../app');
+
+  const defaultPolicy = buildCspOptions({});
+  assert.equal(defaultPolicy.reportOnly, true);
+  assert.ok(defaultPolicy.directives.styleSrc.includes('https://fonts.googleapis.com'));
+  assert.ok(defaultPolicy.directives.fontSrc.includes('https://fonts.gstatic.com'));
+
+  const enforcedPolicy = buildCspOptions({ cspReportOnly: false });
+  assert.equal(enforcedPolicy.reportOnly, false);
+});

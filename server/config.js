@@ -25,6 +25,12 @@ function secretList(name) {
     .filter(Boolean);
 }
 
+function boolEnv(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+}
+
 const legacyAuthSecret = process.env.AUTH_SECRET || '';
 const sessionSecret = secretOrThrow(
   process.env.SESSION_SIGNING_SECRET || legacyAuthSecret,
@@ -94,5 +100,6 @@ module.exports = {
   legacySessionSecrets,
   legacyAccountTokenSecrets,
   allowSelfSignup: process.env.ALLOW_SELF_SIGNUP === 'true',
+  cspReportOnly: boolEnv('CSP_REPORT_ONLY', true),
   isProduction,
 };
